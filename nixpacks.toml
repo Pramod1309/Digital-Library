@@ -1,0 +1,16 @@
+[phases.setup]
+nixPkgs = ["nodejs", "python39", "python39Packages.pip"]
+
+[phases.build]
+cmds = [
+  "python -m pip install --upgrade pip",
+  "pip install -r backend/requirements.txt",
+  "cd frontend && npm install && npm run build"
+]
+
+[phases.start]
+cmd = "sh start.sh"
+
+[build.args]
+NODE_VERSION = "18"
+PYTHON_VERSION = "3.9"

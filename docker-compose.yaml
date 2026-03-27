@@ -1,0 +1,49 @@
+services:
+  # Backend Service
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: wldl-backend
+    ports:
+      - "5000:5000"
+    environment:
+      - DATABASE_URL=postgresql://wldl:${DB_PASSWORD}@db:5432/wldl_prod
+      - SECRET_KEY=${SECRET_KEY}
+      - FLASK_ENV=production
+    volumes:
+      - backend_uploads:/app/uploads
+    depends_on:
+      - db
+    restart: unless-stopped
+
+  # Frontend Service - SIMPLIFIED
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: wldl-frontend
+    ports:
+      - "3000:3000"
+    environment:
+      - REACT_APP_API_URL=http://backend:5000
+      - NODE_ENV=production
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+  # Database Service
+  db:
+    image: postgres:13-alpine
+    container_name: wldl-db
+    volumes:
+      - postgres_data:/var/lib/postgresql/data/
+    environment:
+      - POSTGRES_USER=wldl
+      - POSTGRES_PASSWORD=${DB_PASSWORD}
+      - POSTGRES_DB=wldl_prod
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  backend_uploads:

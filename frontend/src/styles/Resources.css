@@ -1,0 +1,161 @@
+/* Resource Management Layout */
+.resource-management-container {
+  padding: 24px;
+}
+
+.resource-header {
+  margin-bottom: 24px;
+}
+
+.resource-header h1 {
+  margin-bottom: 8px;
+  color: #1e293b;
+}
+
+.resource-header p {
+  color: #64748b;
+  margin-bottom: 0;
+}
+
+/* Resource Cards */
+.resource-card {
+  height: 100%;
+  transition: all 0.3s ease;
+  border-radius: 12px;
+  overflow: hidden;
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+  border: 1px solid #e2e8f0;
+}
+
+.resource-card:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+}
+
+.resource-card .ant-card-body {
+  padding: 24px;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.resource-icon {
+  font-size: 40px;
+  margin-bottom: 16px;
+  text-align: center;
+}
+
+.resource-title {
+  font-size: 18px;
+  font-weight: 600;
+  margin-bottom: 8px;
+  text-align: center;
+  color: #1e293b;
+}
+
+.resource-description {
+  color: #64748b;
+  margin-bottom: 24px;
+  flex-grow: 1;
+  text-align: center;
+}
+
+/* Resource Table */
+.resource-table .ant-table {
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.resource-table .ant-table-thead > tr > th {
+  background-color: #f8fafc;
+  font-weight: 600;
+  color: #475569;
+}
+
+/* Resource Form */
+.resource-form .ant-form-item-label > label {
+  font-weight: 500;
+  color: #334155;
+}
+
+.resource-form .ant-input,
+.resource-form .ant-select-selector,
+.resource-form .ant-picker,
+.resource-form .ant-input-number,
+.resource-form .ant-input-textarea {
+  border-radius: 8px;
+  padding: 8px 12px;
+}
+
+/* Resource Tags */
+.resource-tag {
+  margin-bottom: 8px;
+  border-radius: 4px;
+  padding: 2px 8px;
+  font-size: 12px;
+}
+
+/* Resource Actions */
+.resource-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 24px;
+}
+
+/* Preview Section */
+.resource-preview {
+  border: 1px dashed #d1d5db;
+  border-radius: 8px;
+  padding: 16px;
+  margin-top: 16px;
+  text-align: center;
+  background-color: #f9fafb;
+  min-height: 120px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+}
+
+.resource-preview img,
+.resource-preview video {
+  max-width: 100%;
+  max-height: 300px;
+  border-radius: 4px;
+}
+
+/* Responsive Adjustments */
+@media (max-width: 768px) {
+  .resource-management-container {
+    padding: 16px;
+  }
+  
+  .resource-header h1 {
+    font-size: 24px;
+  }
+  
+  .resource-card {
+    margin-bottom: 16px;
+  }
+}
+
+/* Custom Scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: #f1f1f1;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
+}
