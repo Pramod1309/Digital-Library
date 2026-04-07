@@ -1,10 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Card, List, Tag, Empty, Spin } from 'antd';
 import { NotificationOutlined, ClockCircleOutlined } from '@ant-design/icons';
-import axios from 'axios';
-
-const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
-const API = `${BACKEND_URL}/api`;
+import api from '../../api/axiosConfig';
 
 const SchoolAnnouncements = ({ user }) => {
   const [announcements, setAnnouncements] = useState([]);
@@ -16,7 +13,7 @@ const SchoolAnnouncements = ({ user }) => {
 
   const fetchAnnouncements = async () => {
     try {
-      const response = await axios.get(`${API}/school/announcements?school_id=${user.school_id}`);
+      const response = await api.get(`/school/announcements?school_id=${user.school_id}`);
       setAnnouncements(response.data);
     } catch (error) {
       console.error('Error fetching announcements:', error);

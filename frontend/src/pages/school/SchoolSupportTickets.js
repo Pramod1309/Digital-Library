@@ -1,10 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Card, Table, Button, Modal, Form, Input, Select, Tag, message } from 'antd';
 import { PlusOutlined, FileTextOutlined } from '@ant-design/icons';
-import axios from 'axios';
-
-const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
-const API = `${BACKEND_URL}/api`;
+import api from '../../api/axiosConfig';
 
 const { TextArea } = Input;
 const { Option } = Select;
@@ -17,12 +14,15 @@ const SchoolSupportTickets = ({ user }) => {
 
   useEffect(() => {
     fetchTickets();
+    // Poll for ticket updates every 3 seconds
+    const interval = setInterval(fetchTickets, 3000);
+    return () => clearInterval(interval);
   }, []);
 
   const fetchTickets = async () => {
     setLoading(true);
     try {
-      const response = await axios.get(`${API}/school/support/tickets?school_id=${user.school_id}`);
+      const response = await api.get(`/school/support/tickets?school_id=${user.school_id}`);
       setTickets(response.data);
     } catch (error) {
       console.error('Error fetching tickets:', error);
@@ -42,11 +42,10 @@ const SchoolSupportTickets = ({ user }) => {
       formData.append('category', values.category);
       formData.append('priority', values.priority);
 
-      await axios.post(`${API}/school/support/tickets`, values, {
-        params: {
-          school_id: user.school_id,
-          school_name: user.name
-        }
+      await api.post(`/school/support/tickets`, formData, {
+        headers: {
+          'Content-Type': 'multipart/form-data',
+        },
       });
 
       message.success('Support ticket created successfully');

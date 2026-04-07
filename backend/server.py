@@ -1,6 +1,7 @@
 from fastapi import FastAPI, APIRouter, Depends, HTTPException, UploadFile, File, Form, status, Request, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, StreamingResponse, JSONResponse
+from fastapi.security import OAuth2PasswordBearer
 from dotenv import load_dotenv
 import os
 from starlette.middleware.cors import CORSMiddleware
@@ -16,13 +17,14 @@ import uuid
 import shutil
 from jose import JWTError, jwt
 from PIL import Image, ImageDraw, ImageFont
-import fitz  # PyMuPDF for PDF processing
+import fitz
 from io import BytesIO, StringIO
 import tempfile
 import io
 import zipfile
 import json
 import asyncio
+from types import SimpleNamespace
 
 
 # Import database
@@ -48,8 +50,12 @@ SECRET_KEY = os.environ.get('SECRET_KEY')
 if not SECRET_KEY:
     # Fallback to reading from .env file
     SECRET_KEY = 'wonder-library-secret-key-2024-production-secure-token-koshquest'
+
 ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24  # 24 hours
+ACCESS_TOKEN_EXPIRE_MINUTES = 30
+
+# OAuth2 scheme for token authentication
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="api/admin/login")
 
 # Password hashing
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
@@ -131,6 +137,9 @@ class ResourceResponse(BaseModel):
     file_type: str
     file_size: int
     class_level: Optional[str] = None
+    subject: Optional[str] = None
+    sub_category: Optional[str] = None
+    consent_to_share: Optional[str] = None
     tags: Optional[str] = None
     uploaded_by_type: str
     uploaded_by_id: Optional[str] = None
@@ -230,7 +239,8 @@ class WatermarkPosition(BaseModel):
     logo_x: int = 50
     logo_y: int = 10
     logo_width: int = 20
-    logo_opacity: float = 0.7
+    logo_opacity: float = 1.0
+    logo_rotation: int = 0
     school_name_x: int = 50
     school_name_y: int = 20
     school_name_size: int = 16
@@ -238,7 +248,7 @@ class WatermarkPosition(BaseModel):
     contact_x: int = 50
     contact_y: int = 90
     contact_size: int = 12
-    contact_opacity: float = 0.8
+    contact_opacity: float = 1.0
 
 class BatchWatermarkRequest(BaseModel):
     resource_id: str
@@ -273,43 +283,278 @@ def verify_token(token: str):
     except JWTError:
         return None
 
+def parse_bool(value, default=False):
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return default
+    if isinstance(value, (int, float)):
+        return bool(value)
+    text = str(value).strip().lower()
+    if text in ("true", "1", "yes", "y", "on"):
+        return True
+    if text in ("false", "0", "no", "n", "off"):
+        return False
+    return default
+
+def clamp(value, min_value, max_value):
+    try:
+        value = float(value)
+    except Exception:
+        return min_value
+    return max(min_value, min(max_value, value))
+
+def normalize_rotation(value):
+    try:
+        rotation = int(float(value))
+    except Exception:
+        return 0
+    rotation = rotation % 360
+    return rotation
+
+def hex_to_rgb(color_hex: str, default="#000000"):
+    if not color_hex:
+        color_hex = default
+    color_hex = color_hex.strip()
+    if not color_hex.startswith("#"):
+        color_hex = "#" + color_hex
+    if len(color_hex) == 4:
+        color_hex = "#" + "".join([c * 2 for c in color_hex[1:]])
+    if len(color_hex) != 7:
+        color_hex = default
+    try:
+        r = int(color_hex[1:3], 16)
+        g = int(color_hex[3:5], 16)
+        b = int(color_hex[5:7], 16)
+        return (r, g, b)
+    except Exception:
+        return (0, 0, 0)
+
+def normalize_hex_color(color_hex: str, default="#000000"):
+    if not color_hex:
+        return default
+    color_hex = color_hex.strip()
+    if not color_hex.startswith("#"):
+        color_hex = "#" + color_hex
+    if len(color_hex) == 4:
+        color_hex = "#" + "".join([c * 2 for c in color_hex[1:]])
+    if len(color_hex) != 7:
+        return default
+    try:
+        int(color_hex[1:3], 16)
+        int(color_hex[3:5], 16)
+        int(color_hex[5:7], 16)
+        return color_hex.lower()
+    except Exception:
+        return default
+
+def hex_to_rgb_float(color_hex: str, default="#000000"):
+    r, g, b = hex_to_rgb(color_hex, default=default)
+    return (r / 255.0, g / 255.0, b / 255.0)
+
+def resolve_pil_font(font_name: str, font_style: str, size: int):
+    from PIL import ImageFont
+
+    name = (font_name or "Arial").strip().lower()
+    style = (font_style or "normal").strip().lower()
+
+    candidates = []
+    if "arial" in name:
+        if "bold" in style and "italic" in style:
+            candidates += ["arialbi.ttf", "Arial Bold Italic.ttf", "C:\\Windows\\Fonts\\arialbi.ttf"]
+        elif "bold" in style:
+            candidates += ["arialbd.ttf", "Arial Bold.ttf", "C:\\Windows\\Fonts\\arialbd.ttf"]
+        elif "italic" in style:
+            candidates += ["ariali.ttf", "Arial Italic.ttf", "C:\\Windows\\Fonts\\ariali.ttf"]
+        else:
+            candidates += ["arial.ttf", "Arial.ttf", "C:\\Windows\\Fonts\\arial.ttf"]
+    elif "times" in name:
+        if "bold" in style and "italic" in style:
+            candidates += ["timesbi.ttf", "Times New Roman Bold Italic.ttf", "C:\\Windows\\Fonts\\timesbi.ttf"]
+        elif "bold" in style:
+            candidates += ["timesbd.ttf", "Times New Roman Bold.ttf", "C:\\Windows\\Fonts\\timesbd.ttf"]
+        elif "italic" in style:
+            candidates += ["timesi.ttf", "Times New Roman Italic.ttf", "C:\\Windows\\Fonts\\timesi.ttf"]
+        else:
+            candidates += ["times.ttf", "Times New Roman.ttf", "C:\\Windows\\Fonts\\times.ttf"]
+    elif "helvetica" in name:
+        candidates += ["Helvetica.ttf", "C:\\Windows\\Fonts\\Helvetica.ttf"]
+    elif "georgia" in name:
+        if "bold" in style and "italic" in style:
+            candidates += ["georgiaz.ttf", "C:\\Windows\\Fonts\\georgiaz.ttf"]
+        elif "bold" in style:
+            candidates += ["georgiab.ttf", "C:\\Windows\\Fonts\\georgiab.ttf"]
+        elif "italic" in style:
+            candidates += ["georgiai.ttf", "C:\\Windows\\Fonts\\georgiai.ttf"]
+        else:
+            candidates += ["georgia.ttf", "C:\\Windows\\Fonts\\georgia.ttf"]
+    elif "verdana" in name:
+        if "bold" in style and "italic" in style:
+            candidates += ["verdanaz.ttf", "C:\\Windows\\Fonts\\verdanaz.ttf"]
+        elif "bold" in style:
+            candidates += ["verdanab.ttf", "C:\\Windows\\Fonts\\verdanab.ttf"]
+        elif "italic" in style:
+            candidates += ["verdanai.ttf", "C:\\Windows\\Fonts\\verdanai.ttf"]
+        else:
+            candidates += ["verdana.ttf", "C:\\Windows\\Fonts\\verdana.ttf"]
+    elif "courier" in name:
+        if "bold" in style and "italic" in style:
+            candidates += ["courbi.ttf", "Courier New Bold Italic.ttf", "C:\\Windows\\Fonts\\courbi.ttf"]
+        elif "bold" in style:
+            candidates += ["courbd.ttf", "Courier New Bold.ttf", "C:\\Windows\\Fonts\\courbd.ttf"]
+        elif "italic" in style:
+            candidates += ["couri.ttf", "Courier New Italic.ttf", "C:\\Windows\\Fonts\\couri.ttf"]
+        else:
+            candidates += ["cour.ttf", "Courier New.ttf", "C:\\Windows\\Fonts\\cour.ttf"]
+
+    # Common Linux fallbacks
+    candidates += [
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf" if "bold" in style else "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf" if "bold" in style else "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+        "/usr/share/fonts/truetype/ubuntu/Ubuntu-B.ttf" if "bold" in style else "/usr/share/fonts/truetype/ubuntu/Ubuntu-R.ttf"
+    ]
+
+    for path in candidates:
+        try:
+            return ImageFont.truetype(path, size)
+        except Exception:
+            continue
+
+    return ImageFont.load_default()
+
+def resolve_pdf_font(font_name: str, font_style: str):
+    name = (font_name or "Arial").strip().lower()
+    style = (font_style or "normal").strip().lower()
+
+    fontfile_candidates = []
+    if "arial" in name:
+        if "bold" in style and "italic" in style:
+            fontfile_candidates += ["arialbi.ttf", "C:\\Windows\\Fonts\\arialbi.ttf"]
+        elif "bold" in style:
+            fontfile_candidates += ["arialbd.ttf", "C:\\Windows\\Fonts\\arialbd.ttf"]
+        elif "italic" in style:
+            fontfile_candidates += ["ariali.ttf", "C:\\Windows\\Fonts\\ariali.ttf"]
+        else:
+            fontfile_candidates += ["arial.ttf", "C:\\Windows\\Fonts\\arial.ttf"]
+    elif "times" in name:
+        if "bold" in style and "italic" in style:
+            fontfile_candidates += ["timesbi.ttf", "C:\\Windows\\Fonts\\timesbi.ttf"]
+        elif "bold" in style:
+            fontfile_candidates += ["timesbd.ttf", "C:\\Windows\\Fonts\\timesbd.ttf"]
+        elif "italic" in style:
+            fontfile_candidates += ["timesi.ttf", "C:\\Windows\\Fonts\\timesi.ttf"]
+        else:
+            fontfile_candidates += ["times.ttf", "C:\\Windows\\Fonts\\times.ttf"]
+    elif "helvetica" in name:
+        fontfile_candidates += ["Helvetica.ttf", "C:\\Windows\\Fonts\\Helvetica.ttf"]
+    elif "georgia" in name:
+        if "bold" in style and "italic" in style:
+            fontfile_candidates += ["georgiaz.ttf", "C:\\Windows\\Fonts\\georgiaz.ttf"]
+        elif "bold" in style:
+            fontfile_candidates += ["georgiab.ttf", "C:\\Windows\\Fonts\\georgiab.ttf"]
+        elif "italic" in style:
+            fontfile_candidates += ["georgiai.ttf", "C:\\Windows\\Fonts\\georgiai.ttf"]
+        else:
+            fontfile_candidates += ["georgia.ttf", "C:\\Windows\\Fonts\\georgia.ttf"]
+    elif "verdana" in name:
+        if "bold" in style and "italic" in style:
+            fontfile_candidates += ["verdanaz.ttf", "C:\\Windows\\Fonts\\verdanaz.ttf"]
+        elif "bold" in style:
+            fontfile_candidates += ["verdanab.ttf", "C:\\Windows\\Fonts\\verdanab.ttf"]
+        elif "italic" in style:
+            fontfile_candidates += ["verdanai.ttf", "C:\\Windows\\Fonts\\verdanai.ttf"]
+        else:
+            fontfile_candidates += ["verdana.ttf", "C:\\Windows\\Fonts\\verdana.ttf"]
+    elif "courier" in name:
+        if "bold" in style and "italic" in style:
+            fontfile_candidates += ["courbi.ttf", "C:\\Windows\\Fonts\\courbi.ttf"]
+        elif "bold" in style:
+            fontfile_candidates += ["courbd.ttf", "C:\\Windows\\Fonts\\courbd.ttf"]
+        elif "italic" in style:
+            fontfile_candidates += ["couri.ttf", "C:\\Windows\\Fonts\\couri.ttf"]
+        else:
+            fontfile_candidates += ["cour.ttf", "C:\\Windows\\Fonts\\cour.ttf"]
+
+    fontfile_candidates += [
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf" if "bold" in style else "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf" if "bold" in style else "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+        "/usr/share/fonts/truetype/ubuntu/Ubuntu-B.ttf" if "bold" in style else "/usr/share/fonts/truetype/ubuntu/Ubuntu-R.ttf"
+    ]
+
+    for path in fontfile_candidates:
+        if os.path.exists(path):
+            return ("helv", path)
+
+    if "bold" in style and "italic" in style:
+        return ("helvBI", None)
+    if "bold" in style:
+        return ("helvB", None)
+    if "italic" in style:
+        return ("helvI", None)
+    return ("helv", None)
+
+# Authentication dependencies
+async def get_current_user(token: str = Depends(oauth2_scheme)):
+    credentials_exception = HTTPException(
+        status_code=401,
+        detail="Could not validate credentials",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        email: str = payload.get("sub")
+        if email is None:
+            raise credentials_exception
+    except JWTError:
+        raise credentials_exception
+    
+    return payload
+
+async def get_current_admin(current_user: dict = Depends(get_current_user)):
+    if current_user.get("user_type") != "admin":
+        raise HTTPException(
+            status_code=403,
+            detail="Not enough permissions"
+        )
+    return current_user
+
 # Helper functions for watermarking
 def get_full_file_path(file_path: str) -> str:
     """Get full file path from relative path"""
-    if file_path.startswith('/'):
-        file_path = file_path[1:]
+    # Clean the path
+    file_path = file_path.lstrip('/')
     
+    # Try direct path
     full_path = os.path.join(ROOT_DIR, file_path)
+    if os.path.exists(full_path):
+        return full_path
     
-    if not os.path.exists(full_path):
-        # Try alternative paths
-        alternative_paths = [
-            file_path,
-            os.path.join("uploads", file_path),
-            os.path.join("uploads", file_path.lstrip('/')),
-            os.path.join(ROOT_DIR, "uploads", file_path)
-        ]
-        
-        for alt_path in alternative_paths:
-            test_path = os.path.join(ROOT_DIR, alt_path) if not os.path.isabs(alt_path) else alt_path
-            if os.path.exists(test_path):
-                return test_path
-        
-        raise FileNotFoundError(f"File not found: {file_path}")
+    # Try with uploads prefix if not already there
+    if not file_path.startswith('uploads/'):
+        full_path = os.path.join(ROOT_DIR, 'uploads', file_path)
+        if os.path.exists(full_path):
+            return full_path
     
-    return full_path
+    # Try in resources directory
+    full_path = os.path.join(ROOT_DIR, 'uploads', 'resources', file_path)
+    if os.path.exists(full_path):
+        return full_path
+    
+    raise FileNotFoundError(f"File not found: {file_path}")
 
 def get_school_logo_path(school: School) -> str:
     """Get school logo path"""
     if school.logo_path:
-        logo_path = school.logo_path
-        if logo_path.startswith('/'):
-            logo_path = logo_path[1:]
-        
+        # Clean the path
+        logo_path = school.logo_path.lstrip('/')
         full_path = os.path.join(ROOT_DIR, logo_path)
         if os.path.exists(full_path):
             return full_path
-    
+        else:
+            # Try alternative path with uploads
+            alt_path = os.path.join(ROOT_DIR, 'uploads', logo_path)
+            if os.path.exists(alt_path):
+                return alt_path
     return None
 
 def add_watermark_to_pdf(pdf_path: str, school: School, positions: WatermarkPosition) -> str:
@@ -591,7 +836,7 @@ async def generate_watermark_preview(
             logo_x=positions.get('logo_x', 50),
             logo_y=positions.get('logo_y', 10),
             logo_width=positions.get('logo_width', 20),
-            logo_opacity=positions.get('logo_opacity', 0.7),
+            logo_opacity=positions.get('logo_opacity', 1.0),
             school_name_x=positions.get('school_name_x', 50),
             school_name_y=positions.get('school_name_y', 20),
             school_name_size=positions.get('school_name_size', 16),
@@ -599,7 +844,7 @@ async def generate_watermark_preview(
             contact_x=positions.get('contact_x', 50),
             contact_y=positions.get('contact_y', 90),
             contact_size=positions.get('contact_size', 12),
-            contact_opacity=positions.get('contact_opacity', 0.8)
+            contact_opacity=positions.get('contact_opacity', 1.0)
         )
         
         # Check file type and apply appropriate watermark
@@ -718,6 +963,7 @@ async def generate_watermark_preview(
 @api_router.post("/admin/save-watermark-template")
 async def save_watermark_template(
     request: SaveTemplateRequest,
+    current_admin: dict = Depends(get_current_admin),
     db: Session = Depends(get_db)
 ):
     """Save watermark template for future use"""
@@ -824,7 +1070,7 @@ async def download_batch_watermarked(
             logo_x=positions.get('logo_x', 50),
             logo_y=positions.get('logo_y', 10),
             logo_width=positions.get('logo_width', 20),
-            logo_opacity=positions.get('logo_opacity', 0.7),
+            logo_opacity=positions.get('logo_opacity', 1.0),
             school_name_x=positions.get('school_name_x', 50),
             school_name_y=positions.get('school_name_y', 20),
             school_name_size=positions.get('school_name_size', 16),
@@ -832,7 +1078,7 @@ async def download_batch_watermarked(
             contact_x=positions.get('contact_x', 50),
             contact_y=positions.get('contact_y', 90),
             contact_size=positions.get('contact_size', 12),
-            contact_opacity=positions.get('contact_opacity', 0.8)
+            contact_opacity=positions.get('contact_opacity', 1.0)
         )
         
         # Create temporary directory for watermarked files
@@ -1118,8 +1364,23 @@ async def school_login(login_data: LoginRequest, db: Session = Depends(get_db)):
     db.add(activity)
     db.commit()
     
+    # FIX: Properly format logo path
+    logo_path = None
+    if school.logo_path:
+        # Make sure logo_path has a leading slash
+        if not school.logo_path.startswith('/'):
+            logo_path = f"/{school.logo_path}"
+        else:
+            logo_path = school.logo_path
+    
     access_token = create_access_token(
-        data={"sub": school.email, "user_type": "school", "school_id": school.school_id, "school_name": school.school_name, "logo_path": school.logo_path}
+        data={
+            "sub": school.email, 
+            "user_type": "school", 
+            "school_id": school.school_id, 
+            "school_name": school.school_name, 
+            "logo_path": logo_path
+        }
     )
     
     return LoginResponse(
@@ -1129,7 +1390,7 @@ async def school_login(login_data: LoginRequest, db: Session = Depends(get_db)):
         email=school.email,
         name=school.school_name,
         school_id=school.school_id,
-        logo_path=school.logo_path
+        logo_path=logo_path
     )
 
 @api_router.post("/forgot-password")
@@ -1168,7 +1429,9 @@ async def forgot_password(request: ForgotPasswordRequest, db: Session = Depends(
 
 # School Management Routes (Admin only)
 @api_router.get("/admin/schools", response_model=List[SchoolResponse])
-async def get_schools(db: Session = Depends(get_db)):
+async def get_schools(
+    current_admin: dict = Depends(get_current_admin),
+    db: Session = Depends(get_db)):
     """Get all schools - Admin only"""
     schools = db.query(School).order_by(School.school_id).all()
     return schools
@@ -1362,6 +1625,8 @@ async def upload_resource(
     category: str = Form(...),
     description: Optional[str] = Form(None),
     class_level: Optional[str] = Form(None),
+    sub_category: Optional[str] = Form(None),
+    subject: Optional[str] = Form(None),
     tags: Optional[str] = Form(None),
     file: UploadFile = File(...),
     db: Session = Depends(get_db)
@@ -1406,10 +1671,12 @@ async def upload_resource(
         name=name,
         description=description,
         category=category,
+        sub_category=sub_category,
         file_path=file_path,
         file_type=file.content_type or f"application/{file_extension}",
         file_size=file_size,
         class_level=class_level,
+        subject=subject,
         tags=tags,
         uploaded_by_type='admin',
         approval_status='approved'
@@ -1425,6 +1692,11 @@ async def upload_resource(
 async def get_all_resources(
     category: Optional[str] = None,
     approval_status: Optional[str] = None,
+    uploaded_by_type: Optional[str] = None,
+    sub_category: Optional[str] = None,
+    class_level: Optional[str] = None,
+    subject: Optional[str] = None,
+    search: Optional[str] = None,
     db: Session = Depends(get_db)
 ):
     """Get all resources - Admin only"""
@@ -1435,6 +1707,25 @@ async def get_all_resources(
     
     if approval_status:
         query = query.filter(Resource.approval_status == approval_status)
+    
+    if uploaded_by_type:
+        query = query.filter(Resource.uploaded_by_type == uploaded_by_type)
+    
+    if sub_category:
+        query = query.filter(Resource.sub_category == sub_category)
+    
+    if class_level:
+        query = query.filter(Resource.class_level == class_level)
+    
+    if subject:
+        query = query.filter(Resource.subject == subject)
+    
+    if search:
+        query = query.filter(
+            Resource.name.ilike(f"%{search}%") |
+            Resource.description.ilike(f"%{search}%") |
+            Resource.uploaded_by_name.ilike(f"%{search}%")
+        )
     
     # Limit results to prevent performance issues
     resources = query.order_by(Resource.created_at.desc()).limit(1000).all()
@@ -1486,6 +1777,69 @@ async def delete_resource(resource_id: str, db: Session = Depends(get_db)):
     
     return {"message": "Resource deleted successfully"}
 
+@api_router.put("/admin/resources/{resource_id}", response_model=ResourceResponse)
+async def update_resource(
+    resource_id: str,
+    name: Optional[str] = Form(None),
+    description: Optional[str] = Form(None),
+    class_level: Optional[str] = Form(None),
+    sub_category: Optional[str] = Form(None),
+    tags: Optional[str] = Form(None),
+    file: Optional[UploadFile] = File(None),
+    db: Session = Depends(get_db)
+):
+    """Update a resource - Admin only"""
+    resource = db.query(Resource).filter(Resource.resource_id == resource_id).first()
+    if not resource:
+        raise HTTPException(status_code=404, detail="Resource not found")
+
+    if name is not None:
+        resource.name = name
+    if description is not None:
+        resource.description = description
+    if class_level is not None:
+        resource.class_level = class_level
+    if sub_category is not None:
+        resource.sub_category = sub_category
+    if tags is not None:
+        resource.tags = tags
+
+    if file is not None:
+        MAX_FILE_SIZE = 100 * 1024 * 1024
+        contents = await file.read()
+        file_size = len(contents)
+        if file_size > MAX_FILE_SIZE:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"File size exceeds 100MB limit. Your file is {file_size / (1024*1024):.2f}MB"
+            )
+        await file.seek(0)
+
+        category_folder = RESOURCES_UPLOAD_DIR / resource.category
+        category_folder.mkdir(parents=True, exist_ok=True)
+
+        file_extension = file.filename.split('.')[-1]
+        safe_filename = f"{resource.resource_id}.{file_extension}"
+        file_path_on_disk = category_folder / safe_filename
+
+        # Delete old file if exists
+        old_file_path = ROOT_DIR / resource.file_path.lstrip('/')
+        if old_file_path.exists():
+            old_file_path.unlink()
+
+        with open(file_path_on_disk, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+
+        resource.file_path = f"/uploads/resources/{resource.category}/{safe_filename}"
+        resource.file_type = file.content_type or f"application/{file_extension}"
+        resource.file_size = file_size
+
+    resource.updated_at = datetime.utcnow()
+    db.commit()
+    db.refresh(resource)
+
+    return resource
+
 # School Resource Routes
 @api_router.get("/school/resources", response_model=List[ResourceResponse])
 async def get_school_resources(
@@ -1519,6 +1873,9 @@ async def school_upload_resource(
     school_name: str = Form(...),
     description: Optional[str] = Form(None),
     class_level: Optional[str] = Form(None),
+    subject: Optional[str] = Form(None),
+    sub_category: Optional[str] = Form(None),
+    consent_to_share: Optional[str] = Form(None),
     tags: Optional[str] = Form(None),
     file: UploadFile = File(...),
     db: Session = Depends(get_db)
@@ -1564,7 +1921,10 @@ async def school_upload_resource(
         file_type=file.content_type or f"application/{file_extension}",
         file_size=file_size,
         class_level=class_level,
-        tags=tags,
+        subject=subject,
+        sub_category=sub_category,
+        consent_to_share=consent_to_share,
+        tags=tags or "",
         uploaded_by_type='school',
         uploaded_by_id=school_id,
         uploaded_by_name=school_name,
@@ -1839,9 +2199,12 @@ async def get_school_announcements(school_id: str, db: Session = Depends(get_db)
 
 @api_router.post("/school/support/tickets", response_model=SupportTicketResponse)
 async def create_support_ticket(
-    ticket: SupportTicketCreate,
-    school_id: str,
-    school_name: str,
+    subject: str = Form(...),
+    message: str = Form(...),
+    category: str = Form(...),
+    priority: str = Form(...),
+    school_id: str = Form(...),
+    school_name: str = Form(...),
     db: Session = Depends(get_db)
 ):
     """Create support ticket - School"""
@@ -1851,10 +2214,10 @@ async def create_support_ticket(
         ticket_id=ticket_id,
         school_id=school_id,
         school_name=school_name,
-        subject=ticket.subject,
-        message=ticket.message,
-        category=ticket.category,
-        priority=ticket.priority
+        subject=subject,
+        message=message,
+        category=category,
+        priority=priority
     )
     
     db.add(new_ticket)
@@ -1886,10 +2249,14 @@ async def update_ticket(
     db: Session = Depends(get_db)
 ):
     """Update support ticket - Admin"""
+    print(f"Updating ticket {ticket_id} with status: {status}, admin_response: {admin_response}")
+    
     ticket = db.query(SupportTicket).filter(SupportTicket.ticket_id == ticket_id).first()
     
     if not ticket:
         raise HTTPException(status_code=404, detail="Ticket not found")
+    
+    print(f"Before update - Ticket status: {ticket.status}, admin_response: {ticket.admin_response}")
     
     if status:
         ticket.status = status
@@ -1903,7 +2270,31 @@ async def update_ticket(
     db.commit()
     db.refresh(ticket)
     
+    print(f"After update - Ticket status: {ticket.status}, admin_response: {ticket.admin_response}")
+    
     return ticket
+
+@api_router.delete("/admin/support/tickets/{ticket_id}")
+async def delete_ticket(
+    ticket_id: str, 
+    current_admin: dict = Depends(get_current_admin),
+    db: Session = Depends(get_db)
+):
+    """Delete support ticket - Admin"""
+    print(f"DELETE request received for ticket: {ticket_id}")
+    
+    ticket = db.query(SupportTicket).filter(SupportTicket.ticket_id == ticket_id).first()
+    
+    if not ticket:
+        print(f"Ticket {ticket_id} not found")
+        raise HTTPException(status_code=404, detail="Ticket not found")
+    
+    print(f"Deleting ticket: {ticket.ticket_id} - {ticket.subject}")
+    db.delete(ticket)
+    db.commit()
+    
+    print(f"Ticket {ticket_id} deleted successfully")
+    return {"message": "Ticket deleted successfully"}
 
 # ==================== CHAT ROUTES ====================
 
@@ -1913,6 +2304,7 @@ async def send_chat_message(
     school_name: str = Form(...),
     sender_type: str = Form(...),
     message: str = Form(...),
+    current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """Send chat message"""
@@ -1930,7 +2322,11 @@ async def send_chat_message(
     return new_message
 
 @api_router.get("/chat/messages", response_model=List[ChatMessageResponse])
-async def get_chat_messages(school_id: str, db: Session = Depends(get_db)):
+async def get_chat_messages(
+    school_id: str, 
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
     """Get chat messages for a school"""
     messages = db.query(ChatMessage).filter(
         ChatMessage.school_id == school_id
@@ -1939,7 +2335,12 @@ async def get_chat_messages(school_id: str, db: Session = Depends(get_db)):
     return messages
 
 @api_router.put("/chat/mark-read/{school_id}")
-async def mark_messages_read(school_id: str, sender_type: str, db: Session = Depends(get_db)):
+async def mark_messages_read(
+    school_id: str, 
+    sender_type: str, 
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
     """Mark messages as read"""
     # Mark all messages from opposite sender as read
     opposite_sender = 'school' if sender_type == 'admin' else 'admin'
@@ -2020,6 +2421,7 @@ async def save_logo_position(
     y_position: int = Form(...),
     width: int = Form(...),
     opacity: float = Form(...),
+    rotation: int = Form(0),
     db: Session = Depends(get_db)
 ):
     """Save or update logo position for a specific resource"""
@@ -2041,9 +2443,10 @@ async def save_logo_position(
         raise HTTPException(status_code=400, detail="Width must be between 5 and 50")
     if not (0.1 <= opacity <= 1.0):
         raise HTTPException(status_code=400, detail="Opacity must be between 0.1 and 1.0")
+    rotation = normalize_rotation(rotation)
     
     print(f"Saving logo position for school: {school_id}, resource: {resource_id}")
-    print(f"Position: x={x_position}, y={y_position}, width={width}, opacity={opacity}")
+    print(f"Position: x={x_position}, y={y_position}, width={width}, opacity={opacity}, rotation={rotation}")
     
     # Check if position already exists
     existing_position = db.query(SchoolLogoPosition).filter(
@@ -2057,6 +2460,7 @@ async def save_logo_position(
         existing_position.y_position = y_position
         existing_position.width = width
         existing_position.opacity = opacity
+        existing_position.rotation = rotation
         existing_position.updated_at = datetime.utcnow()
         message = "Logo position updated successfully"
         print(f"Updated existing position: {existing_position.id}")
@@ -2068,7 +2472,8 @@ async def save_logo_position(
             x_position=x_position,
             y_position=y_position,
             width=width,
-            opacity=opacity
+            opacity=opacity,
+            rotation=rotation
         )
         db.add(new_position)
         message = "Logo position saved successfully"
@@ -2100,6 +2505,7 @@ async def get_logo_position(
             "y_position": 10,
             "width": 20,
             "opacity": 0.7,
+            "rotation": 0,
             "is_default": True
         }
     
@@ -2109,6 +2515,7 @@ async def get_logo_position(
         "y_position": position.y_position,
         "width": position.width,
         "opacity": position.opacity,
+        "rotation": position.rotation or 0,
         "is_default": False,
         "updated_at": position.updated_at.isoformat() if position.updated_at else None
     }
@@ -2144,13 +2551,43 @@ async def save_text_watermark_position(
     name_y: int = Form(...),
     name_size: int = Form(...),
     name_opacity: float = Form(...),
+    name_rotation: int = Form(0),
+    name_font: str = Form("Arial"),
+    name_style: str = Form("normal"),
+    name_color: str = Form("#000000"),
+    show_name: Optional[Union[bool, str, int]] = Form(True),
     contact_x: int = Form(...),
     contact_y: int = Form(...),
     contact_size: int = Form(...),
     contact_opacity: float = Form(...),
+    contact_rotation: int = Form(0),
+    contact_font: str = Form("Arial"),
+    contact_style: str = Form("normal"),
+    contact_color: str = Form("#000000"),
+    show_contact: Optional[Union[bool, str, int]] = Form(True),
+    address_x: int = Form(50),
+    address_y: int = Form(85),
+    address_size: int = Form(10),
+    address_opacity: float = Form(1.0),
+    address_rotation: int = Form(0),
+    address_font: str = Form("Arial"),
+    address_style: str = Form("normal"),
+    address_color: str = Form("#000000"),
+    show_address: Optional[Union[bool, str, int]] = Form(False),
+    address: Optional[str] = Form(None),
     db: Session = Depends(get_db)
 ):
     """Save or update text watermark position"""
+    print(
+        "Received text watermark data: "
+        f"name_x={name_x}, name_y={name_y}, name_size={name_size}, name_opacity={name_opacity}, "
+        f"name_rotation={name_rotation}, name_font={name_font}, name_style={name_style}, name_color={name_color}, "
+        f"contact_x={contact_x}, contact_y={contact_y}, contact_size={contact_size}, contact_opacity={contact_opacity}, "
+        f"contact_rotation={contact_rotation}, contact_font={contact_font}, contact_style={contact_style}, contact_color={contact_color}, "
+        f"address_x={address_x}, address_y={address_y}, address_size={address_size}, address_opacity={address_opacity}, "
+        f"address_rotation={address_rotation}, address_font={address_font}, address_style={address_style}, address_color={address_color}"
+    )
+    
     # Check if resource exists
     resource = db.query(Resource).filter(Resource.resource_id == resource_id).first()
     if not resource:
@@ -2165,12 +2602,36 @@ async def save_text_watermark_position(
         raise HTTPException(status_code=400, detail="Name position must be between 0 and 100")
     if not (0 <= contact_x <= 100) or not (0 <= contact_y <= 100):
         raise HTTPException(status_code=400, detail="Contact position must be between 0 and 100")
-    if not (8 <= name_size <= 40):
-        raise HTTPException(status_code=400, detail="Name size must be between 8 and 40")
-    if not (8 <= contact_size <= 20):
-        raise HTTPException(status_code=400, detail="Contact size must be between 8 and 20")
-    if not (0.1 <= name_opacity <= 1.0) or not (0.1 <= contact_opacity <= 1.0):
+    if not (0 <= address_x <= 100) or not (0 <= address_y <= 100):
+        raise HTTPException(status_code=400, detail="Address position must be between 0 and 100")
+    if not (8 <= name_size <= 48):
+        raise HTTPException(status_code=400, detail="Name size must be between 8 and 48")
+    if not (8 <= contact_size <= 24):
+        raise HTTPException(status_code=400, detail="Contact size must be between 8 and 24")
+    if not (6 <= address_size <= 24):
+        raise HTTPException(status_code=400, detail="Address size must be between 6 and 24")
+    if not (0.1 <= name_opacity <= 1.0) or not (0.1 <= contact_opacity <= 1.0) or not (0.1 <= address_opacity <= 1.0):
         raise HTTPException(status_code=400, detail="Opacity must be between 0.1 and 1.0")
+
+    name_rotation = normalize_rotation(name_rotation)
+    contact_rotation = normalize_rotation(contact_rotation)
+    address_rotation = normalize_rotation(address_rotation)
+
+    name_font = name_font or "Arial"
+    contact_font = contact_font or "Arial"
+    address_font = address_font or "Arial"
+
+    name_style = name_style or "normal"
+    contact_style = contact_style or "normal"
+    address_style = address_style or "normal"
+
+    name_color = normalize_hex_color(name_color, default="#000000")
+    contact_color = normalize_hex_color(contact_color, default="#000000")
+    address_color = normalize_hex_color(address_color, default="#000000")
+
+    show_name = parse_bool(show_name, True)
+    show_contact = parse_bool(show_contact, True)
+    show_address = parse_bool(show_address, False)
     
     print(f"Saving text watermark for school: {school_id}, resource: {resource_id}")
     
@@ -2186,10 +2647,30 @@ async def save_text_watermark_position(
         existing.name_y = name_y
         existing.name_size = name_size
         existing.name_opacity = name_opacity
+        existing.name_rotation = name_rotation
+        existing.name_font = name_font
+        existing.name_style = name_style
+        existing.name_color = name_color
+        existing.show_name = show_name
         existing.contact_x = contact_x
         existing.contact_y = contact_y
         existing.contact_size = contact_size
         existing.contact_opacity = contact_opacity
+        existing.contact_rotation = contact_rotation
+        existing.contact_font = contact_font
+        existing.contact_style = contact_style
+        existing.contact_color = contact_color
+        existing.show_contact = show_contact
+        existing.address_x = address_x
+        existing.address_y = address_y
+        existing.address_size = address_size
+        existing.address_opacity = address_opacity
+        existing.address_rotation = address_rotation
+        existing.address_font = address_font
+        existing.address_style = address_style
+        existing.address_color = address_color
+        existing.show_address = show_address
+        existing.address = address
         existing.updated_at = datetime.utcnow()
         message = "Text watermark position updated"
     else:
@@ -2201,10 +2682,30 @@ async def save_text_watermark_position(
             name_y=name_y,
             name_size=name_size,
             name_opacity=name_opacity,
+            name_rotation=name_rotation,
+            name_font=name_font,
+            name_style=name_style,
+            name_color=name_color,
+            show_name=show_name,
             contact_x=contact_x,
             contact_y=contact_y,
             contact_size=contact_size,
-            contact_opacity=contact_opacity
+            contact_opacity=contact_opacity,
+            contact_rotation=contact_rotation,
+            contact_font=contact_font,
+            contact_style=contact_style,
+            contact_color=contact_color,
+            show_contact=show_contact,
+            address_x=address_x,
+            address_y=address_y,
+            address_size=address_size,
+            address_opacity=address_opacity,
+            address_rotation=address_rotation,
+            address_font=address_font,
+            address_style=address_style,
+            address_color=address_color,
+            show_address=show_address,
+            address=address
         )
         db.add(new_text)
         message = "Text watermark position saved"
@@ -2231,10 +2732,30 @@ async def get_text_watermark_position(
             "name_y": 25,  # Below logo
             "name_size": 20,
             "name_opacity": 0.8,
+            "name_rotation": 0,
+            "name_font": "Arial",
+            "name_style": "normal",
+            "name_color": "#000000",
+            "show_name": True,
             "contact_x": 50,
             "contact_y": 90,  # Bottom center
             "contact_size": 12,
             "contact_opacity": 0.7,
+            "contact_rotation": 0,
+            "contact_font": "Arial",
+            "contact_style": "normal",
+            "contact_color": "#000000",
+            "show_contact": True,
+            "address_x": 50,
+            "address_y": 85,
+            "address_size": 10,
+            "address_opacity": 1.0,
+            "address_rotation": 0,
+            "address_font": "Arial",
+            "address_style": "normal",
+            "address_color": "#000000",
+            "show_address": False,
+            "address": "",
             "is_default": True
         }
     
@@ -2243,10 +2764,30 @@ async def get_text_watermark_position(
         "name_y": text_position.name_y,
         "name_size": text_position.name_size,
         "name_opacity": text_position.name_opacity,
+        "name_rotation": text_position.name_rotation or 0,
+        "name_font": text_position.name_font or "Arial",
+        "name_style": text_position.name_style or "normal",
+        "name_color": text_position.name_color or "#000000",
+        "show_name": text_position.show_name if text_position.show_name is not None else True,
         "contact_x": text_position.contact_x,
         "contact_y": text_position.contact_y,
         "contact_size": text_position.contact_size,
         "contact_opacity": text_position.contact_opacity,
+        "contact_rotation": text_position.contact_rotation or 0,
+        "contact_font": text_position.contact_font or "Arial",
+        "contact_style": text_position.contact_style or "normal",
+        "contact_color": text_position.contact_color or "#000000",
+        "show_contact": text_position.show_contact if text_position.show_contact is not None else True,
+        "address_x": text_position.address_x or 50,
+        "address_y": text_position.address_y or 85,
+        "address_size": text_position.address_size or 10,
+        "address_opacity": text_position.address_opacity if text_position.address_opacity is not None else 1.0,
+        "address_rotation": text_position.address_rotation or 0,
+        "address_font": text_position.address_font or "Arial",
+        "address_style": text_position.address_style or "normal",
+        "address_color": text_position.address_color or "#000000",
+        "show_address": text_position.show_address if text_position.show_address is not None else False,
+        "address": text_position.address or "",
         "is_default": False,
         "updated_at": text_position.updated_at.isoformat() if text_position.updated_at else None
     }
@@ -2292,35 +2833,255 @@ def add_logo_watermark(file_path, logo_path, logo_position, file_type, school_in
         traceback.print_exc()
         return None
 
-def add_logo_and_text_to_pdf(pdf_path, logo_path, logo_position, school_info, text_position, output_path):
-    """Add logo and text to PDF"""
+def add_logo_and_text_to_image(
+    image_path: str, 
+    logo_path: str, 
+    positions: WatermarkPosition,
+    file_type: str,
+    school_info: Dict[str, str],
+    text_position: Dict[str, Any],
+    output_path: str = None
+) -> str:
+    """Add logo and text watermark to image"""
     try:
-        print(f"=== ADDING LOGO AND TEXT TO PDF ===")
-        print(f"PDF: {pdf_path}")
-        if logo_path:
-            print(f"Logo: {logo_path}")
-        print(f"Logo Position: x={logo_position.x_position}%, y={logo_position.y_position}%")
+        print("=== ADDING LOGO AND TEXT TO IMAGE ===")
+        print(f"Image: {image_path}")
+        print(f"Logo: {logo_path}")
         print(f"School Info: {school_info}")
-        print(f"Text Position: {text_position}")
+
+        # Open base image
+        base_img = Image.open(image_path)
+
+        # Convert to RGBA if not already
+        if base_img.mode != 'RGBA':
+            base_img = base_img.convert('RGBA')
+
+        print(f"Base image size: {base_img.size}, mode: {base_img.mode}")
+
+        # Create a transparent layer for watermarks
+        watermark_layer = Image.new('RGBA', base_img.size, (255, 255, 255, 0))
+
+        # Add logo if exists
+        if logo_path and os.path.exists(logo_path):
+            try:
+                logo_img = Image.open(logo_path)
+                if logo_img.mode != 'RGBA':
+                    logo_img = logo_img.convert('RGBA')
+
+                # Apply opacity
+                if positions.logo_opacity < 1.0:
+                    alpha = logo_img.split()[3]
+                    alpha = alpha.point(lambda p: p * positions.logo_opacity)
+                    logo_img.putalpha(alpha)
+
+                # Calculate logo size and position
+                base_width, base_height = base_img.size
+                logo_width = int(base_width * (positions.logo_width / 100))
+
+                # Maintain aspect ratio
+                aspect_ratio = logo_img.width / logo_img.height
+                logo_height = int(logo_width / aspect_ratio)
+
+                print(f"Logo size: {logo_width}x{logo_height}")
+
+                # Resize logo
+                logo_img = logo_img.resize((logo_width, logo_height), Image.Resampling.LANCZOS)
+
+                # Apply rotation if needed - FIXED: Normalize rotation to 0-359
+                logo_rotation = getattr(positions, 'logo_rotation', 0) or 0
+                logo_rotation = (360 -logo_rotation) % 360  # Normalize to 0-359
+                print(f"Applying logo rotation: {logo_rotation} degrees (original: {getattr(positions, 'logo_rotation', 0)})")
+                if logo_rotation:
+                    logo_img = logo_img.rotate(logo_rotation, expand=True, resample=Image.Resampling.BICUBIC)
+                    logo_width, logo_height = logo_img.size
+
+                # Calculate position
+                x_position = int(base_width * (positions.logo_x / 100) - (logo_width / 2))
+                y_position = int(base_height * (positions.logo_y / 100) - (logo_height / 2))
+
+                # Ensure position is within bounds
+                x_position = max(5, min(base_width - logo_width - 5, x_position))
+                y_position = max(5, min(base_height - logo_height - 5, y_position))
+
+                print(f"Logo position: {x_position}, {y_position}")
+
+                # Paste logo onto watermark layer
+                watermark_layer.paste(logo_img, (x_position, y_position), logo_img)
+
+            except Exception as logo_error:
+                print(f"Error adding logo: {logo_error}")
+                import traceback
+                traceback.print_exc()
+
+        # Add text watermarks
+        from PIL import ImageDraw
+
+        # Define the draw_rotated_text function with proper rotation handling
+        def draw_rotated_text(layer, text, center_x, center_y, font, color_rgba, rotation):
+            if not text:
+                return
+            
+            # Normalize rotation to 0-359
+            rotation = (360 - rotation) % 360
+            print(f"Drawing rotated text: '{text[:30]}...' with rotation: {rotation}°")
+            
+            # Create a temporary image to measure text dimensions
+            temp_draw = ImageDraw.Draw(Image.new('RGBA', (1, 1)))
+            try:
+                bbox = temp_draw.multiline_textbbox((0, 0), text, font=font, align='center')
+                text_w = bbox[2] - bbox[0]
+                text_h = bbox[3] - bbox[1]
+            except Exception:
+                bbox = temp_draw.textbbox((0, 0), text, font=font)
+                text_w = bbox[2] - bbox[0]
+                text_h = bbox[3] - bbox[1]
+            
+            # Convert to integers (PIL requires integers for image dimensions)
+            text_w = int(max(1, text_w))
+            text_h = int(max(1, text_h))
+            
+            # Create image for the text
+            text_img = Image.new('RGBA', (text_w + 20, text_h + 20), (255, 255, 255, 0))
+            text_draw = ImageDraw.Draw(text_img)
+            text_draw.multiline_text((10, 10), text, font=font, fill=color_rgba, align='center')
+            
+            # Apply rotation
+            rotated = text_img.rotate(rotation, expand=True, resample=Image.Resampling.BICUBIC)
+            
+            # Calculate paste position (center alignment)
+            paste_x = int(center_x - rotated.width / 2)
+            paste_y = int(center_y - rotated.height / 2)
+            
+            # Paste onto the watermark layer
+            layer.paste(rotated, (paste_x, paste_y), rotated)
+
+        def tp(key, default):
+            if not text_position:
+                return default
+            return text_position.get(key, default)
+
+        show_name = parse_bool(tp('show_name', True), True)
+        show_contact = parse_bool(tp('show_contact', True), True)
+        show_address = parse_bool(tp('show_address', False), False)
+
+        # Scale font sizes based on image dimensions
+        base_width, base_height = base_img.size
+        scale_factor = base_width / 800 if base_width else 1.0
+
+        name_size = max(8, int(tp('name_size', 20) * scale_factor))
+        contact_size = max(8, int(tp('contact_size', 12) * scale_factor))
+        address_size = max(6, int(tp('address_size', 10) * scale_factor))
+
+        name_font = resolve_pil_font(tp('name_font', 'Arial'), tp('name_style', 'normal'), name_size)
+        contact_font = resolve_pil_font(tp('contact_font', 'Arial'), tp('contact_style', 'normal'), contact_size)
+        address_font = resolve_pil_font(tp('address_font', 'Arial'), tp('address_style', 'normal'), address_size)
+
+        # Add school name
+        if show_name and school_info.get('school_name'):
+            name_x = int(base_img.width * (tp('name_x', 50) / 100))
+            name_y = int(base_img.height * (tp('name_y', 25) / 100))
+            name_color = hex_to_rgb(tp('name_color', '#000000'))
+            name_opacity = clamp(tp('name_opacity', 1.0), 0.1, 1.0)
+            name_rotation = normalize_rotation(tp('name_rotation', 0))
+            name_rotation = (360 - name_rotation) % 360
+            color_rgba = (name_color[0], name_color[1], name_color[2], int(255 * name_opacity))
+            draw_rotated_text(watermark_layer, school_info['school_name'].strip(), name_x, name_y, name_font, color_rgba, name_rotation)
+            print(f"School name at ({name_x}, {name_y}) with rotation {name_rotation}°")
+
+        # Add contact info
+        contact_lines = []
+        if school_info.get('email'):
+            contact_lines.append(f"Email: {school_info['email']}")
+        if school_info.get('contact_number'):
+            contact_lines.append(f"Phone: {school_info['contact_number']}")
+        contact_text = "\n".join(contact_lines)
+
+        if show_contact and contact_text:
+            contact_x = int(base_img.width * (tp('contact_x', 50) / 100))
+            contact_y = int(base_img.height * (tp('contact_y', 90) / 100))
+            contact_color = hex_to_rgb(tp('contact_color', '#000000'))
+            contact_opacity = clamp(tp('contact_opacity', 1.0), 0.1, 1.0)
+            contact_rotation = normalize_rotation(tp('contact_rotation', 0))
+            contact_rotation = (360 - contact_rotation) % 36
+            color_rgba = (contact_color[0], contact_color[1], contact_color[2], int(255 * contact_opacity))
+            draw_rotated_text(watermark_layer, contact_text, contact_x, contact_y, contact_font, color_rgba, contact_rotation)
+            print(f"Contact info at ({contact_x}, {contact_y}) with rotation {contact_rotation}°")
+
+        # Add address / message
+        address_text = (tp('address', '') or '').strip()
+        if show_address and address_text:
+            address_x = int(base_img.width * (tp('address_x', 50) / 100))
+            address_y = int(base_img.height * (tp('address_y', 85) / 100))
+            address_color = hex_to_rgb(tp('address_color', '#000000'))
+            address_opacity = clamp(tp('address_opacity', 1.0), 0.1, 1.0)
+            address_rotation = normalize_rotation(tp('address_rotation', 0))
+            address_rotation = (360 - address_rotation) % 360
+            color_rgba = (address_color[0], address_color[1], address_color[2], int(255 * address_opacity))
+            draw_rotated_text(watermark_layer, address_text, address_x, address_y, address_font, color_rgba, address_rotation)
+            print(f"Address at ({address_x}, {address_y}) with rotation {address_rotation}°")
+
+        # Combine base image with watermark layer
+        watermarked_img = Image.alpha_composite(base_img, watermark_layer)
+
+        # Convert back to original mode if needed
+        if 'RGB' in base_img.mode:
+            watermarked_img = watermarked_img.convert('RGB')
+
+        # Save to output path or temp file
+        if not output_path:
+            temp_file = tempfile.NamedTemporaryFile(suffix='.png', delete=False)
+            output_path = temp_file.name
+            temp_file.close()
+
+        watermarked_img.save(output_path, quality=95)
+
+        print(f"Saved watermarked image to: {output_path}")
+        print(f"File size: {os.path.getsize(output_path)} bytes")
+        return output_path
+
+    except Exception as e:
+        print(f"Error adding logo and text to image: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return None
+
+def add_logo_and_text_to_pdf(pdf_path, logo_path, logo_position, school_info, text_position, output_path):
+    """Add logo and text to PDF with full customization support"""
+    try:
+        print(f"\n--- INSIDE add_logo_and_text_to_pdf ---")
+        print(f"PDF path: {pdf_path}")
+        print(f"Logo path: {logo_path}")
+        print(f"School info: {school_info}")
+        print(f"Output path: {output_path}")
         
+        if not os.path.exists(pdf_path):
+            print(f"ERROR: PDF file does not exist: {pdf_path}")
+            return None
+        
+        # Open PDF
         pdf_document = fitz.open(pdf_path)
+        print(f"PDF opened successfully. Pages: {len(pdf_document)}")
         
         # Open logo image if exists
         logo_img = None
         if logo_path and os.path.exists(logo_path):
-            logo_img = Image.open(logo_path)
-            print(f"Original logo size: {logo_img.size}")
-            
-            # Convert logo to RGBA if needed
-            if logo_img.mode != 'RGBA':
-                logo_img = logo_img.convert('RGBA')
-            
-            # Apply opacity
-            if logo_position.opacity < 1.0:
-                alpha = logo_img.split()[3]
-                alpha = alpha.point(lambda p: p * logo_position.opacity)
-                logo_img.putalpha(alpha)
-                print(f"Applied opacity: {logo_position.opacity}")
+            try:
+                logo_img = Image.open(logo_path)
+                print(f"Logo loaded: {logo_img.size}")
+                if logo_img.mode != 'RGBA':
+                    logo_img = logo_img.convert('RGBA')
+                
+                # Apply opacity
+                if hasattr(logo_position, 'opacity') and logo_position.opacity < 1.0:
+                    alpha = logo_img.split()[3]
+                    alpha = alpha.point(lambda p: p * logo_position.opacity)
+                    logo_img.putalpha(alpha)
+                    print(f"Applied opacity: {logo_position.opacity}")
+            except Exception as e:
+                print(f"Error loading logo: {e}")
+                logo_img = None
+        else:
+            print(f"Logo not found or not provided: {logo_path}")
         
         # Get first page for dimensions
         first_page = pdf_document[0]
@@ -2334,11 +3095,18 @@ def add_logo_and_text_to_pdf(pdf_path, logo_path, logo_position, school_info, te
             logo_width_pixels = int(page_width * (logo_position.width / 100))
             aspect_ratio = logo_img.width / logo_img.height
             logo_height_pixels = int(logo_width_pixels / aspect_ratio)
-            
-            print(f"Resized logo: {logo_width_pixels}x{logo_height_pixels}")
+            print(f"Logo size: {logo_width_pixels}x{logo_height_pixels}")
             
             # Resize logo
             logo_img = logo_img.resize((logo_width_pixels, logo_height_pixels), Image.Resampling.LANCZOS)
+            
+            # Apply rotation if needed
+            logo_rotation = getattr(logo_position, 'rotation', 0) or 0
+            logo_rotation = (360 - logo_rotation) % 360
+            if logo_rotation:
+                print(f"Applying logo rotation: {logo_rotation} degrees")
+                logo_img = logo_img.rotate(logo_rotation, expand=True, resample=Image.Resampling.BICUBIC)
+                logo_width_pixels, logo_height_pixels = logo_img.size
             
             # Convert to bytes
             logo_bytes = io.BytesIO()
@@ -2350,7 +3118,6 @@ def add_logo_and_text_to_pdf(pdf_path, logo_path, logo_position, school_info, te
                 page = pdf_document[page_num]
                 x_position = page.rect.width * (logo_position.x_position / 100)
                 y_position = page.rect.height * (logo_position.y_position / 100)
-                
                 print(f"Page {page_num+1}: Logo at ({x_position}, {y_position})")
                 
                 rect = fitz.Rect(
@@ -2361,218 +3128,119 @@ def add_logo_and_text_to_pdf(pdf_path, logo_path, logo_position, school_info, te
                 )
                 
                 page.insert_image(rect, stream=logo_bytes.getvalue())
+                print(f"  Logo added to page {page_num+1}")
+        else:
+            print("No logo to add")
         
         # Add text watermarks if school info exists
         if school_info and text_position:
+            print("Adding text watermarks...")
+            show_name = parse_bool(text_position.get('show_name', True), True)
+            show_contact = parse_bool(text_position.get('show_contact', True), True)
+            show_address = parse_bool(text_position.get('show_address', False), False)
+            
+            print(f"Show name: {show_name}, Show contact: {show_contact}, Show address: {show_address}")
+            
             for page_num in range(len(pdf_document)):
                 page = pdf_document[page_num]
+                page_w = page.rect.width
+                page_h = page.rect.height
                 
                 # School name
-                if school_info.get('school_name'):
-                    name_x = page.rect.width * (text_position['name_x'] / 100)
-                    name_y = page.rect.height * (text_position['name_y'] / 100)
+                if show_name and school_info.get('school_name'):
+                    name_x = page_w * (text_position.get('name_x', 50) / 100)
+                    name_y = page_h * (text_position.get('name_y', 25) / 100)
+                    name_size = text_position.get('name_size', 20)
+                    name_rotation = normalize_rotation(text_position.get('name_rotation', 0))
                     
-                    page.insert_text(
-                        fitz.Point(name_x, name_y),
-                        school_info['school_name'],
-                        fontsize=text_position['name_size'],
-                        color=(0, 0, 0, text_position['name_opacity']),
-                        align=1  # Center align
+                    print(f"Page {page_num+1}: Adding school name '{school_info['school_name']}' at ({name_x}, {name_y}) with rotation {name_rotation}°")
+                    
+                    rect = fitz.Rect(
+                        name_x - 200,
+                        name_y - 30,
+                        name_x + 200,
+                        name_y + 30
                     )
-                    print(f"Page {page_num+1}: School name at ({name_x}, {name_y})")
+                    
+                    page.insert_textbox(
+                        rect,
+                        school_info['school_name'],
+                        fontsize=name_size,
+                        align=1,
+                        rotate=name_rotation
+                    )
                 
                 # Contact info
-                contact_text = ""
+                contact_lines = []
                 if school_info.get('email'):
-                    contact_text += f"✉ {school_info['email']}"
+                    contact_lines.append(f"Email: {school_info['email']}")
                 if school_info.get('contact_number'):
-                    if contact_text:
-                        contact_text += "   |   "
-                    contact_text += f"📞 {school_info['contact_number']}"
+                    contact_lines.append(f"Phone: {school_info['contact_number']}")
+                contact_text = "\n".join(contact_lines)
                 
-                if contact_text:
-                    contact_x = page.rect.width * (text_position['contact_x'] / 100)
-                    contact_y = page.rect.height * (text_position['contact_y'] / 100)
+                if show_contact and contact_text:
+                    contact_x = page_w * (text_position.get('contact_x', 50) / 100)
+                    contact_y = page_h * (text_position.get('contact_y', 90) / 100)
+                    contact_size = text_position.get('contact_size', 12)
+                    contact_rotation = normalize_rotation(text_position.get('contact_rotation', 0))
                     
-                    page.insert_text(
-                        fitz.Point(contact_x, contact_y),
-                        contact_text,
-                        fontsize=text_position['contact_size'],
-                        color=(0, 0, 0, text_position['contact_opacity']),
-                        align=1  # Center align
+                    print(f"Page {page_num+1}: Adding contact info at ({contact_x}, {contact_y}) with rotation {contact_rotation}°")
+                    
+                    rect = fitz.Rect(
+                        contact_x - 200,
+                        contact_y - 40,
+                        contact_x + 200,
+                        contact_y + 40
                     )
-                    print(f"Page {page_num+1}: Contact info at ({contact_x}, {contact_y})")
+                    
+                    page.insert_textbox(
+                        rect,
+                        contact_text,
+                        fontsize=contact_size,
+                        align=1,
+                        rotate=contact_rotation
+                    )
+                
+                # Address / message
+                address_text = (text_position.get('address', '') or '').strip()
+                if show_address and address_text:
+                    address_x = page_w * (text_position.get('address_x', 50) / 100)
+                    address_y = page_h * (text_position.get('address_y', 85) / 100)
+                    address_size = text_position.get('address_size', 10)
+                    address_rotation = normalize_rotation(text_position.get('address_rotation', 0))
+                    
+                    print(f"Page {page_num+1}: Adding address at ({address_x}, {address_y}) with rotation {address_rotation}°")
+                    
+                    rect = fitz.Rect(
+                        address_x - 200,
+                        address_y - 30,
+                        address_x + 200,
+                        address_y + 30
+                    )
+                    
+                    page.insert_textbox(
+                        rect,
+                        address_text,
+                        fontsize=address_size,
+                        align=1,
+                        rotate=address_rotation
+                    )
+        else:
+            print("No text watermarks to add")
         
         # Save watermarked PDF
         pdf_document.save(output_path)
         pdf_document.close()
         
-        print(f"Saved watermarked PDF to: {output_path}")
+        print(f"PDF saved to: {output_path}")
         print(f"File exists: {os.path.exists(output_path)}")
         print(f"File size: {os.path.getsize(output_path)} bytes")
+        print(f"--- EXIT add_logo_and_text_to_pdf ---\n")
         
         return output_path
         
     except Exception as e:
-        print(f"Error adding logo and text to PDF: {str(e)}")
-        import traceback
-        traceback.print_exc()
-        return None
-
-def add_logo_and_text_to_image(
-    image_path: str, 
-    logo_path: str, 
-    positions: WatermarkPosition,
-    file_type: str,
-    school_info: Dict[str, str],
-    text_position: Dict[str, Any],
-    output_path: str = None
-) -> str:
-    """Add logo and text watermark to image"""
-    try:
-        print(f"=== ADDING LOGO AND TEXT TO IMAGE ===")
-        print(f"Image: {image_path}")
-        print(f"Logo: {logo_path}")
-        print(f"School Info: {school_info}")
-        print(f"Text Position: {text_position}")
-        
-        # Open base image
-        base_img = Image.open(image_path)
-        
-        # Convert to RGBA if not already
-        if base_img.mode != 'RGBA':
-            base_img = base_img.convert('RGBA')
-        
-        print(f"Base image size: {base_img.size}, mode: {base_img.mode}")
-        
-        # Create a transparent layer for watermarks
-        watermark_layer = Image.new('RGBA', base_img.size, (255, 255, 255, 0))
-        
-        # Add logo if exists
-        if logo_path and os.path.exists(logo_path):
-            try:
-                logo_img = Image.open(logo_path)
-                if logo_img.mode != 'RGBA':
-                    logo_img = logo_img.convert('RGBA')
-                
-                # Apply opacity
-                if positions.logo_opacity < 1.0:
-                    alpha = logo_img.split()[3]
-                    alpha = alpha.point(lambda p: p * positions.logo_opacity)
-                    logo_img.putalpha(alpha)
-                
-                # Calculate logo size and position
-                base_width, base_height = base_img.size
-                logo_width = int(base_width * (positions.logo_width / 100))
-                
-                # Maintain aspect ratio
-                aspect_ratio = logo_img.width / logo_img.height
-                logo_height = int(logo_width / aspect_ratio)
-                
-                print(f"Logo size: {logo_width}x{logo_height}")
-                
-                # Resize logo
-                logo_img = logo_img.resize((logo_width, logo_height), Image.Resampling.LANCZOS)
-                
-                # Calculate position
-                x_position = int(base_width * (positions.logo_x / 100) - (logo_width / 2))
-                y_position = int(base_height * (positions.logo_y / 100) - (logo_height / 2))
-                
-                # Ensure position is within bounds
-                x_position = max(0, min(base_width - logo_width, x_position))
-                y_position = max(0, min(base_height - logo_height, y_position))
-                
-                print(f"Logo position: {x_position}, {y_position}")
-                
-                # Paste logo onto watermark layer
-                watermark_layer.paste(logo_img, (x_position, y_position), logo_img)
-                
-            except Exception as logo_error:
-                print(f"Error adding logo: {logo_error}")
-        
-        # Add text watermarks
-        from PIL import ImageDraw, ImageFont
-        
-        draw = ImageDraw.Draw(watermark_layer)
-        
-        # Try to load a font
-        try:
-            # Use default font
-            font_name = ImageFont.truetype("arial.ttf", text_position['name_size']) if os.name == 'nt' else ImageFont.load_default()
-            font_contact = ImageFont.truetype("arial.ttf", text_position['contact_size']) if os.name == 'nt' else ImageFont.load_default()
-        except:
-            font_name = ImageFont.load_default()
-            font_contact = ImageFont.load_default()
-        
-        # Add school name
-        if school_info.get('school_name'):
-            name_x = int(base_img.width * (text_position['name_x'] / 100))
-            name_y = int(base_img.height * (text_position['name_y'] / 100))
-            
-            # Calculate text size for centering
-            from PIL import ImageDraw
-            temp_draw = ImageDraw.Draw(Image.new('RGBA', (1, 1)))
-            bbox = temp_draw.textbbox((0, 0), school_info['school_name'], font=font_name)
-            text_width = bbox[2] - bbox[0]
-            text_height = bbox[3] - bbox[1]
-            
-            name_x -= text_width // 2
-            name_y -= text_height // 2
-            
-            # Draw text with opacity
-            name_color = (0, 0, 0, int(255 * text_position['name_opacity']))
-            draw.text((name_x, name_y), school_info['school_name'], 
-                     font=font_name, fill=name_color)
-            print(f"School name at ({name_x}, {name_y})")
-        
-        # Add contact info
-        contact_lines = []
-        if school_info.get('email'):
-            contact_lines.append(f"Email: {school_info['email']}")
-        if school_info.get('contact_number'):
-            contact_lines.append(f"Phone: {school_info['contact_number']}")
-        
-        if contact_lines:
-            contact_text = "\n".join(contact_lines)
-            contact_x = int(base_img.width * (text_position['contact_x'] / 100))
-            contact_y = int(base_img.height * (text_position['contact_y'] / 100))
-            
-            # Calculate text size for centering
-            temp_draw = ImageDraw.Draw(Image.new('RGBA', (1, 1)))
-            bbox = temp_draw.multiline_textbbox((0, 0), contact_text, font=font_contact)
-            text_width = bbox[2] - bbox[0]
-            text_height = bbox[3] - bbox[1]
-            
-            contact_x -= text_width // 2
-            contact_y -= text_height // 2
-            
-            # Draw text with opacity
-            contact_color = (0, 0, 0, int(255 * text_position['contact_opacity']))
-            draw.multiline_text((contact_x, contact_y), contact_text,
-                              font=font_contact, fill=contact_color, align='center')
-            print(f"Contact info at ({contact_x}, {contact_y})")
-        
-        # Combine base image with watermark layer
-        watermarked_img = Image.alpha_composite(base_img, watermark_layer)
-        
-        # Convert back to original mode if needed
-        if 'RGB' in base_img.mode:
-            watermarked_img = watermarked_img.convert('RGB')
-        
-        # Save to output path or temp file
-        if not output_path:
-            temp_file = tempfile.NamedTemporaryFile(suffix='.png', delete=False)
-            output_path = temp_file.name
-            temp_file.close()
-        
-        watermarked_img.save(output_path, quality=95)
-        
-        print(f"Saved watermarked image to: {output_path}")
-        print(f"File size: {os.path.getsize(output_path)} bytes")
-        return output_path
-        
-    except Exception as e:
-        print(f"Error adding logo and text to image: {str(e)}")
+        print(f"Error in add_logo_and_text_to_pdf: {str(e)}")
         import traceback
         traceback.print_exc()
         return None
@@ -2586,9 +3254,12 @@ async def download_resource_with_logo(
 ):
     """Download a resource file with school logo and text watermark"""
     try:
-        print(f"=== DOWNLOAD WITH LOGO REQUEST ===")
+        print(f"\n{'='*60}")
+        print(f"DOWNLOAD WITH LOGO REQUEST")
+        print(f"{'='*60}")
         print(f"Resource ID: {resource_id}")
         print(f"School ID: {school_id}")
+        print(f"School Name: {school_name}")
         
         # Get the resource from the database
         resource = db.query(Resource).filter(Resource.resource_id == resource_id).first()
@@ -2596,84 +3267,116 @@ async def download_resource_with_logo(
             raise HTTPException(status_code=404, detail="Resource not found")
         
         print(f"Resource: {resource.name}")
-        print(f"Category: {resource.category}")
         print(f"File type: {resource.file_type}")
+        print(f"File path in DB: {resource.file_path}")
         
         # Get school info
         school = None
         if school_id:
             school = db.query(School).filter(School.school_id == school_id).first()
             if school:
-                print(f"School: {school.school_name}")
+                print(f"School found: {school.school_name}")
+                print(f"School logo path: {school.logo_path}")
+                print(f"School contact: {school.contact_number}")
         
         # Get file path
-        file_path = resource.file_path
-        if file_path.startswith('/'):
-            file_path = file_path[1:]
+        try:
+            full_file_path = get_full_file_path(resource.file_path)
+            print(f"File found at: {full_file_path}")
+            print(f"File exists: {os.path.exists(full_file_path)}")
+            print(f"File size: {os.path.getsize(full_file_path)} bytes")
+        except FileNotFoundError as e:
+            print(f"File not found error: {e}")
+            raise HTTPException(status_code=404, detail=str(e))
         
-        full_file_path = os.path.join(ROOT_DIR, file_path)
-        
-        # Try to find the file
-        if not os.path.exists(full_file_path):
-            # Try alternative paths
-            alternative_paths = [
-                file_path,
-                os.path.join("uploads", file_path),
-                os.path.join("uploads", file_path.lstrip('/')),
-                os.path.join(ROOT_DIR, "uploads", "resources", resource.category, os.path.basename(file_path))
-            ]
-            
-            for alt_path in alternative_paths:
-                test_path = os.path.join(ROOT_DIR, alt_path) if not os.path.isabs(alt_path) else alt_path
-                if os.path.exists(test_path):
-                    full_file_path = test_path
-                    print(f"Found file at: {full_file_path}")
-                    break
-            else:
-                raise HTTPException(status_code=404, detail="File not found on server")
-        
-        print(f"Final file path: {full_file_path}")
-        
-        # Check if we should add watermark
-        should_add_watermark = False
+        # Default to original file
+        final_file_path = full_file_path
+        filename_suffix = ""
         watermarked_file = None
         
-        if school and school_id and resource_id:
-            # Get logo position
+        # Add watermark if school exists
+        if school and school_id:
+            print(f"\n--- Attempting to add watermark ---")
+            
+            # Get logo position from database
             logo_position_db = db.query(SchoolLogoPosition).filter(
                 SchoolLogoPosition.school_id == school_id,
                 SchoolLogoPosition.resource_id == resource_id
             ).first()
             
-            # Get text watermark position
+            print(f"Logo position in DB: {logo_position_db is not None}")
+            if logo_position_db:
+                print(f"  - x: {logo_position_db.x_position}")
+                print(f"  - y: {logo_position_db.y_position}")
+                print(f"  - width: {logo_position_db.width}")
+                print(f"  - opacity: {logo_position_db.opacity}")
+            
+            # Get text watermark position from database
             text_position_db = db.query(SchoolWatermarkText).filter(
                 SchoolWatermarkText.school_id == school_id,
                 SchoolWatermarkText.resource_id == resource_id
             ).first()
             
-            # Prepare positions
-            logo_positions = None
-            text_positions = None
+            print(f"Text position in DB: {text_position_db is not None}")
+            if text_position_db:
+                print(f"  - name_x: {text_position_db.name_x}")
+                print(f"  - name_y: {text_position_db.name_y}")
+                print(f"  - show_name: {text_position_db.show_name}")
+                print(f"  - contact_x: {text_position_db.contact_x}")
+                print(f"  - contact_y: {text_position_db.contact_y}")
             
-            # Use saved positions or defaults
+            # Prepare logo position with defaults
+            logo_positions = {
+                'x_position': 50,
+                'y_position': 10,
+                'width': 20,
+                'opacity': 1.0,
+                'rotation': 0
+            }
+            
             if logo_position_db:
                 logo_positions = {
                     'x_position': logo_position_db.x_position,
                     'y_position': logo_position_db.y_position,
                     'width': logo_position_db.width,
-                    'opacity': logo_position_db.opacity
+                    'opacity': logo_position_db.opacity,
+                    'rotation': getattr(logo_position_db, 'rotation', 0) or 0
                 }
-                should_add_watermark = True
                 print(f"Using saved logo position: {logo_positions}")
             else:
-                # Default logo position
-                logo_positions = {
-                    'x_position': 50,
-                    'y_position': 10,
-                    'width': 20,
-                    'opacity': 0.7
-                }
                 print(f"Using default logo position: {logo_positions}")
+            
+            # Prepare text position with defaults
+            text_positions = {
+                'name_x': 50,
+                'name_y': 25,
+                'name_size': 20,
+                'name_opacity': 1.0,
+                'name_rotation': 0,
+                'name_font': 'Arial',
+                'name_style': 'normal',
+                'name_color': '#000000',
+                'show_name': True,
+                'contact_x': 50,
+                'contact_y': 90,
+                'contact_size': 12,
+                'contact_opacity': 1.0,
+                'contact_rotation': 0,
+                'contact_font': 'Arial',
+                'contact_style': 'normal',
+                'contact_color': '#000000',
+                'show_contact': True,
+                'address_x': 50,
+                'address_y': 85,
+                'address_size': 10,
+                'address_opacity': 1.0,
+                'address_rotation': 0,
+                'address_font': 'Arial',
+                'address_style': 'normal',
+                'address_color': '#000000',
+                'show_address': False,
+                'address': ''
+            }
             
             if text_position_db:
                 text_positions = {
@@ -2681,40 +3384,58 @@ async def download_resource_with_logo(
                     'name_y': text_position_db.name_y,
                     'name_size': text_position_db.name_size,
                     'name_opacity': text_position_db.name_opacity,
+                    'name_rotation': text_position_db.name_rotation or 0,
+                    'name_font': text_position_db.name_font or 'Arial',
+                    'name_style': text_position_db.name_style or 'normal',
+                    'name_color': text_position_db.name_color or '#000000',
+                    'show_name': text_position_db.show_name if text_position_db.show_name is not None else True,
                     'contact_x': text_position_db.contact_x,
                     'contact_y': text_position_db.contact_y,
                     'contact_size': text_position_db.contact_size,
-                    'contact_opacity': text_position_db.contact_opacity
+                    'contact_opacity': text_position_db.contact_opacity,
+                    'contact_rotation': text_position_db.contact_rotation or 0,
+                    'contact_font': text_position_db.contact_font or 'Arial',
+                    'contact_style': text_position_db.contact_style or 'normal',
+                    'contact_color': text_position_db.contact_color or '#000000',
+                    'show_contact': text_position_db.show_contact if text_position_db.show_contact is not None else True,
+                    'address_x': text_position_db.address_x or 50,
+                    'address_y': text_position_db.address_y or 85,
+                    'address_size': text_position_db.address_size or 10,
+                    'address_opacity': text_position_db.address_opacity if text_position_db.address_opacity is not None else 1.0,
+                    'address_rotation': text_position_db.address_rotation or 0,
+                    'address_font': text_position_db.address_font or 'Arial',
+                    'address_style': text_position_db.address_style or 'normal',
+                    'address_color': text_position_db.address_color or '#000000',
+                    'show_address': text_position_db.show_address if text_position_db.show_address is not None else False,
+                    'address': text_position_db.address or ''
                 }
-                should_add_watermark = True
                 print(f"Using saved text position: {text_positions}")
             else:
-                # Default text position
-                text_positions = {
-                    'name_x': 50,
-                    'name_y': 25,
-                    'name_size': 20,
-                    'name_opacity': 0.8,
-                    'contact_x': 50,
-                    'contact_y': 90,
-                    'contact_size': 12,
-                    'contact_opacity': 0.7
-                }
-                print(f"Using default text position: {text_positions}")
+                print(f"Using default text position")
             
             # Get school logo path
             logo_path = None
-            if school and school.logo_path:
-                logo_path = school.logo_path
-                if logo_path.startswith('/'):
-                    logo_path = logo_path[1:]
-                logo_full_path = os.path.join(ROOT_DIR, logo_path)
-                if os.path.exists(logo_full_path):
-                    logo_path = logo_full_path
-                    print(f"Logo found at: {logo_path}")
-                else:
-                    print(f"Logo not found at: {logo_full_path}")
-                    logo_path = None
+            if school.logo_path:
+                print(f"Raw logo path from school: {school.logo_path}")
+                logo_path_clean = school.logo_path.lstrip('/')
+                possible_paths = [
+                    os.path.join(ROOT_DIR, logo_path_clean),
+                    os.path.join(ROOT_DIR, 'uploads', logo_path_clean),
+                    os.path.join(ROOT_DIR, 'uploads', 'school_logos', school.school_id, os.path.basename(logo_path_clean)),
+                    os.path.join(ROOT_DIR, 'uploads', 'school_logos', school.school_id, 'logo.png'),
+                    os.path.join(ROOT_DIR, 'uploads', 'school_logos', school.school_id, 'logo.jpg'),
+                ]
+                
+                for possible_path in possible_paths:
+                    if os.path.exists(possible_path):
+                        logo_path = possible_path
+                        print(f"Logo found at: {logo_path}")
+                        break
+                
+                if not logo_path:
+                    print(f"Logo not found in any location. Tried: {possible_paths}")
+            else:
+                print("No logo path in school record")
             
             # Prepare school info
             school_info = {
@@ -2722,59 +3443,80 @@ async def download_resource_with_logo(
                 'email': school.email,
                 'contact_number': school.contact_number
             }
+            print(f"School info: {school_info}")
             
-            # Create WatermarkPosition object
-            watermark_positions = WatermarkPosition(
-                logo_x=logo_positions['x_position'],
-                logo_y=logo_positions['y_position'],
-                logo_width=logo_positions['width'],
-                logo_opacity=logo_positions['opacity'],
-                school_name_x=text_positions['name_x'],
-                school_name_y=text_positions['name_y'],
-                school_name_size=text_positions['name_size'],
-                school_name_opacity=text_positions['name_opacity'],
-                contact_x=text_positions['contact_x'],
-                contact_y=text_positions['contact_y'],
-                contact_size=text_positions['contact_size'],
-                contact_opacity=text_positions['contact_opacity']
+            # Create position object for logo
+            logo_position_obj = SimpleNamespace(
+                x_position=logo_positions['x_position'],
+                y_position=logo_positions['y_position'],
+                width=logo_positions['width'],
+                opacity=logo_positions['opacity'],
+                rotation=logo_positions.get('rotation', 0)
             )
             
             # Apply watermark based on file type
-            if should_add_watermark:
-                print(f"Applying watermark to file type: {resource.file_type}")
-                
-                file_type_lower = resource.file_type.lower() if resource.file_type else ''
-                
-                # For PDF files
-                if 'pdf' in file_type_lower or full_file_path.lower().endswith('.pdf'):
-                    print("Applying watermark to PDF")
-                    watermarked_file = add_watermark_to_pdf(full_file_path, school, watermark_positions)
-                
-                # For image files
-                elif any(img_type in file_type_lower for img_type in ['jpeg', 'jpg', 'png', 'gif', 'bmp', 'tiff', 'webp']):
-                    print("Applying watermark to image")
-                    watermarked_file = add_logo_and_text_to_image(
-                        full_file_path,
-                        logo_path,
-                        watermark_positions,
-                        resource.file_type,
-                        school_info,
-                        text_positions,
-                        None  # Will create temp file
-                    )
-                
-                else:
-                    print(f"File type {resource.file_type} not supported for watermarking, using original")
-        
-        # Use watermarked file if created successfully
-        if watermarked_file and os.path.exists(watermarked_file):
-            print(f"Watermarked file created: {watermarked_file}")
-            final_file_path = watermarked_file
-            filename_suffix = "_branded"
-        else:
-            print(f"Using original file")
-            final_file_path = full_file_path
-            filename_suffix = ""
+            file_type_lower = resource.file_type.lower() if resource.file_type else ''
+            file_path_lower = full_file_path.lower()
+            
+            print(f"File type: {file_type_lower}")
+            
+            # For PDF files
+            if 'pdf' in file_type_lower or file_path_lower.endswith('.pdf'):
+                print("Processing PDF watermark...")
+                temp_file = tempfile.NamedTemporaryFile(suffix='.pdf', delete=False)
+                temp_file.close()
+                watermarked_file = add_logo_and_text_to_pdf(
+                    full_file_path,
+                    logo_path,
+                    logo_position_obj,
+                    school_info,
+                    text_positions,
+                    temp_file.name
+                )
+                print(f"PDF watermark result: {watermarked_file}")
+            
+            # For image files
+            elif any(img_type in file_type_lower for img_type in ['jpeg', 'jpg', 'png', 'gif', 'bmp', 'tiff', 'webp']):
+                print("Processing image watermark...")
+                # Create WatermarkPosition object for image function
+                watermark_positions = WatermarkPosition(
+                    logo_x=logo_positions['x_position'],
+                    logo_y=logo_positions['y_position'],
+                    logo_width=logo_positions['width'],
+                    logo_opacity=logo_positions['opacity'],
+                    logo_rotation=logo_positions.get('rotation', 0),
+                    school_name_x=text_positions['name_x'],
+                    school_name_y=text_positions['name_y'],
+                    school_name_size=text_positions['name_size'],
+                    school_name_opacity=text_positions['name_opacity'],
+                    contact_x=text_positions['contact_x'],
+                    contact_y=text_positions['contact_y'],
+                    contact_size=text_positions['contact_size'],
+                    contact_opacity=text_positions['contact_opacity']
+                )
+                watermarked_file = add_logo_and_text_to_image(
+                    full_file_path,
+                    logo_path,
+                    watermark_positions,
+                    resource.file_type,
+                    school_info,
+                    text_positions,
+                    None
+                )
+                print(f"Image watermark result: {watermarked_file}")
+            else:
+                print(f"Unsupported file type for watermarking: {file_type_lower}")
+            
+            # Use watermarked file if created successfully
+            if watermarked_file and os.path.exists(watermarked_file):
+                print(f"Watermarked file created successfully: {watermarked_file}")
+                print(f"Watermarked file size: {os.path.getsize(watermarked_file)} bytes")
+                final_file_path = watermarked_file
+                filename_suffix = "_branded"
+            else:
+                print("WATERMARK FAILED - Using original file")
+                if watermarked_file:
+                    print(f"Watermarked file path exists but file not found: {watermarked_file}")
         
         # Log download
         if school_id and school_name:
@@ -2786,6 +3528,7 @@ async def download_resource_with_logo(
             db.add(download_log)
             resource.download_count += 1
             db.commit()
+            print(f"Download logged for school: {school_name}")
         
         # Read file content
         with open(final_file_path, 'rb') as f:
@@ -2795,8 +3538,9 @@ async def download_resource_with_logo(
         if watermarked_file and watermarked_file != full_file_path and os.path.exists(watermarked_file):
             try:
                 os.remove(watermarked_file)
-            except:
-                pass
+                print(f"Cleaned up temp file: {watermarked_file}")
+            except Exception as cleanup_error:
+                print(f"Error cleaning up temp file: {cleanup_error}")
         
         # Determine download filename
         file_extension = os.path.splitext(resource.name)[1]
@@ -2809,6 +3553,7 @@ async def download_resource_with_logo(
         download_filename = f"{resource.name.replace(' ', '_')}{filename_suffix}{file_extension}"
         
         print(f"Returning file: {download_filename}, size: {len(file_content)} bytes")
+        print(f"{'='*60}\n")
         
         return Response(
             content=file_content,
@@ -2828,6 +3573,93 @@ async def download_resource_with_logo(
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
     
+@api_router.get("/debug/check-watermark-settings/{school_id}/{resource_id}")
+async def check_watermark_settings(
+    school_id: str,
+    resource_id: str,
+    db: Session = Depends(get_db)
+):
+    """Debug endpoint to check saved watermark settings"""
+    logo_pos = db.query(SchoolLogoPosition).filter(
+        SchoolLogoPosition.school_id == school_id,
+        SchoolLogoPosition.resource_id == resource_id
+    ).first()
+    
+    text_pos = db.query(SchoolWatermarkText).filter(
+        SchoolWatermarkText.school_id == school_id,
+        SchoolWatermarkText.resource_id == resource_id
+    ).first()
+    
+    return {
+        "logo_position": {
+            "exists": logo_pos is not None,
+            "x": logo_pos.x_position if logo_pos else None,
+            "y": logo_pos.y_position if logo_pos else None,
+            "width": logo_pos.width if logo_pos else None,
+            "opacity": logo_pos.opacity if logo_pos else None,
+            "rotation": logo_pos.rotation if logo_pos else None
+        } if logo_pos else None,
+        "text_position": {
+            "exists": text_pos is not None,
+            "name_x": text_pos.name_x if text_pos else None,
+            "name_y": text_pos.name_y if text_pos else None,
+            "name_size": text_pos.name_size if text_pos else None,
+            "contact_x": text_pos.contact_x if text_pos else None,
+            "contact_y": text_pos.contact_y if text_pos else None,
+            "show_name": text_pos.show_name if text_pos else None,
+            "show_contact": text_pos.show_contact if text_pos else None
+        } if text_pos else None
+    }
+
+@api_router.get("/debug/watermark-settings/{school_id}/{resource_id}")
+async def debug_watermark_settings(
+    school_id: str,
+    resource_id: str,
+    db: Session = Depends(get_db)
+):
+    """Debug endpoint to check watermark settings"""
+    logo_pos = db.query(SchoolLogoPosition).filter(
+        SchoolLogoPosition.school_id == school_id,
+        SchoolLogoPosition.resource_id == resource_id
+    ).first()
+    
+    text_pos = db.query(SchoolWatermarkText).filter(
+        SchoolWatermarkText.school_id == school_id,
+        SchoolWatermarkText.resource_id == resource_id
+    ).first()
+    
+    school = db.query(School).filter(School.school_id == school_id).first()
+    
+    result = {
+        "school_exists": school is not None,
+        "school_name": school.school_name if school else None,
+        "school_logo_path": school.logo_path if school else None,
+        "logo_position": None,
+        "text_position": None
+    }
+    
+    if logo_pos:
+        result["logo_position"] = {
+            "x": logo_pos.x_position,
+            "y": logo_pos.y_position,
+            "width": logo_pos.width,
+            "opacity": logo_pos.opacity,
+            "rotation": logo_pos.rotation
+        }
+    
+    if text_pos:
+        result["text_position"] = {
+            "name_x": text_pos.name_x,
+            "name_y": text_pos.name_y,
+            "name_size": text_pos.name_size,
+            "name_opacity": text_pos.name_opacity,
+            "show_name": text_pos.show_name,
+            "contact_x": text_pos.contact_x,
+            "contact_y": text_pos.contact_y,
+            "show_contact": text_pos.show_contact
+        }
+    
+    return result
     
 @api_router.get("/debug/school-watermark-positions/{school_id}")
 async def debug_school_watermark_positions(
@@ -2887,10 +3719,30 @@ async def debug_school_watermark_positions(
                 "name_y": tp.name_y,
                 "name_size": tp.name_size,
                 "name_opacity": tp.name_opacity,
+                "name_rotation": tp.name_rotation,
+                "name_font": tp.name_font,
+                "name_style": tp.name_style,
+                "name_color": tp.name_color,
+                "show_name": tp.show_name,
                 "contact_x": tp.contact_x,
                 "contact_y": tp.contact_y,
                 "contact_size": tp.contact_size,
-                "contact_opacity": tp.contact_opacity
+                "contact_opacity": tp.contact_opacity,
+                "contact_rotation": tp.contact_rotation,
+                "contact_font": tp.contact_font,
+                "contact_style": tp.contact_style,
+                "contact_color": tp.contact_color,
+                "show_contact": tp.show_contact,
+                "address_x": tp.address_x,
+                "address_y": tp.address_y,
+                "address_size": tp.address_size,
+                "address_opacity": tp.address_opacity,
+                "address_rotation": tp.address_rotation,
+                "address_font": tp.address_font,
+                "address_style": tp.address_style,
+                "address_color": tp.address_color,
+                "show_address": tp.show_address,
+                "address": tp.address
             }
             for tp in text_positions
         ]
@@ -2964,12 +3816,18 @@ async def get_school_info(school_id: str, db: Session = Depends(get_db)):
     if not school:
         raise HTTPException(status_code=404, detail="School not found")
     
+    # Fix logo path - ensure it's relative
+    logo_path = None
+    if school.logo_path:
+        # Remove leading slash if present
+        logo_path = school.logo_path.lstrip('/')
+    
     return {
         "school_id": school.school_id,
         "school_name": school.school_name,
         "email": school.email,
         "contact_number": school.contact_number,
-        "logo_path": school.logo_path
+        "logo_path": logo_path
     }
 
 # Debug endpoint for logo positions
@@ -2996,6 +3854,7 @@ async def debug_logo_position(
         "y_position": position.y_position,
         "width": position.width,
         "opacity": position.opacity,
+        "rotation": position.rotation or 0,
         "updated_at": position.updated_at.isoformat() if position.updated_at else None
     }
 
@@ -3023,7 +3882,9 @@ app.add_middleware(
 )
 
 # Serve static files from the uploads directory
-app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
+app.mount("/uploads", StaticFiles(directory=str(ROOT_DIR / "uploads")), name="uploads")
+
+app.mount("/api/uploads", StaticFiles(directory=str(ROOT_DIR / "uploads")), name="api_uploads")
 
 # Configure logging
 logging.basicConfig(
@@ -3031,3 +3892,7 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=5000)

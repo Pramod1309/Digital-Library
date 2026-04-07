@@ -3,14 +3,15 @@ import React, { useState, useEffect } from 'react';
 import { Layout, Button, theme } from 'antd';
 import { MenuUnfoldOutlined, MenuFoldOutlined, LogoutOutlined, UserOutlined } from '@ant-design/icons';
 import { Routes, Route, useLocation, Navigate, Outlet, useNavigate } from 'react-router-dom';
-import axios from 'axios';
+import api from '../api/axiosConfig';
 import Sidebar from '../components/Sidebar';
 import DashboardHome from './DashboardHome';
 
 // Resource Management
 import ResourceManagement from '../components/Resources/ResourceManagement';
 import ResourcesHome from '../components/Resources/ResourcesHome';
-import ResourceCategory from '../components/Resources/ResourceCategory';
+import AdminResourceCategory from '../components/Resources/AdminResourceCategory';
+import SchoolUploads from '../components/Resources/SchoolUploads';
 
 // Analytics
 import SchoolActivity from '../components/Analytics/SchoolActivity';
@@ -52,6 +53,8 @@ const AdminDashboard = ({ user, setUser }) => {
   
   const [collapsed, setCollapsed] = useState(false);
   const [schools, setSchools] = useState([]);
+  const [filteredSchools, setFilteredSchools] = useState([]);
+  const [searchTerm, setSearchTerm] = useState('');
   const [showAddModal, setShowAddModal] = useState(false);
   const [editingSchool, setEditingSchool] = useState(null);
   const [formData, setFormData] = useState({
@@ -75,13 +78,40 @@ const AdminDashboard = ({ user, setUser }) => {
     fetchSchools();
   }, []);
 
+  useEffect(() => {
+    filterSchools();
+  }, [schools, searchTerm]);
+
   const fetchSchools = async () => {
     try {
-      const response = await axios.get(`${API}/admin/schools`);
+      const response = await api.get('/admin/schools');
       setSchools(response.data);
     } catch (err) {
       console.error('Error fetching schools:', err);
     }
+  };
+
+  const filterSchools = () => {
+    if (!searchTerm.trim()) {
+      setFilteredSchools(schools);
+      return;
+    }
+
+    const filtered = schools.filter(school => {
+      const searchLower = searchTerm.toLowerCase();
+      return (
+        school.school_id?.toString().toLowerCase().includes(searchLower) ||
+        school.school_name?.toLowerCase().includes(searchLower) ||
+        school.email?.toLowerCase().includes(searchLower) ||
+        school.contact_number?.toLowerCase().includes(searchLower)
+      );
+    });
+    
+    setFilteredSchools(filtered);
+  };
+
+  const handleSearchChange = (e) => {
+    setSearchTerm(e.target.value);
   };
 
   const handleLogout = () => {
@@ -116,7 +146,7 @@ const AdminDashboard = ({ user, setUser }) => {
         formDataToSend.append('logo', formData.logo);
       }
 
-      await axios.post(`${API}/admin/schools`, formDataToSend, {
+      await api.post('/admin/schools', formDataToSend, {
         headers: {
           'Content-Type': 'multipart/form-data'
         }
@@ -152,7 +182,7 @@ const AdminDashboard = ({ user, setUser }) => {
       if (formData.password) formDataToSend.append('password', formData.password);
       if (formData.logo) formDataToSend.append('logo', formData.logo);
 
-      await axios.put(`${API}/admin/schools/${editingSchool.school_id}`, formDataToSend, {
+      await api.put(`/admin/schools/${editingSchool.school_id}`, formDataToSend, {
         headers: {
           'Content-Type': 'multipart/form-data'
         }
@@ -181,7 +211,7 @@ const AdminDashboard = ({ user, setUser }) => {
     }
 
     try {
-      await axios.delete(`${API}/admin/schools/${schoolId}`);
+      await api.delete(`/admin/schools/${schoolId}`);
       fetchSchools();
     } catch (err) {
       alert('Failed to delete school');
@@ -204,13 +234,28 @@ const AdminDashboard = ({ user, setUser }) => {
     <div className="admin-content">
       <div className="content-header">
         <h2>School Management</h2>
-        <Button type="primary" onClick={() => setShowAddModal(true)}>
-          Add New School
-        </Button>
+        <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
+          <input
+            type="text"
+            placeholder="Search by ID, name, email, or phone..."
+            value={searchTerm}
+            onChange={handleSearchChange}
+            style={{
+              padding: '8px 12px',
+              border: '1px solid #d9d9d9',
+              borderRadius: '6px',
+              width: '300px',
+              fontSize: '14px'
+            }}
+          />
+          <Button type="primary" onClick={() => setShowAddModal(true)}>
+            Add New School
+          </Button>
+        </div>
       </div>
       
       <div className="schools-grid" data-testid="schools-grid">
-        {schools.map((school) => {
+        {filteredSchools.map((school) => {
           return (
             <div key={school.id} className="school-folder" data-testid={`school-folder-${school.school_id}`}>
               <div className="folder-icon">
@@ -252,7 +297,13 @@ const AdminDashboard = ({ user, setUser }) => {
         })}
       </div>
 
-      {schools.length === 0 && (
+      {filteredSchools.length === 0 && searchTerm && (
+        <div className="empty-state" data-testid="no-search-results">
+          <p>No schools found matching "{searchTerm}"</p>
+        </div>
+      )}
+
+      {filteredSchools.length === 0 && !searchTerm && (
         <div className="empty-state" data-testid="empty-schools-message">
           <p>No schools added yet. Click "Add School" to get started.</p>
         </div>
@@ -437,14 +488,12 @@ const AdminDashboard = ({ user, setUser }) => {
               <Route index element={<ResourcesHome />} />
               <Route 
                 path=":category" 
-                element={
-                  <ResourceCategory 
-                    user={user} 
-                    category={window.location.pathname.split('/').pop()} 
-                  />
-                } 
+                element={<AdminResourceCategory category={location.pathname.split('/').pop()} />}
               />
             </Route>
+            
+            {/* School Uploads */}
+            <Route path="/school-uploads" element={<SchoolUploads />} />
             
             {/* Analytics & Tracking */}
             <Route path="/analytics" element={<div style={{ padding: '24px' }}><Outlet /></div>}>

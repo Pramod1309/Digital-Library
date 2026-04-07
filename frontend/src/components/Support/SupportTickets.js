@@ -1,10 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Card, Table, Button, Modal, Form, Input, Select, Tag, message } from 'antd';
-import { FileTextOutlined, MessageOutlined } from '@ant-design/icons';
-import axios from 'axios';
-
-const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
-const API = `${BACKEND_URL}/api`;
+import { FileTextOutlined, MessageOutlined, DeleteOutlined } from '@ant-design/icons';
+import api from '../../api/axiosConfig';
 
 const { TextArea } = Input;
 const { Option } = Select;
@@ -18,12 +15,15 @@ const SupportTickets = () => {
 
   useEffect(() => {
     fetchTickets();
+    // Poll for new tickets every 3 seconds
+    const interval = setInterval(fetchTickets, 3000);
+    return () => clearInterval(interval);
   }, []);
 
   const fetchTickets = async () => {
     setLoading(true);
     try {
-      const response = await axios.get(`${API}/admin/support/tickets`);
+      const response = await api.get('/admin/support/tickets');
       setTickets(response.data);
     } catch (error) {
       console.error('Error fetching tickets:', error);
@@ -44,11 +44,25 @@ const SupportTickets = () => {
 
   const handleSubmit = async (values) => {
     try {
+      console.log('Updating ticket with values:', values);
+      console.log('Selected ticket:', selectedTicket);
+      
       const formData = new FormData();
       formData.append('status', values.status);
       formData.append('admin_response', values.admin_response);
 
-      await axios.put(`${API}/admin/support/tickets/${selectedTicket.ticket_id}`, formData);
+      console.log('FormData contents:');
+      for (let [key, value] of formData.entries()) {
+        console.log(key, value);
+      }
+
+      const response = await api.put(`/admin/support/tickets/${selectedTicket.ticket_id}`, formData, {
+        headers: {
+          'Content-Type': 'multipart/form-data',
+        },
+      });
+      
+      console.log('Update response:', response.data);
       message.success('Ticket updated successfully');
       setIsModalVisible(false);
       form.resetFields();
@@ -57,6 +71,23 @@ const SupportTickets = () => {
     } catch (error) {
       console.error('Error updating ticket:', error);
       message.error('Failed to update ticket');
+    }
+  };
+
+  const handleDelete = async (ticketId) => {
+    try {
+      console.log('Attempting to delete ticket:', ticketId);
+      console.log('Delete URL:', `/admin/support/tickets/${ticketId}`);
+      
+      const response = await api.delete(`/admin/support/tickets/${ticketId}`);
+      console.log('Delete response:', response.data);
+      
+      message.success('Ticket deleted successfully');
+      fetchTickets();
+    } catch (error) {
+      console.error('Error deleting ticket:', error);
+      console.error('Error response:', error.response);
+      message.error('Failed to delete ticket');
     }
   };
 
@@ -124,13 +155,25 @@ const SupportTickets = () => {
       title: 'Actions',
       key: 'actions',
       render: (_, record) => (
-        <Button 
-          type="link"
-          icon={<MessageOutlined />}
-          onClick={() => handleRespond(record)}
-        >
-          Respond
-        </Button>
+        <div>
+          <Button 
+            type="link"
+            icon={<MessageOutlined />}
+            onClick={() => handleRespond(record)}
+            style={{ marginRight: 8 }}
+          >
+            Respond
+          </Button>
+          <Button 
+            type="link"
+            danger
+            icon={<DeleteOutlined />}
+            onClick={() => handleDelete(record.ticket_id)}
+            style={{ color: '#ff4d4f' }}
+          >
+            Delete
+          </Button>
+        </div>
       ),
     },
   ];

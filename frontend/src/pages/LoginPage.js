@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import axios from 'axios';
+import api from '../api/axiosConfig';
 import '../styles/LoginPage.css';
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
@@ -22,7 +22,7 @@ const LoginPage = ({ setUser }) => {
 
     try {
       const endpoint = activeTab === 'admin' ? '/admin/login' : '/school/login';
-      const response = await axios.post(`${API}${endpoint}`, {
+      const response = await api.post(`${endpoint}`, {
         email,
         password
       });
@@ -52,7 +52,7 @@ const LoginPage = ({ setUser }) => {
     setLoading(true);
 
     try {
-      const response = await axios.post(`${API}/forgot-password`, {
+      const response = await api.post('/forgot-password', {
         email,
         user_type: activeTab
       });

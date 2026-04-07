@@ -88,6 +88,9 @@ class Resource(Base):
     file_type = Column(String(50), nullable=False)  # 'pdf', 'doc', 'video', etc.
     file_size = Column(Integer, nullable=False)  # Size in bytes
     class_level = Column(String(100), nullable=True)  # 'Nursery', 'LKG', 'UKG', etc.
+    subject = Column(String(100), nullable=True)  # 'English', 'Maths', etc.
+    sub_category = Column(String(255), nullable=True)  # 'Worksheets', 'Lesson Plans', etc.
+    consent_to_share = Column(String(10), nullable=True)  # 'yes', 'no'
     tags = Column(Text, nullable=True)  # Comma-separated tags
     uploaded_by_type = Column(String(50), nullable=False)  # 'admin' or 'school'
     uploaded_by_id = Column(String(100), nullable=True)  # school_id if uploaded by school
@@ -176,6 +179,7 @@ class SchoolLogoPosition(Base):
     y_position = Column(Integer, default=10)  # Percentage from top
     width = Column(Integer, default=20)  # Width percentage
     opacity = Column(Float, default=0.7)  # Opacity level
+    rotation = Column(Integer, default=0)  # Rotation in degrees
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
@@ -228,11 +232,32 @@ class SchoolWatermarkText(Base):
     name_y = Column(Integer, default=25)  # Percentage from top (below logo)
     name_size = Column(Integer, default=20)  # Font size in points
     name_opacity = Column(Float, default=0.8)  # Opacity level
+    name_rotation = Column(Integer, default=0)
+    name_font = Column(String(100), default="Arial")
+    name_style = Column(String(50), default="normal")
+    name_color = Column(String(20), default="#000000")
+    show_name = Column(Boolean, default=True)
     # Contact info position (email + phone)
     contact_x = Column(Integer, default=50)  # Percentage from left
     contact_y = Column(Integer, default=90)  # Percentage from top (bottom center)
     contact_size = Column(Integer, default=12)  # Font size in points
     contact_opacity = Column(Float, default=0.7)  # Opacity level
+    contact_rotation = Column(Integer, default=0)
+    contact_font = Column(String(100), default="Arial")
+    contact_style = Column(String(50), default="normal")
+    contact_color = Column(String(20), default="#000000")
+    show_contact = Column(Boolean, default=True)
+    # Address / message position
+    address_x = Column(Integer, default=50)
+    address_y = Column(Integer, default=85)
+    address_size = Column(Integer, default=10)
+    address_opacity = Column(Float, default=1.0)
+    address_rotation = Column(Integer, default=0)
+    address_font = Column(String(100), default="Arial")
+    address_style = Column(String(50), default="normal")
+    address_color = Column(String(20), default="#000000")
+    show_address = Column(Boolean, default=False)
+    address = Column(Text, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     

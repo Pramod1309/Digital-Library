@@ -16,7 +16,7 @@ import {
 import axios from 'axios';
 import FilterBar from '../FilterBar';
 
-const BACKEND_URL = process.env.REACT_APP_BACKEND_URL || 'http://localhost:8000';
+const BACKEND_URL = process.env.REACT_APP_BACKEND_URL || 'http://localhost:8001';
 const API = `${BACKEND_URL}/api`;
 
 const { Option } = Select;
@@ -25,33 +25,33 @@ const { TextArea } = Input;
 // Sub-category mapping
 const subCategoryMap = {
   academic: [
-    'Worksheets', 'Lesson Plans', 'Assessments', 'Activity Sheets', 'Flashcards',
-    'Story-based Learning', 'Rhymes & Poems', 'Handwriting Practice', 
-    'Phonics Materials', 'Number & Counting Activities'
+    'Activity Sheets', 'Assessments', 'Flashcards', 'Handwriting Practice',
+    'Lesson Plans', 'Number & Counting Activities', 'Phonics Materials', 'Rhymes & Poems',
+    'Story-based Learning', 'Worksheets'
   ],
   marketing: [
-    'Posters', 'Flyers', 'Brochures', 'Banners', 'Social Media Posts',
-    'Admission Campaign Designs', 'Video Ads', 'Email Templates', 'Pamphlets', 'Standee Designs'
+    'Admission Campaign Designs', 'Banners', 'Brochures', 'Email Templates', 'Flyers',
+    'Pamphlets', 'Posters', 'Social Media Posts', 'Standee Designs', 'Video Ads'
   ],
   administrative: [
-    'Admission Forms', 'Student Records Templates', 'Attendance Sheets', 
-    'Fee Management Sheets', 'Report Cards', 'Circulars & Notices', 'ID Cards',
-    'Certificates', 'Staff Records', 'Policy Documents'
+    'Admission Forms', 'Attendance Sheets', 'Certificates', 'Circulars & Notices',
+    'Fee Management Sheets', 'ID Cards', 'Policy Documents', 'Report Cards',
+    'Staff Records', 'Student Records Templates'
   ],
   training: [
-    'Teacher Training Modules', 'Classroom Management Guides', 'Activity Training Videos',
-    'Child Psychology Basics', 'Teaching Methods', 'Safety Training', 'First Aid Guides',
-    'Lesson Delivery Techniques', 'Parent Communication Training', 'Skill Development Programs'
+    'Activity Training Videos', 'Child Psychology Basics', 'Classroom Management Guides',
+    'First Aid Guides', 'Lesson Delivery Techniques', 'Parent Communication Training',
+    'Safety Training', 'Skill Development Programs', 'Teacher Training Modules', 'Teaching Methods'
   ],
   event: [
-    'Annual Day सामग्री', 'Festival Celebrations', 'Sports Day', 'Fancy Dress Ideas',
-    'Competition Materials', 'Invitation Cards', 'Stage Scripts', 'Decoration Ideas',
-    'Activity Plans', 'Certificates & Awards'
+    'Activity Plans', 'Annual Day', 'Certificates & Awards', 'Competition Materials',
+    'Decoration Ideas', 'Fancy Dress Ideas', 'Festival Celebrations', 'Invitation Cards',
+    'Sports Day', 'Stage Scripts'
   ],
   multimedia: [
-    'Educational Videos', 'Rhymes Videos', 'Story Videos', 'Audio Stories',
-    'Learning Animations', 'Interactive Games', 'Classroom Recordings', 
-    'DIY Activity Videos', 'Dance Videos', 'Music & Sounds'
+    'Audio Stories', 'Classroom Recordings', 'DIY Activity Videos', 'Dance Videos',
+    'Educational Videos', 'Interactive Games', 'Learning Animations', 'Music & Sounds',
+    'Rhymes Videos', 'Story Videos'
   ]
 };
 
@@ -104,22 +104,12 @@ const ResourceCategory = ({ user, category }) => {
   const fetchResources = async () => {
     setLoading(true);
     try {
-      // Try different API endpoints based on what your backend expects
-      let response;
-      try {
-        // Try first endpoint
-        response = await axios.get(`${API}/admin/resources/${category}`);
-      } catch (firstError) {
-        try {
-          // Try second endpoint
-          response = await axios.get(`${API}/resources/category/${category}`);
-        } catch (secondError) {
-          // Try third endpoint
-          response = await axios.get(`${API}/resources`, {
-            params: { category: category }
-          });
-        }
+      // Use correct admin resources endpoint with query params
+      const params = {};
+      if (category && category !== 'all') {
+        params.category = category;
       }
+      const response = await axios.get(`${API}/admin/resources`, { params });
       
       if (response && response.data) {
         const formattedResources = response.data.map((resource, index) => {
@@ -144,7 +134,7 @@ const ResourceCategory = ({ user, category }) => {
             description: resource.description || '',
             class_level: resource.class_level || 'all',
             subject: resource.subject || 'all',
-            sub_category: resource.sub_category || '',
+            sub_category: resource.sub_category || resource.tags || '',
             status: resource.status || 'active',
             file_type: resource.file_type || '',
             file_size: resource.file_size || 0
@@ -228,27 +218,19 @@ const ResourceCategory = ({ user, category }) => {
       }
 
       const submitData = new FormData();
-      submitData.append('title', values.title);
+      submitData.append('name', values.title);
       submitData.append('description', values.description || '');
       submitData.append('category', category);
-      submitData.append('sub_category', values.sub_category || '');
-      submitData.append('class_level', values.class_level || 'all');
-      submitData.append('subject', values.subject || 'all');
-      submitData.append('status', values.status ? 'active' : 'inactive');
+      submitData.append('class_level', values.class_level || '');
+      submitData.append('tags', values.sub_category || '');
       submitData.append('file', fileList[0].originFileObj);
 
       setUploading(true);
       
-      // Try multiple endpoints for upload
-      try {
-        await axios.post(`${API}/admin/resources/upload`, submitData, {
-          headers: { 'Content-Type': 'multipart/form-data' }
-        });
-      } catch (uploadError) {
-        await axios.post(`${API}/resources/upload`, submitData, {
-          headers: { 'Content-Type': 'multipart/form-data' }
-        });
-      }
+      // Use correct admin upload endpoint
+      await axios.post(`${API}/admin/resources/upload`, submitData, {
+        headers: { 'Content-Type': 'multipart/form-data' }
+      });
       
       message.success('Resource added successfully');
       setAddModalVisible(false);

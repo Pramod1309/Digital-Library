@@ -1,10 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Card, Button, Form, Input, Select, Table, Modal, message, Tag } from 'antd';
 import { PlusOutlined, EditOutlined, DeleteOutlined, NotificationOutlined } from '@ant-design/icons';
-import axios from 'axios';
-
-const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
-const API = `${BACKEND_URL}/api`;
+import api from '../../api/axiosConfig';
 
 const { TextArea } = Input;
 const { Option } = Select;
@@ -24,7 +21,7 @@ const Announcements = () => {
 
   const fetchSchools = async () => {
     try {
-      const response = await axios.get(`${API}/admin/schools`);
+      const response = await api.get('/admin/schools');
       setSchools(response.data);
     } catch (error) {
       console.error('Error fetching schools:', error);
@@ -34,7 +31,7 @@ const Announcements = () => {
   const fetchAnnouncements = async () => {
     setLoading(true);
     try {
-      const response = await axios.get(`${API}/admin/announcements`);
+      const response = await api.get('/admin/announcements');
       setAnnouncements(response.data);
     } catch (error) {
       console.error('Error fetching announcements:', error);
@@ -57,10 +54,10 @@ const Announcements = () => {
       };
 
       if (editingAnnouncement) {
-        await axios.put(`${API}/admin/announcements/${editingAnnouncement.id}`, payload);
+        await api.put(`/admin/announcements/${editingAnnouncement.id}`, payload);
         message.success('Announcement updated successfully');
       } else {
-        await axios.post(`${API}/admin/announcements`, payload);
+        await api.post('/admin/announcements', payload);
         message.success('Announcement created successfully');
       }
       
@@ -87,7 +84,7 @@ const Announcements = () => {
 
   const handleDelete = async (id) => {
     try {
-      await axios.delete(`${API}/admin/announcements/${id}`);
+      await api.delete(`/admin/announcements/${id}`);
       message.success('Announcement deleted successfully');
       fetchAnnouncements();
     } catch (error) {

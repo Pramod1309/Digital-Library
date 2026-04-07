@@ -6,7 +6,7 @@ import {
   DownloadOutlined,
   ClockCircleOutlined
 } from '@ant-design/icons';
-import axios from 'axios';
+import api from '../api/axiosConfig';
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 const API = `${BACKEND_URL}/api`;
@@ -28,15 +28,15 @@ const DashboardHome = () => {
   const fetchDashboardData = async () => {
     try {
       // Fetch schools count
-      const schoolsResponse = await axios.get(`${API}/admin/schools`);
+      const schoolsResponse = await api.get('/admin/schools');
       const totalSchools = schoolsResponse.data.length;
 
       // Fetch resource analytics
-      const analyticsResponse = await axios.get(`${API}/admin/analytics/resources`);
+      const analyticsResponse = await api.get('/admin/analytics/resources');
       const { total_resources, total_downloads, pending_approvals } = analyticsResponse.data;
 
       // Fetch recent activities
-      const activitiesResponse = await axios.get(`${API}/admin/activities`);
+      const activitiesResponse = await api.get('/admin/activities');
       const recentActivities = activitiesResponse.data.slice(0, 10);
 
       setStats({

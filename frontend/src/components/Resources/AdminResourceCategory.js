@@ -7,11 +7,11 @@ import {
   FilePdfOutlined, FileImageOutlined, FileWordOutlined, FilePptOutlined,
   FileZipOutlined, FileUnknownOutlined, FileExcelOutlined, VideoCameraOutlined,
   AudioOutlined, AppstoreOutlined, UnorderedListOutlined, FileTextOutlined,
-  LoadingOutlined, CheckOutlined, CloseOutlined, DownOutlined
+  LoadingOutlined, CheckOutlined, CloseOutlined, DownOutlined, EditOutlined
 } from '@ant-design/icons';
 import axios from 'axios';
 
-const BACKEND_URL = process.env.REACT_APP_BACKEND_URL || 'http://localhost:8000';
+const BACKEND_URL = process.env.REACT_APP_BACKEND_URL || 'http://localhost:8001';
 const API = `${BACKEND_URL}/api`;
 
 const { Option } = Select;
@@ -26,47 +26,46 @@ const CATEGORY_CONFIG = {
   },
   'academic': {
     title: 'Academic Resources',
-    description: 'Manage curriculum, lesson plans, worksheets, and other teaching materials',
+    description: 'Manage curriculum, worksheets, and other teaching materials',
     subcategories: {
       'all': 'All Academic',
-      'curriculum': 'Curriculum',
-      'lesson-plan': 'Lesson Plan',
-      'worksheet': 'Worksheet',
       'activity-sheet': 'Activity Sheet',
-      'teaching-aid': 'Teaching Aid',
       'assessment': 'Assessment',
+      'curriculum': 'Curriculum',
+      'study-material': 'Study Material',
       'syllabus': 'Syllabus',
-      'study-material': 'Study Material'
+      'teaching-aid': 'Teaching Aid',
+      'worksheet': 'Worksheet'
     }
   },
   'marketing': {
     title: 'Marketing Materials',
     description: 'Manage brochures, banners, and promotional content',
     subcategories: {
+      'advertisement': 'Advertisement',
       'all': 'All Marketing',
-      'brochure': 'Brochure',
       'banner': 'Banner',
-      'social-media': 'Social Media Post',
-      'flyer': 'Flyer',
-      'promotional-video': 'Promotional Video',
+      'brochure': 'Brochure',
       'email-template': 'Email Template',
+      'flyer': 'Flyer',
       'presentation': 'Presentation',
-      'advertisement': 'Advertisement'
+      'promotional-video': 'Promotional Video',
+      'social-media': 'Social Media Post'
     }
   },
   'administrative': {
     title: 'Administrative Resources',
     description: 'Manage forms, templates, and policy documents',
     subcategories: {
+      'agreement': 'Agreement',
       'all': 'All Administrative',
+      'certificate': 'Certificate',
       'form': 'Form',
-      'template': 'Template',
+      'guideline': 'Guideline',
+      'letter': 'Official Letter',
       'policy': 'Policy Document',
       'report': 'Report',
-      'certificate': 'Certificate',
-      'letter': 'Official Letter',
-      'agreement': 'Agreement',
-      'guideline': 'Guideline'
+      'template': 'Template'
     }
   },
   'training': {
@@ -74,14 +73,14 @@ const CATEGORY_CONFIG = {
     description: 'Manage teacher training materials and guides',
     subcategories: {
       'all': 'All Training',
-      'teacher-training': 'Teacher Training',
-      'workshop': 'Workshop Material',
       'certification': 'Certification Program',
-      'skill-development': 'Skill Development',
-      'orientation': 'Orientation Material',
-      'manual': 'Training Manual',
       'handbook': 'Handbook',
-      'online-course': 'Online Course'
+      'manual': 'Training Manual',
+      'online-course': 'Online Course',
+      'orientation': 'Orientation Material',
+      'skill-development': 'Skill Development',
+      'teacher-training': 'Teacher Training',
+      'workshop': 'Workshop Material'
     }
   },
   'event': {
@@ -90,13 +89,13 @@ const CATEGORY_CONFIG = {
     subcategories: {
       'all': 'All Events',
       'annual-day': 'Annual Day',
-      'sports-day': 'Sports Day',
+      'celebration': 'Celebration Material',
+      'competition': 'Competition',
       'cultural-event': 'Cultural Event',
       'festival': 'Festival Celebration',
-      'parents-meeting': 'Parents Meeting',
       'graduation': 'Graduation Ceremony',
-      'competition': 'Competition',
-      'celebration': 'Celebration Material'
+      'parents-meeting': 'Parents Meeting',
+      'sports-day': 'Sports Day'
     }
   },
   'multimedia': {
@@ -104,13 +103,13 @@ const CATEGORY_CONFIG = {
     description: 'Manage videos, audio, and interactive content',
     subcategories: {
       'all': 'All Multimedia',
-      'video': 'Video',
-      'audio': 'Audio',
-      'interactive': 'Interactive Content',
       'animation': 'Animation',
+      'audio': 'Audio',
       'graphic': 'Graphic',
+      'interactive': 'Interactive Content',
       'photograph': 'Photograph',
       'podcast': 'Podcast',
+      'video': 'Video',
       'virtual-tour': 'Virtual Tour'
     }
   }
@@ -129,11 +128,21 @@ const AdminResourceCategory = ({ category, title, description }) => {
   const [fileList, setFileList] = useState([]);
   const [searchText, setSearchText] = useState('');
   const [selectedClass, setSelectedClass] = useState('all');
+  const [selectedSubject, setSelectedSubject] = useState('all');
   const [viewMode, setViewMode] = useState('list');
   const [categoryFilter, setCategoryFilter] = useState(category || 'all');
   const [subCategoryFilter, setSubCategoryFilter] = useState('all');
+  const [isEditModalVisible, setIsEditModalVisible] = useState(false);
+  const [editingResource, setEditingResource] = useState(null);
+  const [editForm] = Form.useForm();
+  const [editFileList, setEditFileList] = useState([]);
   const iframeRef = useRef(null);
   const videoRefs = useRef({});
+
+  useEffect(() => {
+    setCategoryFilter(category || 'all');
+    setSubCategoryFilter('all');
+  }, [category]);
 
   useEffect(() => {
     fetchResources();
@@ -178,6 +187,8 @@ const AdminResourceCategory = ({ category, title, description }) => {
           ...resource,
           key: resource.resource_id || resource.id || `resource-${index}`,
           file_path: file_path,
+          sub_category: resource.sub_category || resource.tags || '',
+          subject: resource.subject || '',
         };
       });
       
@@ -201,22 +212,16 @@ const AdminResourceCategory = ({ category, title, description }) => {
 
   const categoryInfo = getCategoryInfo();
 
-  // Create main category filter dropdown items
-  const mainCategoryFilterItems = Object.entries(CATEGORY_CONFIG).map(([key, config]) => ({
-    key: key,
-    label: (
-      <div style={{ minWidth: '250px', padding: '8px 0' }}>
-        <div style={{ fontWeight: 'bold', fontSize: '14px' }}>{config.title}</div>
-        <div style={{ fontSize: '12px', color: '#666', marginTop: '2px' }}>
-          {config.description}
-        </div>
-      </div>
-    ),
-    onClick: () => {
-      setCategoryFilter(key);
-      setSubCategoryFilter('all'); // Reset sub-category when main category changes
-    }
-  }));
+  const subjectOptions = [
+    { value: 'all', label: 'All Subjects' },
+    { value: 'english', label: 'English' },
+    { value: 'maths', label: 'Maths' },
+    { value: 'evs', label: 'EVS' },
+    { value: 'hindi', label: 'Hindi' },
+    { value: 'arts', label: 'Arts & Crafts' },
+    { value: 'music', label: 'Music' },
+    { value: 'pe', label: 'Physical Education' }
+  ];
 
   // Create sub-category filter dropdown items
   const subCategoryFilterItems = Object.entries(categoryInfo.subcategories || {}).map(([key, label]) => ({
@@ -245,11 +250,13 @@ const AdminResourceCategory = ({ category, title, description }) => {
       formData.append('sub_category', values.sub_category || '');
       formData.append('description', values.description || '');
       formData.append('class_level', values.class_level || '');
+      formData.append('subject', values.subject || '');
       formData.append('tags', values.tags ? values.tags.join(',') : '');
 
       setUploading(true);
       await axios.post(`${API}/admin/resources/upload`, formData, {
         headers: {
+          'Authorization': `Bearer ${localStorage.getItem('token')}`,
           'Content-Type': 'multipart/form-data',
         },
       });
@@ -397,26 +404,75 @@ const AdminResourceCategory = ({ category, title, description }) => {
         message.info('Opening download in new tab...');
       }
     } catch (error) {
-      console.error('Error in handleDownload:', error);
-      message.error(`Failed to download file: ${error.message}`);
+      console.error('Download error:', error);
+      message.error('Failed to download resource');
     }
   };
 
-  const handlePreview = async (record) => {
-    setPreviewResource(record);
+  const handleEdit = (resource) => {
+    setEditingResource(resource);
+    setIsEditModalVisible(true);
+    editForm.setFieldsValue({
+      name: resource.name || '',
+      description: resource.description || '',
+      sub_category: resource.sub_category || undefined,
+      class_level: resource.class_level || undefined,
+      tags: resource.tags ? resource.tags.split(',').map(tag => tag.trim()).filter(Boolean) : [],
+    });
+    setEditFileList([]);
+  };
+
+  const handleEditCancel = () => {
+    setIsEditModalVisible(false);
+    setEditingResource(null);
+    editForm.resetFields();
+    setEditFileList([]);
+  };
+
+  const handleEditFileChange = ({ fileList }) => {
+    setEditFileList(fileList.slice(-1));
+  };
+
+  const handleEditSubmit = async () => {
+    if (!editingResource) return;
+
+    try {
+      const values = await editForm.validateFields();
+
+      const formData = new FormData();
+      if (values.name !== undefined) formData.append('name', values.name);
+      if (values.description !== undefined) formData.append('description', values.description || '');
+      if (values.class_level !== undefined) formData.append('class_level', values.class_level || '');
+      if (values.sub_category !== undefined) formData.append('sub_category', values.sub_category || '');
+      if (values.tags !== undefined) {
+        formData.append('tags', Array.isArray(values.tags) ? values.tags.join(',') : values.tags || '');
+      }
+
+      if (editFileList.length > 0 && editFileList[0].originFileObj) {
+        formData.append('file', editFileList[0].originFileObj);
+      }
+
+      setUploading(true);
+      await axios.put(`${API}/admin/resources/${editingResource.resource_id}`, formData, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      });
+
+      message.success('Resource updated successfully');
+      handleEditCancel();
+      fetchResources();
+    } catch (error) {
+      console.error('Error updating resource:', error);
+      message.error(error.response?.data?.detail || 'Failed to update resource');
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const handlePreview = (resource) => {
+    setPreviewResource(resource);
     setPreviewLoading(true);
     setIsPreviewModalVisible(true);
-
-    // Reset any existing video playback
-    if (videoRefs.current[record.resource_id]) {
-      videoRefs.current[record.resource_id].pause();
-      videoRefs.current[record.resource_id].currentTime = 0;
-    }
-
-    // Safety timeout: Stop loading after 10 seconds if content doesn't load
-    setTimeout(() => {
-      setPreviewLoading(false);
-    }, 10000);
+    setTimeout(() => setPreviewLoading(false), 1500);
   };
 
   const renderPreview = () => {
@@ -505,6 +561,7 @@ const AdminResourceCategory = ({ category, title, description }) => {
         </div>
       );
     }
+    // Keep existing preview rendering below
 
     // Check for videos
     if (fileType.includes('video') || ['mp4', 'webm', 'ogg', 'mov', 'avi', 'mkv'].includes(fileExtension)) {
@@ -684,9 +741,7 @@ const AdminResourceCategory = ({ category, title, description }) => {
               e.target.style.display = 'none';
               e.target.parentElement.innerHTML = `
                 <div style="height: 150px; display: flex; align-items: center; justify-content: center; background: #f5f5f5">
-                  <div style="font-size: 32px; color: #999;">
-                    ${getFileIcon(resource.file_type, 32).props.children}
-                  </div>
+                  <span style="font-size: 48px; color: #722ed1;">📷</span>
                 </div>
               `;
             }}
@@ -829,6 +884,8 @@ const AdminResourceCategory = ({ category, title, description }) => {
       resource.tags?.toLowerCase().includes(searchText.toLowerCase());
     const matchesClass = selectedClass === 'all' || resource.class_level === selectedClass;
     const matchesStatus = statusFilter === 'all' || resource.approval_status === statusFilter;
+    const resourceSubject = (resource.subject || '').toLowerCase();
+    const matchesSubject = selectedSubject === 'all' || resourceSubject === selectedSubject;
     
     // Filter by sub-category
     let matchesSubCategory = true;
@@ -836,7 +893,7 @@ const AdminResourceCategory = ({ category, title, description }) => {
       matchesSubCategory = resource.sub_category === subCategoryFilter;
     }
     
-    return matchesSearch && matchesClass && matchesStatus && matchesSubCategory;
+    return matchesSearch && matchesClass && matchesStatus && matchesSubCategory && matchesSubject;
   });
 
   const getStatusTag = (status) => {
@@ -909,7 +966,29 @@ const AdminResourceCategory = ({ category, title, description }) => {
       dataIndex: 'class_level',
       key: 'class_level',
       render: (level) => level ? <Tag color="blue">{level}</Tag> : <Tag>All</Tag>,
+      width: '8%',
+    },
+    {
+      title: 'Subject',
+      dataIndex: 'subject',
+      key: 'subject',
+      render: (subject) => {
+        if (!subject) return <Tag>-</Tag>;
+        const subjectLabel = subjectOptions.find(opt => opt.value === subject)?.label || subject;
+        return <Tag color="green">{subjectLabel}</Tag>;
+      },
       width: '10%',
+    },
+    {
+      title: 'Sub-Category',
+      dataIndex: 'sub_category',
+      key: 'sub_category',
+      render: (subCategory) => {
+        if (!subCategory) return <Tag>-</Tag>;
+        const categoryName = categoryInfo.subcategories[subCategory] || subCategory;
+        return <Tag color="purple">{categoryName}</Tag>;
+      },
+      width: '12%',
     },
     {
       title: 'Size',
@@ -947,6 +1026,13 @@ const AdminResourceCategory = ({ category, title, description }) => {
               type="text"
               icon={<EyeOutlined />}
               onClick={() => handlePreview(record)}
+            />
+          </Tooltip>
+          <Tooltip title="Edit">
+            <Button
+              type="text"
+              icon={<EditOutlined />}
+              onClick={() => handleEdit(record)}
             />
           </Tooltip>
           <Tooltip title="Download">
@@ -999,137 +1085,144 @@ const AdminResourceCategory = ({ category, title, description }) => {
   ];
 
   const renderGridView = () => (
-    <Row gutter={[16, 16]}>
-      {filteredResources.map(resource => (
-        <Col xs={24} sm={12} md={8} lg={6} key={resource.key}>
-          <Card
-            hoverable
-            style={{
-              height: '100%',
+  <Row gutter={[16, 16]}>
+    {filteredResources.map(resource => (
+      <Col xs={24} sm={12} md={8} lg={6} key={resource.key}>
+        <Card
+          hoverable
+          style={{
+            height: '100%',
+            display: 'flex',
+            flexDirection: 'column',
+            cursor: 'pointer'
+          }}
+          onClick={() => handlePreview(resource)}  // Add this line to make the whole card clickable
+          styles={{
+            body: {
+              flex: 1,
               display: 'flex',
-              flexDirection: 'column'
-            }}
-            styles={{
-              body: {
-                flex: 1,
-                display: 'flex',
-                flexDirection: 'column',
-                padding: '12px'
-              }
-            }}
-            cover={
-              <div
-                style={{
-                  cursor: 'pointer',
-                  position: 'relative'
-                }}
-                onClick={() => handlePreview(resource)}
-              >
-                {renderThumbnail(resource)}
+              flexDirection: 'column',
+              padding: '12px'
+            }
+          }}
+          cover={
+            <div
+              style={{
+                position: 'relative'
+              }}
+              onClick={(e) => {
+                e.stopPropagation(); // Prevent double click
+                handlePreview(resource);
+              }}
+            >
+              {renderThumbnail(resource)}
+              <div style={{
+                position: 'absolute',
+                top: 8,
+                right: 8,
+                background: 'rgba(0,0,0,0.6)',
+                color: 'white',
+                padding: '2px 6px',
+                borderRadius: '4px',
+                fontSize: '12px'
+              }}>
+                {resource.file_type?.split('/').pop() || 'File'}
+              </div>
+              {resource.sub_category && (
                 <div style={{
                   position: 'absolute',
                   top: 8,
-                  right: 8,
-                  background: 'rgba(0,0,0,0.6)',
+                  left: 8,
+                  background: 'rgba(24, 144, 255, 0.8)',
                   color: 'white',
                   padding: '2px 6px',
                   borderRadius: '4px',
-                  fontSize: '12px'
+                  fontSize: '10px',
+                  fontWeight: 'bold'
                 }}>
-                  {resource.file_type?.split('/').pop() || 'File'}
+                  {categoryInfo.subcategories[resource.sub_category]?.substring(0, 12) || resource.sub_category.substring(0, 12)}
                 </div>
-                {resource.sub_category && (
-                  <div style={{
-                    position: 'absolute',
-                    top: 8,
-                    left: 8,
-                    background: 'rgba(24, 144, 255, 0.8)',
-                    color: 'white',
-                    padding: '2px 6px',
-                    borderRadius: '4px',
-                    fontSize: '10px',
-                    fontWeight: 'bold'
-                  }}>
-                    {categoryInfo.subcategories[resource.sub_category]?.substring(0, 12) || resource.sub_category.substring(0, 12)}
-                  </div>
-                )}
+              )}
+            </div>
+          }
+          actions={[
+            <Tooltip title="Preview" key="preview">
+              <EyeOutlined onClick={(e) => { e.stopPropagation(); handlePreview(resource); }} />
+            </Tooltip>,
+            <Tooltip title="Download" key="download">
+              <DownloadOutlined onClick={(e) => { e.stopPropagation(); handleDownload(resource); }} />
+            </Tooltip>,
+            <Tooltip title="Edit" key="edit">
+              <EditOutlined onClick={(e) => { e.stopPropagation(); handleEdit(resource); }} />
+            </Tooltip>,
+            <Tooltip title="Delete" key="delete">
+              <DeleteOutlined
+                onClick={(e) => {
+                  e.stopPropagation();
+                  Modal.confirm({
+                    title: 'Delete Resource',
+                    content: `Are you sure you want to delete "${resource.name}"?`,
+                    okText: 'Yes, Delete',
+                    okType: 'danger',
+                    cancelText: 'Cancel',
+                    onOk: () => handleDelete(resource.resource_id)
+                  });
+                }}
+              />
+            </Tooltip>
+          ]}
+        >
+          <div style={{ flex: 1 }}>
+            <Tooltip title={resource.name}>
+              <div style={{
+                fontSize: '14px',
+                fontWeight: 'bold',
+                marginBottom: '8px',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap'
+              }}>
+                {resource.name}
               </div>
-            }
-            actions={[
-              <Tooltip title="Preview" key="preview">
-                <EyeOutlined onClick={() => handlePreview(resource)} />
-              </Tooltip>,
-              <Tooltip title="Download" key="download">
-                <DownloadOutlined onClick={() => handleDownload(resource)} />
-              </Tooltip>,
-              <Tooltip title="Delete" key="delete">
-                <DeleteOutlined
-                  onClick={() => {
-                    Modal.confirm({
-                      title: 'Delete Resource',
-                      content: `Are you sure you want to delete "${resource.name}"?`,
-                      okText: 'Yes, Delete',
-                      okType: 'danger',
-                      cancelText: 'Cancel',
-                      onOk: () => handleDelete(resource.resource_id)
-                    });
-                  }}
-                />
-              </Tooltip>
-            ]}
-          >
-            <div style={{ flex: 1 }}>
-              <Tooltip title={resource.name}>
-                <div style={{
-                  fontSize: '14px',
-                  fontWeight: 'bold',
-                  marginBottom: '8px',
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                  whiteSpace: 'nowrap'
-                }}>
-                  {resource.name}
-                </div>
-              </Tooltip>
+            </Tooltip>
 
-              <div style={{ fontSize: '12px', color: '#666', marginBottom: '8px', height: '36px', overflow: 'hidden' }}>
-                {resource.description || 'No description provided'}
-              </div>
+            <div style={{ fontSize: '12px', color: '#666', marginBottom: '8px', height: '36px', overflow: 'hidden' }}>
+              {resource.description || 'No description provided'}
+            </div>
 
-              <div style={{ marginTop: 'auto' }}>
-                <Space size={[4, 4]} wrap>
-                  {resource.class_level && <Tag color="blue" style={{ margin: 0 }}>{resource.class_level}</Tag>}
-                  <Tag style={{ margin: 0 }}>
-                    {resource.file_size < 1024 * 1024
-                      ? `${(resource.file_size / 1024).toFixed(1)} KB`
-                      : `${(resource.file_size / (1024 * 1024)).toFixed(2)} MB`}
-                  </Tag>
-                  {resource.tags && resource.tags.split(',').map((tag, index) => (
-                    <Tag key={index} color="default" style={{ margin: 0, fontSize: '10px' }}>{tag.trim()}</Tag>
-                  ))}
-                </Space>
+            <div style={{ marginTop: 'auto' }}>
+              <Space size={[4, 4]} wrap>
+                {resource.class_level && <Tag color="blue" style={{ margin: 0 }}>{resource.class_level}</Tag>}
+                <Tag style={{ margin: 0 }}>
+                  {resource.file_size < 1024 * 1024
+                    ? `${(resource.file_size / 1024).toFixed(1)} KB`
+                    : `${(resource.file_size / (1024 * 1024)).toFixed(2)} MB`}
+                </Tag>
+                {resource.tags && resource.tags.split(',').map((tag, index) => (
+                  <Tag key={index} color="default" style={{ margin: 0, fontSize: '10px' }}>{tag.trim()}</Tag>
+                ))}
+              </Space>
 
-                <div style={{
-                  marginTop: '8px',
-                  color: '#999',
-                  fontSize: '11px',
-                  display: 'flex',
-                  justifyContent: 'space-between',
-                  alignItems: 'center'
-                }}>
-                  <span>{resource.download_count || 0} downloads</span>
-                  <span>
-                    {resource.created_at ? new Date(resource.created_at).toLocaleDateString() : 'N/A'}
-                  </span>
-                </div>
+              <div style={{
+                marginTop: '8px',
+                color: '#999',
+                fontSize: '11px',
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center'
+              }}>
+                <span>{resource.download_count || 0} downloads</span>
+                <span>
+                  {resource.created_at ? new Date(resource.created_at).toLocaleDateString() : 'N/A'}
+                </span>
               </div>
             </div>
-          </Card>
-        </Col>
-      ))}
-    </Row>
-  );
-
+          </div>
+        </Card>
+      </Col>
+    ))}
+  </Row>
+);
   return (
     <div>
       <Card
@@ -1169,11 +1262,22 @@ const AdminResourceCategory = ({ category, title, description }) => {
               placeholder="Filter by class"
             >
               <Option value="all">All Classes</Option>
+              <Option value="Playgroup">Playgroup</Option>
               <Option value="Nursery">Nursery</Option>
               <Option value="LKG">LKG</Option>
               <Option value="UKG">UKG</Option>
-              <Option value="Grade 1">Grade 1</Option>
-              <Option value="Grade 2">Grade 2</Option>
+            </Select>
+            <Select
+              value={selectedSubject}
+              onChange={setSelectedSubject}
+              style={{ width: 170, marginRight: 8 }}
+              placeholder="Filter by subject"
+            >
+              {subjectOptions.map(option => (
+                <Option key={option.value} value={option.value}>
+                  {option.label}
+                </Option>
+              ))}
             </Select>
             <Select
               value={statusFilter}
@@ -1186,31 +1290,23 @@ const AdminResourceCategory = ({ category, title, description }) => {
               <Option value="approved">Approved</Option>
               <Option value="rejected">Rejected</Option>
             </Select>
-            
-            {/* Main Category Filter */}
-            <Dropdown
-              menu={{ items: mainCategoryFilterItems }}
-              placement="bottomRight"
-              trigger={['click']}
-            >
-              <Button style={{ width: 150 }}>
-                {categoryInfo.title}
-                <DownOutlined style={{ marginLeft: '8px' }} />
-              </Button>
-            </Dropdown>
-            
-            {/* Sub-category Filter (only show if not "all" category) */}
-            {categoryFilter !== 'all' && Object.keys(categoryInfo.subcategories).length > 1 && (
-              <Dropdown
-                menu={{ items: subCategoryFilterItems }}
-                placement="bottomRight"
-                trigger={['click']}
+
+            {/* Sub-category Filter */}
+            {Object.keys(categoryInfo.subcategories).length > 0 && (
+              <Select
+                value={subCategoryFilter}
+                onChange={setSubCategoryFilter}
+                style={{ width: 170, marginRight: 8 }}
+                placeholder="Filter by sub-category"
               >
-                <Button style={{ width: 150 }}>
-                  {categoryInfo.subcategories[subCategoryFilter] || 'All Sub-categories'}
-                  <DownOutlined style={{ marginLeft: '8px' }} />
-                </Button>
-              </Dropdown>
+                <Option value="all">All Sub-Categories</Option>
+                {Object.entries(categoryInfo.subcategories).map(([key, label]) => {
+                  if (key !== 'all') {
+                    return <Option key={key} value={key}>{label}</Option>;
+                  }
+                  return null;
+                })}
+              </Select>
             )}
             
             <Button
@@ -1315,15 +1411,27 @@ const AdminResourceCategory = ({ category, title, description }) => {
           )}
 
           <Form.Item
+            name="subject"
+            label="Subject"
+          >
+            <Select placeholder="Select subject (optional)" allowClear>
+              {subjectOptions.map(option => (
+                <Option key={option.value} value={option.value}>
+                  {option.label}
+                </Option>
+              ))}
+            </Select>
+          </Form.Item>
+
+          <Form.Item
             name="class_level"
             label="Class Level"
           >
             <Select placeholder="Select class level (optional)" allowClear>
+              <Option value="Playgroup">Playgroup</Option>
               <Option value="Nursery">Nursery</Option>
               <Option value="LKG">LKG</Option>
               <Option value="UKG">UKG</Option>
-              <Option value="Grade 1">Grade 1</Option>
-              <Option value="Grade 2">Grade 2</Option>
             </Select>
           </Form.Item>
 
@@ -1444,6 +1552,86 @@ const AdminResourceCategory = ({ category, title, description }) => {
         destroyOnClose
       >
         {renderPreview()}
+      </Modal>
+
+      {/* Edit Modal */}
+      <Modal
+        title="Edit Resource"
+        open={isEditModalVisible}
+        onCancel={handleEditCancel}
+        footer={[
+          <Button key="back" onClick={handleEditCancel}>
+            Cancel
+          </Button>,
+          <Button key="submit" type="primary" onClick={handleEditSubmit} loading={uploading}>
+            Update Resource
+          </Button>
+        ]}
+        width={600}
+      >
+        <Form form={editForm} layout="vertical">
+          <Form.Item
+            name="name"
+            label="Resource Name"
+            rules={[{ required: true, message: 'Please enter resource name' }]}
+          >
+            <Input placeholder="Enter resource name" />
+          </Form.Item>
+          
+          <Form.Item
+            name="description"
+            label="Description"
+          >
+            <TextArea rows={3} placeholder="Enter resource description" />
+          </Form.Item>
+          
+          <Form.Item
+            name="sub_category"
+            label="Sub-category"
+          >
+            <Select placeholder="Select sub-category" allowClear>
+              {Object.entries(categoryInfo.subcategories || {}).map(([key, label]) => (
+                <Option key={key} value={key}>{label}</Option>
+              ))}
+            </Select>
+          </Form.Item>
+          
+          <Form.Item
+            name="class_level"
+            label="Class Level"
+          >
+            <Select placeholder="Select class level" allowClear>
+              <Option value="playgroup">PlayGroup</Option>
+              <Option value="nursery">Nursery</Option>
+              <Option value="lkg">LKG</Option>
+              <Option value="ukg">UKG</Option>
+            </Select>
+          </Form.Item>
+          
+          <Form.Item
+            name="tags"
+            label="Tags"
+          >
+            <Select
+              mode="tags"
+              placeholder="Enter tags (press Enter to add)"
+              style={{ width: '100%' }}
+            >
+            </Select>
+          </Form.Item>
+          
+          <Form.Item>
+            <label style={{ display: 'block', marginBottom: '8px' }}>Replace File (Optional)</label>
+            <Upload
+              beforeUpload={beforeUpload}
+              onChange={handleEditFileChange}
+              fileList={editFileList}
+              maxCount={1}
+            >
+              <Button icon={<UploadOutlined />}>Select New File</Button>
+            </Upload>
+          </Form.Item>
+        </Form>
       </Modal>
     </div>
   );

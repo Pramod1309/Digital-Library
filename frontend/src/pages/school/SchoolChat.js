@@ -1,10 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Card, Input, Button, List, Avatar, message, Spin } from 'antd';
 import { SendOutlined, UserOutlined, CommentOutlined } from '@ant-design/icons';
-import axios from 'axios';
-
-const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
-const API = `${BACKEND_URL}/api`;
+import api from '../../api/axiosConfig';
 
 const SchoolChat = ({ user }) => {
   const [messages, setMessages] = useState([]);
@@ -30,11 +27,11 @@ const SchoolChat = ({ user }) => {
 
   const fetchMessages = async () => {
     try {
-      const response = await axios.get(`${API}/chat/messages?school_id=${user.school_id}`);
+      const response = await api.get(`/chat/messages?school_id=${user.school_id}`);
       setMessages(response.data);
       
       // Mark admin messages as read
-      await axios.put(`${API}/chat/mark-read/${user.school_id}?sender_type=school`);
+      await api.put(`/chat/mark-read/${user.school_id}?sender_type=school`);
     } catch (error) {
       console.error('Error fetching messages:', error);
     } finally {
@@ -56,7 +53,11 @@ const SchoolChat = ({ user }) => {
       formData.append('sender_type', 'school');
       formData.append('message', newMessage);
 
-      await axios.post(`${API}/chat/send`, formData);
+      await api.post('/chat/send', formData, {
+        headers: {
+          'Content-Type': 'multipart/form-data',
+        },
+      });
       setNewMessage('');
       await fetchMessages();
     } catch (error) {
