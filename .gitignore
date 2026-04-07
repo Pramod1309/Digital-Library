@@ -26,6 +26,9 @@ yarn-error.log*
 *.sqlite
 *.sqlite3
 
+# Exception: Include the main database for production
+!backend/wonder_learning.db
+
 # Logs
 logs
 *.log
