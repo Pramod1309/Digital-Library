@@ -5,6 +5,7 @@ from fastapi.security import OAuth2PasswordBearer
 from dotenv import load_dotenv
 import os
 from starlette.middleware.cors import CORSMiddleware
+from config import config
 from sqlalchemy.orm import Session
 from passlib.context import CryptContext
 from datetime import datetime, timedelta
@@ -3871,10 +3872,10 @@ async def health_check():
 # Include the router in the main app
 app.include_router(api_router)
 
-# Configure CORS - Allow all origins for deployment flexibility
+# Configure CORS - Use environment-specific origins
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Allow all origins for production deployment
+    allow_origins=config.allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
