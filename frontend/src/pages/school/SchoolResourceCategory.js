@@ -1161,7 +1161,7 @@ const SchoolResourceCategory = ({ user }) => {
     const fileExtension = previewResource.file_path?.split('.').pop()?.toLowerCase() || '';
     const previewUrl = `${API}/resources/${previewResource.resource_id}/preview`;
 
-    // Helper function to wrap content with header and footer
+    // Helper function to wrap content (no header/footer spacing)
     const wrapWithHeaderFooter = (content) => {
       return (
         <div style={{ 
@@ -1171,18 +1171,6 @@ const SchoolResourceCategory = ({ user }) => {
           flexDirection: 'column', 
           backgroundColor: '#f5f5f5'
         }}>
-          {/* Header - White background */}
-          <div style={{ 
-            backgroundColor: '#ffffff', 
-            width: '100%', 
-            flexShrink: 0,
-            borderBottom: '1px solid #e0e0e0'
-          }}>
-            <div style={{ height: '60px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-              <span style={{ color: '#999', fontSize: '14px' }}>Header Space</span>
-            </div>
-          </div>
-          
           {/* Content Area */}
           <div style={{ 
             flex: 1, 
@@ -1193,18 +1181,6 @@ const SchoolResourceCategory = ({ user }) => {
             position: 'relative'
           }}>
             {content}
-          </div>
-          
-          {/* Footer - White background */}
-          <div style={{ 
-            backgroundColor: '#ffffff', 
-            width: '100%', 
-            flexShrink: 0,
-            borderTop: '1px solid #e0e0e0'
-          }}>
-            <div style={{ height: '60px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-              <span style={{ color: '#999', fontSize: '14px' }}>Footer Space</span>
-            </div>
           </div>
         </div>
       );
