@@ -1161,10 +1161,59 @@ const SchoolResourceCategory = ({ user }) => {
     const fileExtension = previewResource.file_path?.split('.').pop()?.toLowerCase() || '';
     const previewUrl = `${API}/resources/${previewResource.resource_id}/preview`;
 
+    // Helper function to wrap content with header and footer
+    const wrapWithHeaderFooter = (content) => {
+      return (
+        <div style={{ 
+          width: '100%', 
+          height: '100%', 
+          display: 'flex', 
+          flexDirection: 'column', 
+          backgroundColor: '#f5f5f5'
+        }}>
+          {/* Header - White background */}
+          <div style={{ 
+            backgroundColor: '#ffffff', 
+            width: '100%', 
+            flexShrink: 0,
+            borderBottom: '1px solid #e0e0e0'
+          }}>
+            <div style={{ height: '60px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              <span style={{ color: '#999', fontSize: '14px' }}>Header Space</span>
+            </div>
+          </div>
+          
+          {/* Content Area */}
+          <div style={{ 
+            flex: 1, 
+            display: 'flex', 
+            justifyContent: 'center', 
+            alignItems: 'center',
+            overflow: 'hidden',
+            position: 'relative'
+          }}>
+            {content}
+          </div>
+          
+          {/* Footer - White background */}
+          <div style={{ 
+            backgroundColor: '#ffffff', 
+            width: '100%', 
+            flexShrink: 0,
+            borderTop: '1px solid #e0e0e0'
+          }}>
+            <div style={{ height: '60px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              <span style={{ color: '#999', fontSize: '14px' }}>Footer Space</span>
+            </div>
+          </div>
+        </div>
+      );
+    };
+
     // Images
     const imageExtensions = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg'];
     if (imageExtensions.includes(fileExtension) || fileType.includes('image')) {
-      return (
+      const imageContent = (
         <div
           ref={imageContainerRef}
           style={{
@@ -1218,11 +1267,12 @@ const SchoolResourceCategory = ({ user }) => {
           )}
         </div>
       );
+      return wrapWithHeaderFooter(imageContent);
     }
 
     // PDFs
     if (fileType.includes('pdf') || fileExtension === 'pdf') {
-      return (
+      const pdfContent = (
         <div ref={pdfContainerRef} style={{ width: '100%', height: '100%', position: 'relative', overflow: 'hidden', backgroundColor: '#f5f5f5' }}>
           <iframe
             ref={iframeRef}
@@ -1262,33 +1312,33 @@ const SchoolResourceCategory = ({ user }) => {
           )}
         </div>
       );
+      return wrapWithHeaderFooter(pdfContent);
     }
 
     // Videos
     if (fileType.includes('video') || ['mp4', 'webm', 'ogg'].includes(fileExtension)) {
-      return (
-        <div style={{ textAlign: 'center', maxHeight: '600px', overflow: 'auto' }}>
-          <video
-            ref={el => { if (el && previewResource) videoRefs.current[previewResource.resource_id] = el; }}
-            controls
-            autoPlay
-            preload="metadata"
-            style={{ width: '100%', maxHeight: '600px', borderRadius: '8px' }}
-            onLoadedMetadata={() => setPreviewLoading(false)}
-            onError={() => {
-              setPreviewLoading(false);
-              message.error('Failed to load video preview');
-            }}
-          >
-            <source src={previewUrl} type={previewResource.file_type || 'video/mp4'} />
-          </video>
-        </div>
+      const videoContent = (
+        <video
+          ref={el => { if (el && previewResource) videoRefs.current[previewResource.resource_id] = el; }}
+          controls
+          autoPlay
+          preload="metadata"
+          style={{ width: '100%', maxHeight: '100%', borderRadius: '8px' }}
+          onLoadedMetadata={() => setPreviewLoading(false)}
+          onError={() => {
+            setPreviewLoading(false);
+            message.error('Failed to load video preview');
+          }}
+        >
+          <source src={previewUrl} type={previewResource.file_type || 'video/mp4'} />
+        </video>
       );
+      return wrapWithHeaderFooter(videoContent);
     }
 
     // Default fallback
-    return (
-      <div style={{ textAlign: 'center', padding: '40px' }}>
+    const fallbackContent = (
+      <div style={{ textAlign: 'center', padding: '40px', width: '100%' }}>
         {getFileIcon(previewResource.file_type, 64)}
         <h3 style={{ marginTop: '16px' }}>{previewResource.name}</h3>
         <p>Preview not available for this file type. Please download to view.</p>
@@ -1299,6 +1349,7 @@ const SchoolResourceCategory = ({ user }) => {
         </Dropdown>
       </div>
     );
+    return wrapWithHeaderFooter(fallbackContent);
   };
 
   const getFileIcon = (fileType, size = 32) => {

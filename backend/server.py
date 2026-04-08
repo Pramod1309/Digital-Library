@@ -1639,7 +1639,7 @@ async def get_all_activities(db: Session = Depends(get_db)):
 
 # ==================== RESOURCE MANAGEMENT ROUTES ====================
 
-@api_router.post("/admin/resources/upload", response_model=ResourceResponse)
+@api_router.post("/admin/resources/upload", response_model=List[ResourceResponse])
 async def upload_resource(
     name: str = Form(...),
     category: str = Form(...),
@@ -1648,65 +1648,91 @@ async def upload_resource(
     sub_category: Optional[str] = Form(None),
     subject: Optional[str] = Form(None),
     tags: Optional[str] = Form(None),
-    file: UploadFile = File(...),
+    files: List[UploadFile] = File(...),
     db: Session = Depends(get_db)
 ):
-    """Admin upload resource"""
-    # Validate file size (100MB limit)
+    """Admin upload resource(s) - supports single or multiple files"""
+    # Validate file size (100MB limit per file)
     MAX_FILE_SIZE = 100 * 1024 * 1024  # 100MB in bytes
     
-    # Read file to check size
-    contents = await file.read()
-    file_size = len(contents)
+    uploaded_resources = []
     
-    if file_size > MAX_FILE_SIZE:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"File size exceeds 100MB limit. Your file is {file_size / (1024*1024):.2f}MB"
+    for index, file in enumerate(files):
+        # Read file to check size
+        contents = await file.read()
+        file_size = len(contents)
+        
+        if file_size > MAX_FILE_SIZE:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"File {file.filename} exceeds 100MB limit. Your file is {file_size / (1024*1024):.2f}MB"
+            )
+        
+        # Reset file pointer
+        await file.seek(0)
+        
+        # Generate unique resource ID
+        resource_id = str(uuid.uuid4())
+        
+        # Create category folder
+        category_folder = RESOURCES_UPLOAD_DIR / category
+        category_folder.mkdir(parents=True, exist_ok=True)
+        
+        # Save file
+        file_extension = file.filename.split('.')[-1]
+        safe_filename = f"{resource_id}.{file_extension}"
+        file_path_on_disk = category_folder / safe_filename
+        
+        with open(file_path_on_disk, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+        
+        file_path = f"/uploads/resources/{category}/{safe_filename}"
+        
+        # Auto-number resource names if multiple files
+        resource_name = name
+        if len(files) > 1:
+            # Extract base name and number if already numbered
+            import re
+            match = re.match(r'(.+?)(\d+)$', name.strip())
+            if match:
+                base_name = match.group(1)
+                start_num = int(match.group(2))
+                resource_name = f"{base_name}{start_num + index}"
+            else:
+                # If no number at end, add numbering
+                if index == 0:
+                    resource_name = name
+                else:
+                    resource_name = f"{name} {index + 1}"
+        
+        # Create resource record
+        new_resource = Resource(
+            resource_id=resource_id,
+            name=resource_name,
+            description=description,
+            category=category,
+            sub_category=sub_category,
+            file_path=file_path,
+            file_type=file.content_type or f"application/{file_extension}",
+            file_size=file_size,
+            class_level=class_level,
+            subject=subject,
+            tags=tags,
+            uploaded_by_type='admin',
+            approval_status='approved'
         )
+        
+        db.add(new_resource)
+        uploaded_resources.append(new_resource)
     
-    # Reset file pointer
-    await file.seek(0)
-    
-    # Generate unique resource ID
-    resource_id = str(uuid.uuid4())
-    
-    # Create category folder
-    category_folder = RESOURCES_UPLOAD_DIR / category
-    category_folder.mkdir(parents=True, exist_ok=True)
-    
-    # Save file
-    file_extension = file.filename.split('.')[-1]
-    safe_filename = f"{resource_id}.{file_extension}"
-    file_path_on_disk = category_folder / safe_filename
-    
-    with open(file_path_on_disk, "wb") as buffer:
-        shutil.copyfileobj(file.file, buffer)
-    
-    file_path = f"/uploads/resources/{category}/{safe_filename}"
-    
-    # Create resource record
-    new_resource = Resource(
-        resource_id=resource_id,
-        name=name,
-        description=description,
-        category=category,
-        sub_category=sub_category,
-        file_path=file_path,
-        file_type=file.content_type or f"application/{file_extension}",
-        file_size=file_size,
-        class_level=class_level,
-        subject=subject,
-        tags=tags,
-        uploaded_by_type='admin',
-        approval_status='approved'
-    )
-    
-    db.add(new_resource)
+    # Commit all resources at once
     db.commit()
-    db.refresh(new_resource)
     
-    return new_resource
+    # Refresh all resources to get their IDs
+    for resource in uploaded_resources:
+        db.refresh(resource)
+    
+    return uploaded_resources
 
 @api_router.get("/admin/resources", response_model=List[ResourceResponse])
 async def get_all_resources(
@@ -1778,6 +1804,97 @@ async def reject_resource(resource_id: str, db: Session = Depends(get_db)):
     db.commit()
     
     return {"message": "Resource rejected"}
+
+@api_router.delete("/admin/resources/bulk")
+async def bulk_delete_resources(
+    request: Request,
+    db: Session = Depends(get_db),
+    current_admin: dict = Depends(get_current_admin)
+):
+    """Delete multiple resources - Admin only"""
+    data = await request.json()
+    resource_ids = data.get('resource_ids', [])
+    
+    if not resource_ids:
+        raise HTTPException(status_code=400, detail="No resource IDs provided")
+    
+    deleted_count = 0
+    errors = []
+    
+    for resource_id in resource_ids:
+        try:
+            resource = db.query(Resource).filter(Resource.resource_id == resource_id).first()
+            if not resource:
+                errors.append(f"Resource {resource_id} not found")
+                continue
+            
+            # Delete file from disk
+            try:
+                file_path = ROOT_DIR / resource.file_path.lstrip('/')
+                if file_path.exists():
+                    file_path.unlink()
+            except Exception as e:
+                print(f"Error deleting file for resource {resource_id}: {e}")
+            
+            # Delete from database
+            db.delete(resource)
+            deleted_count += 1
+            
+        except Exception as e:
+            errors.append(f"Error deleting resource {resource_id}: {str(e)}")
+    
+    db.commit()
+    
+    return {
+        "message": f"Successfully deleted {deleted_count} resource(s)",
+        "deleted_count": deleted_count,
+        "errors": errors
+    }
+
+@api_router.delete("/admin/resources/all")
+async def delete_all_resources(
+    category: Optional[str] = None,
+    db: Session = Depends(get_db),
+    current_admin: dict = Depends(get_current_admin)
+):
+    """Delete all resources (optionally filtered by category) - Admin only"""
+    query = db.query(Resource)
+    
+    if category and category != 'all':
+        query = query.filter(Resource.category == category)
+    
+    resources = query.all()
+    
+    if not resources:
+        return {"message": "No resources found to delete", "deleted_count": 0}
+    
+    deleted_count = 0
+    errors = []
+    
+    for resource in resources:
+        try:
+            # Delete file from disk
+            try:
+                file_path = ROOT_DIR / resource.file_path.lstrip('/')
+                if file_path.exists():
+                    file_path.unlink()
+            except Exception as e:
+                print(f"Error deleting file for resource {resource.resource_id}: {e}")
+            
+            # Delete from database
+            db.delete(resource)
+            deleted_count += 1
+            
+        except Exception as e:
+            errors.append(f"Error deleting resource {resource.resource_id}: {str(e)}")
+    
+    db.commit()
+    
+    return {
+        "message": f"Successfully deleted {deleted_count} resource(s)",
+        "deleted_count": deleted_count,
+        "errors": errors
+    }
 
 @api_router.delete("/admin/resources/{resource_id}")
 async def delete_resource(resource_id: str, db: Session = Depends(get_db)):

@@ -11,7 +11,7 @@ import {
 } from '@ant-design/icons';
 import axios from 'axios';
 
-const BACKEND_URL = process.env.REACT_APP_BACKEND_URL || 'http://localhost:8001';
+const BACKEND_URL = process.env.REACT_APP_BACKEND_URL || 'http://localhost:5000';
 const API = `${BACKEND_URL}/api`;
 
 const { Option } = Select;
@@ -136,6 +136,8 @@ const AdminResourceCategory = ({ category, title, description }) => {
   const [editingResource, setEditingResource] = useState(null);
   const [editForm] = Form.useForm();
   const [editFileList, setEditFileList] = useState([]);
+  const [selectedRowKeys, setSelectedRowKeys] = useState([]);
+  const [deleteLoading, setDeleteLoading] = useState(false);
   const iframeRef = useRef(null);
   const videoRefs = useRef({});
 
@@ -236,7 +238,7 @@ const AdminResourceCategory = ({ category, title, description }) => {
 
   const handleUpload = async () => {
     if (fileList.length === 0) {
-      message.warning('Please select a file to upload');
+      message.warning('Please select at least one file to upload');
       return;
     }
 
@@ -244,7 +246,12 @@ const AdminResourceCategory = ({ category, title, description }) => {
       const values = await form.validateFields();
 
       const formData = new FormData();
-      formData.append('file', fileList[0].originFileObj);
+      
+      // Append all selected files
+      fileList.forEach((file) => {
+        formData.append('files', file.originFileObj);
+      });
+      
       formData.append('name', values.name);
       formData.append('category', categoryFilter);
       formData.append('sub_category', values.sub_category || '');
@@ -254,14 +261,15 @@ const AdminResourceCategory = ({ category, title, description }) => {
       formData.append('tags', values.tags ? values.tags.join(',') : '');
 
       setUploading(true);
-      await axios.post(`${API}/admin/resources/upload`, formData, {
+      const response = await axios.post(`${API}/admin/resources/upload`, formData, {
         headers: {
-          'Authorization': `Bearer ${localStorage.getItem('token')}`,
+          'Authorization': `Bearer ${sessionStorage.getItem('token')}`,
           'Content-Type': 'multipart/form-data',
         },
       });
 
-      message.success('Resource uploaded successfully!');
+      const uploadedCount = response.data.length;
+      message.success(`${uploadedCount} resource(s) uploaded successfully!`);
       form.resetFields();
       setFileList([]);
       setIsModalVisible(false);
@@ -276,13 +284,108 @@ const AdminResourceCategory = ({ category, title, description }) => {
 
   const handleDelete = async (resourceId) => {
     try {
-      await axios.delete(`${API}/admin/resources/${resourceId}`);
+      await axios.delete(`${API}/admin/resources/${resourceId}`, {
+        headers: {
+          'Authorization': `Bearer ${sessionStorage.getItem('token')}`
+        }
+      });
       message.success('Resource deleted successfully');
       fetchResources();
     } catch (error) {
       console.error('Error deleting resource:', error);
       message.error('Failed to delete resource');
     }
+  };
+
+  const handleBulkDelete = async () => {
+    if (selectedRowKeys.length === 0) {
+      message.warning('Please select at least one resource to delete');
+      return;
+    }
+
+    Modal.confirm({
+      title: 'Delete Selected Resources',
+      content: `Are you sure you want to delete ${selectedRowKeys.length} selected resource(s)? This action cannot be undone.`,
+      okText: 'Delete',
+      okType: 'danger',
+      cancelText: 'Cancel',
+      onOk: async () => {
+        try {
+          setDeleteLoading(true);
+          const response = await axios.delete(`${API}/admin/resources/bulk`, {
+            data: { resource_ids: selectedRowKeys },
+            headers: {
+              'Authorization': `Bearer ${sessionStorage.getItem('token')}`
+            }
+          });
+
+          const { deleted_count, errors } = response.data;
+          
+          if (deleted_count > 0) {
+            message.success(`${deleted_count} resource(s) deleted successfully`);
+          }
+          
+          if (errors && errors.length > 0) {
+            message.warning(`${errors.length} resource(s) could not be deleted`);
+          }
+          
+          setSelectedRowKeys([]);
+          fetchResources();
+        } catch (error) {
+          console.error('Error bulk deleting resources:', error);
+          message.error(error.response?.data?.detail || 'Failed to delete resources');
+        } finally {
+          setDeleteLoading(false);
+        }
+      }
+    });
+  };
+
+  const handleDeleteAll = async () => {
+    const currentResources = resources.length;
+    
+    if (currentResources === 0) {
+      message.warning('No resources to delete');
+      return;
+    }
+
+    Modal.confirm({
+      title: 'Delete All Resources',
+      content: `Are you sure you want to delete all ${currentResources} resource(s) in ${categoryInfo.title}? This action cannot be undone.`,
+      okText: 'Delete All',
+      okType: 'danger',
+      cancelText: 'Cancel',
+      onOk: async () => {
+        try {
+          setDeleteLoading(true);
+          const params = categoryFilter !== 'all' ? { category: categoryFilter } : {};
+          const response = await axios.delete(`${API}/admin/resources/all`, { 
+            params,
+            headers: {
+              'Authorization': `Bearer ${sessionStorage.getItem('token')}`
+            }
+          });
+
+          const { deleted_count, errors } = response.data;
+          
+          if (deleted_count > 0) {
+            message.success(`${deleted_count} resource(s) deleted successfully`);
+          }
+          
+          if (errors && errors.length > 0) {
+            message.warning(`${errors.length} resource(s) could not be deleted`);
+          }
+          
+          setSelectedRowKeys([]);
+          fetchResources();
+        } catch (error) {
+          console.error('Error deleting all resources:', error);
+          message.error(error.response?.data?.detail || 'Failed to delete resources');
+        } finally {
+          setDeleteLoading(false);
+        }
+      }
+    });
   };
 
   const updateResourceStatus = async (resourceId, status) => {
@@ -312,8 +415,8 @@ const AdminResourceCategory = ({ category, title, description }) => {
 
   const handleDownload = async (record, format = 'image') => {
     try {
-      const token = localStorage.getItem('token');
-      const user = JSON.parse(localStorage.getItem('user') || '{}');
+      const token = sessionStorage.getItem('token');
+      const user = JSON.parse(sessionStorage.getItem('user') || '{}');
       
       // Create the download URL
       const downloadUrl = `${API}/resources/${record.resource_id}/download`;
@@ -852,7 +955,8 @@ const AdminResourceCategory = ({ category, title, description }) => {
   };
 
   const handleFileChange = ({ fileList }) => {
-    setFileList(fileList.slice(-1));
+    // Allow multiple files, no limit on count
+    setFileList(fileList);
   };
 
   const beforeUpload = (file) => {
@@ -1352,6 +1456,24 @@ const AdminResourceCategory = ({ category, title, description }) => {
             >
               Add Resource
             </Button>
+            {selectedRowKeys.length > 0 && (
+              <Button
+                type="danger"
+                icon={<DeleteOutlined />}
+                onClick={handleBulkDelete}
+                loading={deleteLoading}
+              >
+                Delete Selected ({selectedRowKeys.length})
+              </Button>
+            )}
+            <Button
+              danger
+              icon={<DeleteOutlined />}
+              onClick={handleDeleteAll}
+              loading={deleteLoading}
+            >
+              Delete All
+            </Button>
           </Space>
         }
       >
@@ -1361,6 +1483,13 @@ const AdminResourceCategory = ({ category, title, description }) => {
             dataSource={filteredResources}
             rowKey="key"
             loading={loading}
+            rowSelection={{
+              selectedRowKeys,
+              onChange: setSelectedRowKeys,
+              getCheckboxProps: (record) => ({
+                name: record.name,
+              }),
+            }}
             pagination={{
               pageSize: 10,
               showSizeChanger: true,
@@ -1414,19 +1543,24 @@ const AdminResourceCategory = ({ category, title, description }) => {
           </Form.Item>
 
           <Form.Item
-            name="file"
-            label="Select File"
-            rules={[{ required: true, message: 'Please select a file' }]}
+            label="Select Files"
+            required
           >
             <Upload
               beforeUpload={beforeUpload}
               onChange={handleFileChange}
               fileList={fileList}
-              maxCount={1}
+              multiple
               accept=".pdf,.jpg,.jpeg,.png,.gif,.webp,.svg,.mp4,.webm,.ogg,.mp3,.wav,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.zip,.rar"
             >
-              <Button icon={<UploadOutlined />}>Select File (Max 100MB)</Button>
+              <Button icon={<UploadOutlined />}>Select Files (Max 100MB each)</Button>
             </Upload>
+            <div style={{ marginTop: 8, fontSize: '12px', color: '#666' }}>
+              {fileList.length > 0 
+                ? `Selected ${fileList.length} file(s). Multiple files will be auto-numbered.`
+                : 'You can select multiple files at once. They will be numbered automatically.'
+              }
+            </div>
           </Form.Item>
 
           {/* Sub-category selection for non-"all" categories */}
