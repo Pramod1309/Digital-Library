@@ -298,6 +298,25 @@ def parse_bool(value, default=False):
         return False
     return default
 
+def is_image_type(file_type: str, file_path: str = "") -> bool:
+    """Check if a file is an image based on mime type or extension."""
+    file_type = (file_type or "").lower()
+    file_path = (file_path or "").lower()
+    if "image" in file_type:
+        return True
+    image_exts = (".jpg", ".jpeg", ".png", ".gif", ".bmp", ".tiff", ".webp", ".svg")
+    return file_path.endswith(image_exts)
+
+def image_bytes_to_pdf_bytes(image_path: str) -> bytes:
+    """Convert an image file to PDF bytes."""
+    img = Image.open(image_path)
+    if img.mode != "RGB":
+        img = img.convert("RGB")
+    pdf_buffer = io.BytesIO()
+    img.save(pdf_buffer, format="PDF")
+    pdf_buffer.seek(0)
+    return pdf_buffer.read()
+
 def clamp(value, min_value, max_value):
     try:
         value = float(value)
@@ -1943,6 +1962,7 @@ async def download_resource(
     resource_id: str,
     school_id: str = None,
     school_name: str = None,
+    format: str = None,
     db: Session = Depends(get_db)
 ):
     """Download a resource file"""
@@ -2011,7 +2031,35 @@ async def download_resource(
         if file_extension and not download_filename.endswith(f".{file_extension}"):
             download_filename = f"{download_filename}.{file_extension}"
         
-        # Return the file for download
+        requested_format = (format or "").strip().lower()
+
+        # If PDF format is requested for an image, convert on the fly
+        if requested_format == "pdf":
+            if is_image_type(resource.file_type, full_file_path):
+                pdf_bytes = image_bytes_to_pdf_bytes(full_file_path)
+                pdf_filename = os.path.splitext(download_filename)[0] + ".pdf"
+                return Response(
+                    content=pdf_bytes,
+                    media_type="application/pdf",
+                    headers={
+                        "Content-Disposition": f"attachment; filename=\"{pdf_filename}\"",
+                        "Content-Length": str(len(pdf_bytes))
+                    }
+                )
+            # If original is already PDF, just return it
+            if (resource.file_type or "").lower() == "application/pdf" or full_file_path.lower().endswith(".pdf"):
+                return FileResponse(
+                    path=full_file_path,
+                    filename=download_filename,
+                    media_type="application/pdf",
+                    headers={
+                        "Content-Disposition": f"attachment; filename=\"{download_filename}\"",
+                        "Access-Control-Expose-Headers": "Content-Disposition"
+                    }
+                )
+            raise HTTPException(status_code=400, detail="PDF format is only supported for image resources")
+
+        # Default: return the file as-is
         return FileResponse(
             path=full_file_path,
             filename=download_filename,
@@ -3251,6 +3299,7 @@ async def download_resource_with_logo(
     resource_id: str,
     school_id: str = None,
     school_name: str = None,
+    format: str = None,
     db: Session = Depends(get_db)
 ):
     """Download a resource file with school logo and text watermark"""
@@ -3530,10 +3579,28 @@ async def download_resource_with_logo(
             resource.download_count += 1
             db.commit()
             print(f"Download logged for school: {school_name}")
-        
-        # Read file content
-        with open(final_file_path, 'rb') as f:
-            file_content = f.read()
+
+        requested_format = (format or "").strip().lower()
+
+         # If PDF format is requested and the output is an image, convert to PDF bytes
+        if requested_format == "pdf":
+            if is_image_type(resource.file_type, final_file_path):
+                file_content = image_bytes_to_pdf_bytes(final_file_path)
+                media_type = "application/pdf"
+                forced_extension = ".pdf"
+            elif (resource.file_type or "").lower() == "application/pdf" or final_file_path.lower().endswith(".pdf"):
+                with open(final_file_path, 'rb') as f:
+                    file_content = f.read()
+                media_type = "application/pdf"
+                forced_extension = ".pdf"
+            else:
+                raise HTTPException(status_code=400, detail="PDF format is only supported for image resources")
+        else:
+            # Default: read file content as-is
+            with open(final_file_path, 'rb') as f:
+                file_content = f.read()
+            media_type = resource.file_type or 'application/octet-stream'
+            forced_extension = None
         
         # Clean up temp watermarked file if created
         if watermarked_file and watermarked_file != full_file_path and os.path.exists(watermarked_file):
@@ -3545,20 +3612,22 @@ async def download_resource_with_logo(
         
         # Determine download filename
         file_extension = os.path.splitext(resource.name)[1]
-        if not file_extension:
+        if forced_extension:
+            file_extension = forced_extension
+        elif not file_extension:
             if resource.file_type:
                 file_extension = "." + resource.file_type.split('/')[-1]
             else:
                 file_extension = ".pdf"
         
         download_filename = f"{resource.name.replace(' ', '_')}{filename_suffix}{file_extension}"
-        
+    
         print(f"Returning file: {download_filename}, size: {len(file_content)} bytes")
         print(f"{'='*60}\n")
         
         return Response(
             content=file_content,
-            media_type=resource.file_type or 'application/octet-stream',
+            media_type=media_type,
             headers={
                 "Content-Disposition": f"attachment; filename=\"{download_filename}\"",
                 "Content-Length": str(len(file_content))

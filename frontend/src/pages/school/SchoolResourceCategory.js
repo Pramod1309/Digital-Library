@@ -1058,13 +1058,28 @@ const SchoolResourceCategory = ({ user }) => {
     setPreviewLoading(false);
   }, 3000);
 };
-  const handleDownload = async (record) => {
+  const isImageResource = (record) => {
+    if (!record) return false;
+    const type = (record.file_type || '').toLowerCase();
+    const path = (record.file_path || '').toLowerCase();
+    return type.includes('image') || /\.(jpg|jpeg|png|gif|bmp|tiff|webp|svg)$/.test(path);
+  };
+
+  const isPdfResource = (record) => {
+    if (!record) return false;
+    const type = (record.file_type || '').toLowerCase();
+    const path = (record.file_path || '').toLowerCase();
+    return type.includes('pdf') || path.endsWith('.pdf');
+  };
+
+  const handleDownload = async (record, format = 'image') => {
     try {
       const token = localStorage.getItem('token');
       const downloadUrl = `${API}/resources/${record.resource_id}/download-with-logo`;
       const urlWithParams = new URL(downloadUrl);
       urlWithParams.searchParams.append('school_id', user.school_id);
       urlWithParams.searchParams.append('school_name', user.name);
+      if (format === 'pdf') urlWithParams.searchParams.append('format', 'pdf');
       
       console.log('Download URL:', urlWithParams.toString());
       
@@ -1106,11 +1121,28 @@ const SchoolResourceCategory = ({ user }) => {
       document.body.removeChild(link);
       window.URL.revokeObjectURL(blobUrl);
       
-      message.success('Download started with school branding!');
+      message.success(format === 'pdf' ? 'PDF download started with school branding!' : 'Download started with school branding!');
     } catch (error) {
       console.error('Download error:', error);
       message.error('Failed to download file: ' + error.message);
     }
+  };
+
+  const getDownloadMenuItems = (record) => {
+    if (!record) return [];
+    return [
+      {
+        key: 'original',
+        label: 'Download Branded',
+        onClick: () => handleDownload(record, 'image')
+      },
+      {
+        key: 'pdf',
+        label: 'Download Branded PDF',
+        onClick: () => handleDownload(record, 'pdf'),
+        disabled: !isImageResource(record) && !isPdfResource(record)
+      }
+    ];
   };
 
   const renderPreview = () => {
@@ -1260,9 +1292,11 @@ const SchoolResourceCategory = ({ user }) => {
         {getFileIcon(previewResource.file_type, 64)}
         <h3 style={{ marginTop: '16px' }}>{previewResource.name}</h3>
         <p>Preview not available for this file type. Please download to view.</p>
-        <Button type="primary" icon={<DownloadOutlined />} onClick={() => handleDownload(previewResource)}>
-          Download File
-        </Button>
+        <Dropdown menu={{ items: getDownloadMenuItems(previewResource) }} trigger={['click']}>
+          <Button type="primary" icon={<DownloadOutlined />}>
+            Download File
+          </Button>
+        </Dropdown>
       </div>
     );
   };
@@ -1471,12 +1505,13 @@ const SchoolResourceCategory = ({ user }) => {
             <Button type="text" icon={<EyeOutlined />} onClick={() => handlePreview(record)} />
           </Tooltip>
           <Tooltip title="Download">
-            <Button 
-              type="text" 
-              icon={<DownloadOutlined />} 
-              onClick={() => handleDownload(record)}
-              disabled={record.is_own_upload && record.display_status !== 'approved'}
-            />
+            <Dropdown menu={{ items: getDownloadMenuItems(record) }} trigger={['click']}>
+              <Button 
+                type="text" 
+                icon={<DownloadOutlined />} 
+                disabled={record.is_own_upload && record.display_status !== 'approved'}
+              />
+            </Dropdown>
           </Tooltip>
         </Space>
       ),
@@ -1536,10 +1571,16 @@ const SchoolResourceCategory = ({ user }) => {
                   <EyeOutlined onClick={() => handlePreview(resource)} />
                 </Tooltip>,
                 <Tooltip title="Download" key="download">
-                  <DownloadOutlined 
-                    onClick={() => handleDownload(resource)}
-                    style={resource.is_own_upload && resource.display_status !== 'approved' ? { color: '#d9d9d9', cursor: 'not-allowed' } : {}}
-                  />
+                  <Dropdown
+                    menu={{ items: getDownloadMenuItems(resource) }}
+                    trigger={['click']}
+                    disabled={resource.is_own_upload && resource.display_status !== 'approved'}
+                  >
+                    <DownloadOutlined 
+                      onClick={(e) => { e.stopPropagation(); }}
+                      style={resource.is_own_upload && resource.display_status !== 'approved' ? { color: '#d9d9d9', cursor: 'not-allowed' } : {}}
+                    />
+                  </Dropdown>
                 </Tooltip>
               ]}
             >
@@ -1786,15 +1827,15 @@ const SchoolResourceCategory = ({ user }) => {
               )}
             </>
           ),
-          <Button
-            key="download"
-            type="primary"
-            icon={<DownloadOutlined />}
-            onClick={() => handleDownload(previewResource)}
-            disabled={previewResource?.is_own_upload && previewResource?.display_status !== 'approved'}
-          >
-            Download with branding
-          </Button>
+          <Dropdown key="download" menu={{ items: getDownloadMenuItems(previewResource) }} trigger={['click']}>
+            <Button
+              type="primary"
+              icon={<DownloadOutlined />}
+              disabled={previewResource?.is_own_upload && previewResource?.display_status !== 'approved'}
+            >
+              Download with branding
+            </Button>
+          </Dropdown>
         ].filter(Boolean)}
         width="95%"
         style={{ top: 20 }}
