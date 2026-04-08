@@ -3051,7 +3051,7 @@ def add_logo_and_text_to_image(
             contact_color = hex_to_rgb(tp('contact_color', '#000000'))
             contact_opacity = clamp(tp('contact_opacity', 1.0), 0.1, 1.0)
             contact_rotation = normalize_rotation(tp('contact_rotation', 0))
-            contact_rotation = (360 - contact_rotation) % 36
+            contact_rotation = (360 - contact_rotation) % 360
             color_rgba = (contact_color[0], contact_color[1], contact_color[2], int(255 * contact_opacity))
             draw_rotated_text(watermark_layer, contact_text, contact_x, contact_y, contact_font, color_rgba, contact_rotation)
             print(f"Contact info at ({contact_x}, {contact_y}) with rotation {contact_rotation}°")
@@ -3121,11 +3121,11 @@ def add_logo_and_text_to_pdf(pdf_path, logo_path, logo_position, school_info, te
                     logo_img = logo_img.convert('RGBA')
                 
                 # Apply opacity
-                if hasattr(logo_position, 'opacity') and logo_position.opacity < 1.0:
+                if hasattr(logo_position, 'logo_opacity') and logo_position.logo_opacity < 1.0:
                     alpha = logo_img.split()[3]
-                    alpha = alpha.point(lambda p: p * logo_position.opacity)
+                    alpha = alpha.point(lambda p: p * logo_position.logo_opacity)
                     logo_img.putalpha(alpha)
-                    print(f"Applied opacity: {logo_position.opacity}")
+                    print(f"Applied opacity: {logo_position.logo_opacity}")
             except Exception as e:
                 print(f"Error loading logo: {e}")
                 logo_img = None
@@ -3140,8 +3140,12 @@ def add_logo_and_text_to_pdf(pdf_path, logo_path, logo_position, school_info, te
         
         # Add logo if exists
         if logo_img:
-            # Calculate logo size
-            logo_width_pixels = int(page_width * (logo_position.width / 100))
+            # Calculate logo size - use logo_width if available, otherwise use width attribute
+            if hasattr(logo_position, 'logo_width'):
+                logo_width_pixels = int(page_width * (logo_position.logo_width / 100))
+            else:
+                logo_width_pixels = int(page_width * (getattr(logo_position, 'width', 20) / 100))
+            
             aspect_ratio = logo_img.width / logo_img.height
             logo_height_pixels = int(logo_width_pixels / aspect_ratio)
             print(f"Logo size: {logo_width_pixels}x{logo_height_pixels}")
@@ -3150,7 +3154,12 @@ def add_logo_and_text_to_pdf(pdf_path, logo_path, logo_position, school_info, te
             logo_img = logo_img.resize((logo_width_pixels, logo_height_pixels), Image.Resampling.LANCZOS)
             
             # Apply rotation if needed
-            logo_rotation = getattr(logo_position, 'rotation', 0) or 0
+            if hasattr(logo_position, 'logo_rotation'):
+                logo_rotation = logo_position.logo_rotation or 0
+            else:
+                logo_rotation = getattr(logo_position, 'rotation', 0) or 0
+            
+            # Normalize rotation (0-360)
             logo_rotation = (360 - logo_rotation) % 360
             if logo_rotation:
                 print(f"Applying logo rotation: {logo_rotation} degrees")
@@ -3162,11 +3171,19 @@ def add_logo_and_text_to_pdf(pdf_path, logo_path, logo_position, school_info, te
             logo_img.save(logo_bytes, format='PNG')
             logo_bytes.seek(0)
             
+            # Get logo position coordinates
+            if hasattr(logo_position, 'logo_x'):
+                logo_x = logo_position.logo_x
+                logo_y = logo_position.logo_y
+            else:
+                logo_x = getattr(logo_position, 'x_position', 50)
+                logo_y = getattr(logo_position, 'y_position', 10)
+            
             # Add logo to each page
             for page_num in range(len(pdf_document)):
                 page = pdf_document[page_num]
-                x_position = page.rect.width * (logo_position.x_position / 100)
-                y_position = page.rect.height * (logo_position.y_position / 100)
+                x_position = page.rect.width * (logo_x / 100)
+                y_position = page.rect.height * (logo_y / 100)
                 print(f"Page {page_num+1}: Logo at ({x_position}, {y_position})")
                 
                 rect = fitz.Rect(
@@ -3204,6 +3221,7 @@ def add_logo_and_text_to_pdf(pdf_path, logo_path, logo_position, school_info, te
                     
                     print(f"Page {page_num+1}: Adding school name '{school_info['school_name']}' at ({name_x}, {name_y}) with rotation {name_rotation}°")
                     
+                    # Create text rectangle
                     rect = fitz.Rect(
                         name_x - 200,
                         name_y - 30,
@@ -3211,12 +3229,13 @@ def add_logo_and_text_to_pdf(pdf_path, logo_path, logo_position, school_info, te
                         name_y + 30
                     )
                     
+                    # Insert text with rotation
                     page.insert_textbox(
                         rect,
                         school_info['school_name'],
                         fontsize=name_size,
-                        align=1,
-                        rotate=name_rotation
+                        align=1,  # Center alignment
+                        rotate=name_rotation  # Apply rotation
                     )
                 
                 # Contact info
@@ -3236,9 +3255,9 @@ def add_logo_and_text_to_pdf(pdf_path, logo_path, logo_position, school_info, te
                     print(f"Page {page_num+1}: Adding contact info at ({contact_x}, {contact_y}) with rotation {contact_rotation}°")
                     
                     rect = fitz.Rect(
-                        contact_x - 200,
+                        contact_x - 250,
                         contact_y - 40,
-                        contact_x + 200,
+                        contact_x + 250,
                         contact_y + 40
                     )
                     
@@ -3360,6 +3379,7 @@ async def download_resource_with_logo(
                 print(f"  - y: {logo_position_db.y_position}")
                 print(f"  - width: {logo_position_db.width}")
                 print(f"  - opacity: {logo_position_db.opacity}")
+                print(f"  - rotation: {getattr(logo_position_db, 'rotation', 0)}")
             
             # Get text watermark position from database
             text_position_db = db.query(SchoolWatermarkText).filter(
@@ -3374,9 +3394,12 @@ async def download_resource_with_logo(
                 print(f"  - show_name: {text_position_db.show_name}")
                 print(f"  - contact_x: {text_position_db.contact_x}")
                 print(f"  - contact_y: {text_position_db.contact_y}")
+                print(f"  - show_contact: {text_position_db.show_contact}")
+                print(f"  - show_address: {text_position_db.show_address}")
+                print(f"  - address: {text_position_db.address}")
             
             # Prepare logo position with defaults
-            logo_positions = {
+            logo_position_data = {
                 'x_position': 50,
                 'y_position': 10,
                 'width': 20,
@@ -3385,19 +3408,19 @@ async def download_resource_with_logo(
             }
             
             if logo_position_db:
-                logo_positions = {
+                logo_position_data = {
                     'x_position': logo_position_db.x_position,
                     'y_position': logo_position_db.y_position,
                     'width': logo_position_db.width,
                     'opacity': logo_position_db.opacity,
                     'rotation': getattr(logo_position_db, 'rotation', 0) or 0
                 }
-                print(f"Using saved logo position: {logo_positions}")
+                print(f"Using saved logo position: {logo_position_data}")
             else:
-                print(f"Using default logo position: {logo_positions}")
+                print(f"Using default logo position: {logo_position_data}")
             
             # Prepare text position with defaults
-            text_positions = {
+            text_position_data = {
                 'name_x': 50,
                 'name_y': 25,
                 'name_size': 20,
@@ -3429,7 +3452,7 @@ async def download_resource_with_logo(
             }
             
             if text_position_db:
-                text_positions = {
+                text_position_data = {
                     'name_x': text_position_db.name_x,
                     'name_y': text_position_db.name_y,
                     'name_size': text_position_db.name_size,
@@ -3459,7 +3482,7 @@ async def download_resource_with_logo(
                     'show_address': text_position_db.show_address if text_position_db.show_address is not None else False,
                     'address': text_position_db.address or ''
                 }
-                print(f"Using saved text position: {text_positions}")
+                print(f"Using saved text position: {text_position_data}")
             else:
                 print(f"Using default text position")
             
@@ -3495,63 +3518,59 @@ async def download_resource_with_logo(
             }
             print(f"School info: {school_info}")
             
-            # Create position object for logo
-            logo_position_obj = SimpleNamespace(
-                x_position=logo_positions['x_position'],
-                y_position=logo_positions['y_position'],
-                width=logo_positions['width'],
-                opacity=logo_positions['opacity'],
-                rotation=logo_positions.get('rotation', 0)
+            # Create WatermarkPosition object for the watermarking functions
+            watermark_positions = WatermarkPosition(
+                logo_x=logo_position_data['x_position'],
+                logo_y=logo_position_data['y_position'],
+                logo_width=logo_position_data['width'],
+                logo_opacity=logo_position_data['opacity'],
+                logo_rotation=logo_position_data.get('rotation', 0),
+                school_name_x=text_position_data['name_x'],
+                school_name_y=text_position_data['name_y'],
+                school_name_size=text_position_data['name_size'],
+                school_name_opacity=text_position_data['name_opacity'],
+                contact_x=text_position_data['contact_x'],
+                contact_y=text_position_data['contact_y'],
+                contact_size=text_position_data['contact_size'],
+                contact_opacity=text_position_data['contact_opacity']
             )
             
             # Apply watermark based on file type
             file_type_lower = resource.file_type.lower() if resource.file_type else ''
             file_path_lower = full_file_path.lower()
+            is_pdf_resource = ("pdf" in file_type_lower) or file_path_lower.endswith(".pdf")
+            is_image_resource = is_image_type(resource.file_type, full_file_path)
             
             print(f"File type: {file_type_lower}")
+            print(f"Is PDF: {is_pdf_resource}")
+            print(f"Is Image: {is_image_resource}")
             
             # For PDF files
-            if 'pdf' in file_type_lower or file_path_lower.endswith('.pdf'):
+            if is_pdf_resource:
                 print("Processing PDF watermark...")
                 temp_file = tempfile.NamedTemporaryFile(suffix='.pdf', delete=False)
                 temp_file.close()
                 watermarked_file = add_logo_and_text_to_pdf(
                     full_file_path,
                     logo_path,
-                    logo_position_obj,
+                    watermark_positions,  # Pass the WatermarkPosition object
                     school_info,
-                    text_positions,
+                    text_position_data,  # Pass the text position dict
                     temp_file.name
                 )
                 print(f"PDF watermark result: {watermarked_file}")
             
             # For image files
-            elif any(img_type in file_type_lower for img_type in ['jpeg', 'jpg', 'png', 'gif', 'bmp', 'tiff', 'webp']):
+            elif is_image_resource:
                 print("Processing image watermark...")
-                # Create WatermarkPosition object for image function
-                watermark_positions = WatermarkPosition(
-                    logo_x=logo_positions['x_position'],
-                    logo_y=logo_positions['y_position'],
-                    logo_width=logo_positions['width'],
-                    logo_opacity=logo_positions['opacity'],
-                    logo_rotation=logo_positions.get('rotation', 0),
-                    school_name_x=text_positions['name_x'],
-                    school_name_y=text_positions['name_y'],
-                    school_name_size=text_positions['name_size'],
-                    school_name_opacity=text_positions['name_opacity'],
-                    contact_x=text_positions['contact_x'],
-                    contact_y=text_positions['contact_y'],
-                    contact_size=text_positions['contact_size'],
-                    contact_opacity=text_positions['contact_opacity']
-                )
                 watermarked_file = add_logo_and_text_to_image(
                     full_file_path,
                     logo_path,
                     watermark_positions,
                     resource.file_type,
                     school_info,
-                    text_positions,
-                    None
+                    text_position_data,
+                    None  # Will create temp file
                 )
                 print(f"Image watermark result: {watermarked_file}")
             else:
@@ -3582,7 +3601,7 @@ async def download_resource_with_logo(
 
         requested_format = (format or "").strip().lower()
 
-         # If PDF format is requested and the output is an image, convert to PDF bytes
+        # If PDF format is requested and the output is an image, convert to PDF bytes
         if requested_format == "pdf":
             if is_image_type(resource.file_type, final_file_path):
                 file_content = image_bytes_to_pdf_bytes(final_file_path)
