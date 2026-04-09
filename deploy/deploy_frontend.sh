@@ -7,7 +7,7 @@ cd /opt/wldl/frontend
 npm install
 
 # Build the React application for production
-npm run build
+NODE_ENV=production npm run build
 
 # Set proper permissions
 sudo chown -R wldl:wldl /opt/wldl/frontend

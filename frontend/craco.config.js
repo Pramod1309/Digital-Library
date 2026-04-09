@@ -1,6 +1,14 @@
 // craco.config.js
 const path = require("path");
-require("dotenv").config();
+const dotenv = require("dotenv");
+
+// Load environment-specific variables
+const env = process.env.NODE_ENV || "development";
+const envFile = `.env.${env}`;
+dotenv.config({ path: path.resolve(__dirname, envFile) });
+
+// Fallback to default .env
+dotenv.config();
 
 // Environment variable overrides
 const config = {

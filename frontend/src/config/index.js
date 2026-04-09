@@ -4,10 +4,23 @@ class Config {
   constructor() {
     this.environment = process.env.REACT_APP_ENVIRONMENT || 'development';
     this.domain = process.env.REACT_APP_DOMAIN || 'localhost';
-    const runtimeOrigin = (typeof window !== 'undefined' && window.location && window.location.origin)
-      ? window.location.origin
-      : null;
-    this.backendUrl = process.env.REACT_APP_BACKEND_URL || runtimeOrigin || 'http://localhost:5000';
+    
+    // Debug logging
+    console.log('Config Debug - Environment:', this.environment);
+    console.log('Config Debug - REACT_APP_BACKEND_URL:', process.env.REACT_APP_BACKEND_URL);
+    console.log('Config Debug - Window origin:', typeof window !== 'undefined' && window.location ? window.location.origin : 'N/A');
+    
+    // Priority: Environment variable > Runtime origin > Fallback
+    if (process.env.REACT_APP_BACKEND_URL) {
+      this.backendUrl = process.env.REACT_APP_BACKEND_URL;
+    } else if (typeof window !== 'undefined' && window.location && window.location.origin) {
+      // In production, use the same origin as the frontend
+      this.backendUrl = window.location.origin;
+    } else {
+      this.backendUrl = 'http://localhost:5000';
+    }
+    
+    console.log('Config Debug - Final Backend URL:', this.backendUrl);
   }
 
   get isDevelopment() {
