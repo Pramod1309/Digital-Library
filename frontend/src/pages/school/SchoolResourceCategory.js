@@ -15,8 +15,9 @@ import {
   RotateLeftOutlined, RotateRightOutlined, AppstoreOutlined
 } from '@ant-design/icons';
 import api from '../../api/axiosConfig';
+import config from '../../config';
 
-const BACKEND_URL = process.env.REACT_APP_BACKEND_URL || 'http://localhost:5000';
+const BACKEND_URL = config.apiBaseUrl;
 const API = `${BACKEND_URL}/api`;
 
 // Update this helper function at the top of your file:

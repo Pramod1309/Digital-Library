@@ -17,10 +17,11 @@ import SchoolSupportTickets from './school/SchoolSupportTickets';
 import UsageReports from './school/UsageReports';
 import SchoolSettings from './school/SchoolSettings';
 import '../styles/SchoolDashboard.css';
+import config from '../config';
 
 const { Content, Header } = Layout;
 
-const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
+const BACKEND_URL = config.apiBaseUrl;
 const API = `${BACKEND_URL}/api`;
 
 const SchoolDashboard = ({ user, setUser }) => {

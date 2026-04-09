@@ -4,7 +4,10 @@ class Config {
   constructor() {
     this.environment = process.env.REACT_APP_ENVIRONMENT || 'development';
     this.domain = process.env.REACT_APP_DOMAIN || 'localhost';
-    this.backendUrl = process.env.REACT_APP_BACKEND_URL || 'http://localhost:5000';
+    const runtimeOrigin = (typeof window !== 'undefined' && window.location && window.location.origin)
+      ? window.location.origin
+      : null;
+    this.backendUrl = process.env.REACT_APP_BACKEND_URL || runtimeOrigin || 'http://localhost:5000';
   }
 
   get isDevelopment() {

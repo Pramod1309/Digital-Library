@@ -6,6 +6,7 @@ import { Routes, Route, useLocation, Navigate, Outlet, useNavigate } from 'react
 import api from '../api/axiosConfig';
 import Sidebar from '../components/Sidebar';
 import DashboardHome from './DashboardHome';
+import config from '../config';
 
 // Resource Management
 import ResourceManagement from '../components/Resources/ResourceManagement';
@@ -35,7 +36,7 @@ import DataBackup from '../components/Settings/DataBackup';
 import AdminResourceWatermark from '../components/AdminResourceWatermark';
 import '../styles/AdminDashboard.css';
 
-const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
+const BACKEND_URL = config.apiBaseUrl;
 const API = `${BACKEND_URL}/api`;
 
 const { Header, Content } = Layout;

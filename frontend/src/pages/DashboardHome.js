@@ -1,14 +1,15 @@
 import React, { useState, useEffect } from 'react';
 import { Card, Row, Col, Statistic, Table, message, Spin } from 'antd';
-import { 
+import {
   UserOutlined, 
   FileOutlined, 
   DownloadOutlined,
   ClockCircleOutlined
 } from '@ant-design/icons';
 import api from '../api/axiosConfig';
+import config from '../config';
 
-const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
+const BACKEND_URL = config.apiBaseUrl;
 const API = `${BACKEND_URL}/api`;
 
 const DashboardHome = () => {
