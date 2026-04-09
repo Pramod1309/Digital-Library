@@ -18,7 +18,6 @@ import api from '../../api/axiosConfig';
 import config from '../../config';
 
 const BACKEND_URL = config.apiBaseUrl;
-const API = `${BACKEND_URL}/api`;
 
 // Update this helper function at the top of your file:
 const getStaticFileUrl = (path) => {
@@ -30,11 +29,11 @@ const getStaticFileUrl = (path) => {
   
   // For uploaded files, they should be served through /api/uploads
   if (cleanPath.startsWith('uploads/')) {
-    return `${BACKEND_URL}/api/${cleanPath}`;
+    return `${BACKEND_URL}/${cleanPath}`;
   }
   
   // For other files, use /api/uploads
-  return `${BACKEND_URL}/api/uploads/${cleanPath}`;
+  return `${BACKEND_URL}/uploads/${cleanPath}`;
 };
 
 const { Option } = Select;

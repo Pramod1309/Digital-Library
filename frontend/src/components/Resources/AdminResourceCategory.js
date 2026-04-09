@@ -10,10 +10,10 @@ import {
   LoadingOutlined, CheckOutlined, CloseOutlined, DownOutlined, EditOutlined
 } from '@ant-design/icons';
 import axios from 'axios';
+import api from '../../api/axiosConfig';
 import config from '../../config';
 
 const BACKEND_URL = config.apiBaseUrl;
-const API = `${BACKEND_URL}/api`;
 
 const { Option } = Select;
 const { TextArea } = Input;
@@ -167,7 +167,7 @@ const AdminResourceCategory = ({ category, title, description }) => {
       }
       
       console.log('Fetching resources with params:', params);
-      const response = await axios.get(`${API}/admin/resources`, { params });
+      const response = await api.get('/admin/resources', { params });
       
       const formattedResources = response.data.map((resource, index) => {
         let file_path = resource.file_path;
@@ -262,9 +262,8 @@ const AdminResourceCategory = ({ category, title, description }) => {
       formData.append('tags', values.tags ? values.tags.join(',') : '');
 
       setUploading(true);
-      const response = await axios.post(`${API}/admin/resources/upload`, formData, {
+      const response = await api.post('/admin/resources/upload', formData, {
         headers: {
-          'Authorization': `Bearer ${sessionStorage.getItem('token')}`,
           'Content-Type': 'multipart/form-data',
         },
       });
@@ -285,11 +284,7 @@ const AdminResourceCategory = ({ category, title, description }) => {
 
   const handleDelete = async (resourceId) => {
     try {
-      await axios.delete(`${API}/admin/resources/${resourceId}`, {
-        headers: {
-          'Authorization': `Bearer ${sessionStorage.getItem('token')}`
-        }
-      });
+      await api.delete(`/admin/resources/${resourceId}`);
       message.success('Resource deleted successfully');
       fetchResources();
     } catch (error) {
@@ -313,11 +308,8 @@ const AdminResourceCategory = ({ category, title, description }) => {
       onOk: async () => {
         try {
           setDeleteLoading(true);
-          const response = await axios.delete(`${API}/admin/resources/bulk`, {
-            data: { resource_ids: selectedRowKeys },
-            headers: {
-              'Authorization': `Bearer ${sessionStorage.getItem('token')}`
-            }
+          const response = await api.delete('/admin/resources/bulk', {
+            data: { resource_ids: selectedRowKeys }
           });
 
           const { deleted_count, errors } = response.data;
@@ -360,11 +352,8 @@ const AdminResourceCategory = ({ category, title, description }) => {
         try {
           setDeleteLoading(true);
           const params = categoryFilter !== 'all' ? { category: categoryFilter } : {};
-          const response = await axios.delete(`${API}/admin/resources/all`, { 
-            params,
-            headers: {
-              'Authorization': `Bearer ${sessionStorage.getItem('token')}`
-            }
+          const response = await api.delete('/admin/resources/all', { 
+            params
           });
 
           const { deleted_count, errors } = response.data;
@@ -391,7 +380,7 @@ const AdminResourceCategory = ({ category, title, description }) => {
 
   const updateResourceStatus = async (resourceId, status) => {
     try {
-      await axios.put(`${API}/admin/resources/${resourceId}/${status === 'approved' ? 'approve' : 'reject'}`);
+      await api.put(`/admin/resources/${resourceId}/${status === 'approved' ? 'approve' : 'reject'}`);
       message.success(`Resource ${status} successfully`);
       fetchResources();
     } catch (error) {
@@ -572,7 +561,7 @@ const AdminResourceCategory = ({ category, title, description }) => {
       }
 
       setUploading(true);
-      await axios.put(`${API}/admin/resources/${editingResource.resource_id}`, formData, {
+      await api.put(`/admin/resources/${editingResource.resource_id}`, formData, {
         headers: { 'Content-Type': 'multipart/form-data' },
       });
 

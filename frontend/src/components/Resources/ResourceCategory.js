@@ -13,12 +13,11 @@ import {
   MinusOutlined, EyeInvisibleOutlined, MailOutlined, PhoneOutlined,
   UserOutlined, DownOutlined, LoadingOutlined
 } from '@ant-design/icons';
-import axios from 'axios';
+import api from '../../api/axiosConfig';
 import FilterBar from '../FilterBar';
 import config from '../../config';
 
 const BACKEND_URL = config.apiBaseUrl;
-const API = `${BACKEND_URL}/api`;
 
 const { Option } = Select;
 const { TextArea } = Input;
@@ -110,7 +109,7 @@ const ResourceCategory = ({ user, category }) => {
       if (category && category !== 'all') {
         params.category = category;
       }
-      const response = await axios.get(`${API}/admin/resources`, { params });
+      const response = await api.get('/admin/resources', { params });
       
       if (response && response.data) {
         const formattedResources = response.data.map((resource, index) => {
@@ -198,7 +197,7 @@ const ResourceCategory = ({ user, category }) => {
       content: 'Are you sure you want to delete this resource?',
       onOk: async () => {
         try {
-          await axios.delete(`${API}/admin/resources/${resourceId}`);
+          await api.delete(`/admin/resources/${resourceId}`);
           message.success('Resource deleted successfully');
           fetchResources();
         } catch (error) {
@@ -229,7 +228,7 @@ const ResourceCategory = ({ user, category }) => {
       setUploading(true);
       
       // Use correct admin upload endpoint
-      await axios.post(`${API}/admin/resources/upload`, submitData, {
+      await api.post('/admin/resources/upload', submitData, {
         headers: { 'Content-Type': 'multipart/form-data' }
       });
       

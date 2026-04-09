@@ -2,10 +2,6 @@ import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import api from '../api/axiosConfig';
 import '../styles/LoginPage.css';
-import config from '../config';
-
-const BACKEND_URL = config.apiBaseUrl;
-const API = `${BACKEND_URL}/api`;
 
 const LoginPage = ({ setUser }) => {
   const navigate = useNavigate();
@@ -23,7 +19,7 @@ const LoginPage = ({ setUser }) => {
 
     try {
       const endpoint = activeTab === 'admin' ? '/admin/login' : '/school/login';
-      const response = await api.post(`${endpoint}`, {
+      const response = await api.post(endpoint, {
         email,
         password
       });

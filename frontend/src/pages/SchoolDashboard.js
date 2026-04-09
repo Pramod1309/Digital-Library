@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { Layout, Button, theme } from 'antd';
 import { MenuUnfoldOutlined, MenuFoldOutlined, LogoutOutlined } from '@ant-design/icons';
 import { Routes, Route, Navigate, useNavigate } from 'react-router-dom';
-import axios from 'axios';
+import api from '../api/axiosConfig';
 import SchoolSidebar from '../components/SchoolSidebar';
 import SchoolHome from './school/SchoolHome';
 import SchoolResourceManagement from './school/SchoolResourceManagement';
@@ -17,12 +17,8 @@ import SchoolSupportTickets from './school/SchoolSupportTickets';
 import UsageReports from './school/UsageReports';
 import SchoolSettings from './school/SchoolSettings';
 import '../styles/SchoolDashboard.css';
-import config from '../config';
 
 const { Content, Header } = Layout;
-
-const BACKEND_URL = config.apiBaseUrl;
-const API = `${BACKEND_URL}/api`;
 
 const SchoolDashboard = ({ user, setUser }) => {
   const navigate = useNavigate();
@@ -42,7 +38,7 @@ const SchoolDashboard = ({ user, setUser }) => {
 
   const handleLogout = async () => {
     try {
-      await axios.post(`${API}/school/logout`, {
+      await api.post('/school/logout', {
         school_id: user.school_id,
         school_name: user.name
       });
