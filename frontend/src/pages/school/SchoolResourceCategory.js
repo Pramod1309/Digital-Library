@@ -18,6 +18,7 @@ import api from '../../api/axiosConfig';
 import config from '../../config';
 
 const BACKEND_URL = config.apiBaseUrl;
+const API = `${BACKEND_URL}/api`;
 
 // Update this helper function at the top of your file:
 const getStaticFileUrl = (path) => {
@@ -1074,7 +1075,7 @@ const SchoolResourceCategory = ({ user }) => {
 
   const handleDownload = async (record, format = 'image') => {
     try {
-      const token = localStorage.getItem('token');
+      const token = sessionStorage.getItem('token');
       const downloadUrl = `${API}/resources/${record.resource_id}/download-with-logo`;
       const urlWithParams = new URL(downloadUrl);
       urlWithParams.searchParams.append('school_id', user.school_id);

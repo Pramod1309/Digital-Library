@@ -10,14 +10,30 @@ class Config {
     console.log('Config Debug - REACT_APP_BACKEND_URL:', process.env.REACT_APP_BACKEND_URL);
     console.log('Config Debug - Window origin:', typeof window !== 'undefined' && window.location ? window.location.origin : 'N/A');
     
-    // Priority: Environment variable > Runtime origin > Fallback
-    if (process.env.REACT_APP_BACKEND_URL) {
-      this.backendUrl = process.env.REACT_APP_BACKEND_URL;
-    } else if (typeof window !== 'undefined' && window.location && window.location.origin) {
-      // In production, use the same origin as the frontend
-      this.backendUrl = window.location.origin;
+    const envBackendUrl = process.env.REACT_APP_BACKEND_URL;
+    const runtimeOrigin = (typeof window !== 'undefined' && window.location && window.location.origin)
+      ? window.location.origin
+      : null;
+    const envIsLocalhost = envBackendUrl
+      ? /localhost|127\.0\.0\.1/i.test(envBackendUrl)
+      : false;
+
+    // Priority: Runtime origin in production (unless env explicitly overrides with non-localhost)
+    if (this.isProduction && runtimeOrigin && (!envBackendUrl || envIsLocalhost)) {
+      this.backendUrl = runtimeOrigin;
+    } else if (envBackendUrl) {
+      this.backendUrl = envBackendUrl;
+    } else if (runtimeOrigin) {
+      this.backendUrl = runtimeOrigin;
     } else {
       this.backendUrl = 'http://localhost:5000';
+    }
+
+    // Normalize to avoid accidental double /api in callers
+    if (this.backendUrl.endsWith('/api')) {
+      this.backendUrl = this.backendUrl.slice(0, -4);
+    } else if (this.backendUrl.endsWith('/api/')) {
+      this.backendUrl = this.backendUrl.slice(0, -5);
     }
     
     console.log('Config Debug - Final Backend URL:', this.backendUrl);
