@@ -14,6 +14,7 @@ import api from '../../api/axiosConfig';
 import config from '../../config';
 
 const BACKEND_URL = config.apiBaseUrl;
+const API = `${BACKEND_URL}/api`;
 
 const { Option } = Select;
 const { TextArea } = Input;
