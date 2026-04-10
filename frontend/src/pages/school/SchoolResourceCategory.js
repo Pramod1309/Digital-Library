@@ -100,41 +100,48 @@ const TextOverlay = ({
   textPosition, 
   isEditingText, 
   isDraggingText,
-  setIsDraggingText,
-  handleTextDrag,
+  onStartTextDrag,
   containerRef,
   textElements,
   address
 }) => {
-  // Handle mouse move at container level for smooth dragging
+  const [scale, setScale] = useState(1);
+
   useEffect(() => {
-    if (!containerRef?.current || !isEditingText) return;
-    
-    const container = containerRef.current;
-    
-    const handleMouseMove = (e) => {
-      if (isDraggingText) {
-        e.preventDefault();
-        handleTextDrag(e, container, isDraggingText);
-      }
+    if (!containerRef?.current) return;
+
+    const updateScale = () => {
+      const width = containerRef.current.getBoundingClientRect().width || 800;
+      setScale(width / 800);
     };
-    
-    const handleMouseUp = () => {
-      setIsDraggingText(null);
-    };
-    
-    document.addEventListener('mousemove', handleMouseMove);
-    document.addEventListener('mouseup', handleMouseUp);
-    
-    return () => {
-      document.removeEventListener('mousemove', handleMouseMove);
-      document.removeEventListener('mouseup', handleMouseUp);
-    };
-  }, [isDraggingText, isEditingText, containerRef, handleTextDrag, setIsDraggingText]);
+
+    updateScale();
+
+    if (typeof ResizeObserver !== 'undefined') {
+      const observer = new ResizeObserver(updateScale);
+      observer.observe(containerRef.current);
+      return () => observer.disconnect();
+    }
+
+    window.addEventListener('resize', updateScale);
+    return () => window.removeEventListener('resize', updateScale);
+  }, [containerRef?.current]);
 
   if (!schoolInfo.school_name && !schoolInfo.email && !schoolInfo.contact_number && !address) {
     return null;
   }
+
+  const getFontStyles = (styleValue) => {
+    const normalized = (styleValue || '').toLowerCase();
+    return {
+      fontStyle: normalized.includes('italic') ? 'italic' : 'normal',
+      fontWeight: normalized.includes('bold') ? 700 : 400
+    };
+  };
+
+  const nameFontSize = Math.max(6, Math.round(textPosition.name_size * scale));
+  const contactFontSize = Math.max(6, Math.round(textPosition.contact_size * scale));
+  const addressFontSize = Math.max(6, Math.round(textPosition.address_size * scale));
 
   // School name text
   const nameStyle = {
@@ -142,12 +149,11 @@ const TextOverlay = ({
     left: `${textPosition.name_x}%`,
     top: `${textPosition.name_y}%`,
     transform: `translate(-50%, -50%) rotate(${textPosition.name_rotation}deg)`,
-    fontSize: `${textPosition.name_size}px`,
-    fontWeight: 'bold',
+    fontSize: `${nameFontSize}px`,
     color: textPosition.name_color,
     opacity: textPosition.name_opacity,
     fontFamily: textPosition.name_font,
-    fontStyle: textPosition.name_style,
+    ...getFontStyles(textPosition.name_style),
     pointerEvents: isEditingText ? 'auto' : 'none',
     zIndex: 5,
     cursor: isEditingText ? 'move' : 'default',
@@ -167,11 +173,11 @@ const TextOverlay = ({
     left: `${textPosition.contact_x}%`,
     top: `${textPosition.contact_y}%`,
     transform: `translate(-50%, -50%) rotate(${textPosition.contact_rotation}deg)`,
-    fontSize: `${textPosition.contact_size}px`,
+    fontSize: `${contactFontSize}px`,
     color: textPosition.contact_color,
     opacity: textPosition.contact_opacity,
     fontFamily: textPosition.contact_font,
-    fontStyle: textPosition.contact_style,
+    ...getFontStyles(textPosition.contact_style),
     pointerEvents: isEditingText ? 'auto' : 'none',
     zIndex: 5,
     cursor: isEditingText ? 'move' : 'default',
@@ -191,11 +197,11 @@ const TextOverlay = ({
     left: `${textPosition.address_x}%`,
     top: `${textPosition.address_y}%`,
     transform: `translate(-50%, -50%) rotate(${textPosition.address_rotation}deg)`,
-    fontSize: `${textPosition.address_size}px`,
+    fontSize: `${addressFontSize}px`,
     color: textPosition.address_color,
     opacity: textPosition.address_opacity,
     fontFamily: textPosition.address_font,
-    fontStyle: textPosition.address_style,
+    ...getFontStyles(textPosition.address_style),
     pointerEvents: isEditingText ? 'auto' : 'none',
     zIndex: 5,
     cursor: isEditingText ? 'move' : 'default',
@@ -216,9 +222,7 @@ const TextOverlay = ({
           style={nameStyle}
           onMouseDown={(e) => {
             if (isEditingText) {
-              e.preventDefault();
-              e.stopPropagation();
-              setIsDraggingText('name');
+              onStartTextDrag(e, 'name', containerRef?.current);
             }
           }}
         >
@@ -231,9 +235,7 @@ const TextOverlay = ({
           style={contactStyle}
           onMouseDown={(e) => {
             if (isEditingText) {
-              e.preventDefault();
-              e.stopPropagation();
-              setIsDraggingText('contact');
+              onStartTextDrag(e, 'contact', containerRef?.current);
             }
           }}
         >
@@ -249,9 +251,7 @@ const TextOverlay = ({
           style={addressStyle}
           onMouseDown={(e) => {
             if (isEditingText) {
-              e.preventDefault();
-              e.stopPropagation();
-              setIsDraggingText('address');
+              onStartTextDrag(e, 'address', containerRef?.current);
             }
           }}
         >
@@ -267,48 +267,18 @@ const LogoOverlay = ({
   logoUrl, 
   logoPosition, 
   isEditingLogo, 
-  isDraggingLogo, 
-  setIsDraggingLogo,
-  handleLogoDrag,
+  onStartLogoDrag,
   containerRef,
   showLogo
 }) => {
   const [logoError, setLogoError] = useState(false);
-  const [logoLoaded, setLogoLoaded] = useState(false);
   
   // Reset error state when URL changes
   useEffect(() => {
     if (logoUrl) {
       setLogoError(false);
-      setLogoLoaded(false);
     }
   }, [logoUrl]);
-
-  // Handle mouse move at document level for smooth dragging
-  useEffect(() => {
-    if (!containerRef?.current || !isEditingLogo) return;
-    
-    const container = containerRef.current;
-    
-    const handleMouseMove = (e) => {
-      if (isDraggingLogo) {
-        e.preventDefault();
-        handleLogoDrag(e, container);
-      }
-    };
-    
-    const handleMouseUp = () => {
-      setIsDraggingLogo(false);
-    };
-    
-    document.addEventListener('mousemove', handleMouseMove);
-    document.addEventListener('mouseup', handleMouseUp);
-    
-    return () => {
-      document.removeEventListener('mousemove', handleMouseMove);
-      document.removeEventListener('mouseup', handleMouseUp);
-    };
-  }, [isDraggingLogo, isEditingLogo, containerRef, handleLogoDrag, setIsDraggingLogo]);
 
   // If no logo URL or logo is hidden, show a placeholder when editing
   if (!logoUrl || !showLogo) {
@@ -342,9 +312,7 @@ const LogoOverlay = ({
         }}
         onMouseDown={(e) => {
           if (isEditingLogo) {
-            e.preventDefault();
-            e.stopPropagation();
-            setIsDraggingLogo(true);
+            onStartLogoDrag(e, containerRef?.current);
           }
         }}
       >
@@ -383,9 +351,7 @@ const LogoOverlay = ({
         }}
         onMouseDown={(e) => {
           if (isEditingLogo) {
-            e.preventDefault();
-            e.stopPropagation();
-            setIsDraggingLogo(true);
+            onStartLogoDrag(e, containerRef?.current);
           }
         }}
       >
@@ -418,16 +384,13 @@ const LogoOverlay = ({
       alt="School Logo"
       style={logoStyle}
       draggable={false}
-      onLoad={() => setLogoLoaded(true)}
       onError={() => {
         console.error('Logo failed to load:', logoUrl);
         setLogoError(true);
       }}
       onMouseDown={(e) => {
         if (isEditingLogo) {
-          e.preventDefault();
-          e.stopPropagation();
-          setIsDraggingLogo(true);
+          onStartLogoDrag(e, containerRef?.current);
         }
       }}
     />
@@ -462,6 +425,8 @@ const SchoolResourceCategory = ({ user }) => {
   const [showLogoControls, setShowLogoControls] = useState(true);
   const [positionLoading, setPositionLoading] = useState(false);
   const [isDefaultPosition, setIsDefaultPosition] = useState(true);
+  const [pdfPages, setPdfPages] = useState([]);
+  const [pdfPagesLoading, setPdfPagesLoading] = useState(false);
   
   // Text watermark states
   const [textPosition, setTextPosition] = useState({
@@ -486,12 +451,11 @@ const SchoolResourceCategory = ({ user }) => {
   
   // Address state
   const [address, setAddress] = useState('');
-  
-  const iframeRef = useRef(null);
+
   const videoRefs = useRef({});
-  const pdfContainerRef = useRef(null);
   const imageContainerRef = useRef(null);
-  const docContainerRef = useRef(null);
+  const pdfPageRefs = useRef([]);
+  const dragStateRef = useRef({ type: null, element: null, container: null });
   
   // Set logo URL immediately from user prop
   useEffect(() => {
@@ -502,19 +466,32 @@ const SchoolResourceCategory = ({ user }) => {
   }
 }, [user?.logo_path]);
   
-  // Add mouse up event listener for dragging
+  // Unified drag handlers (supports multi-page PDF preview)
   useEffect(() => {
+    const handleMouseMove = (e) => {
+      if (isDraggingLogo) {
+        handleLogoDrag(e, dragStateRef.current.container);
+      } else if (isDraggingText) {
+        handleTextDrag(e, dragStateRef.current.container, dragStateRef.current.element);
+      }
+    };
+
     const handleMouseUp = () => {
-      setIsDraggingLogo(false);
-      setIsDraggingText(null);
+      if (isDraggingLogo || isDraggingText) {
+        setIsDraggingLogo(false);
+        setIsDraggingText(null);
+        dragStateRef.current = { type: null, element: null, container: null };
+      }
     };
-    
-    window.addEventListener('mouseup', handleMouseUp);
-    
+
+    document.addEventListener('mousemove', handleMouseMove);
+    document.addEventListener('mouseup', handleMouseUp);
+
     return () => {
-      window.removeEventListener('mouseup', handleMouseUp);
+      document.removeEventListener('mousemove', handleMouseMove);
+      document.removeEventListener('mouseup', handleMouseUp);
     };
-  }, []);
+  }, [isDraggingLogo, isDraggingText]);
   
   // Update categoryFilter when urlCategory changes
   useEffect(() => {
@@ -936,6 +913,26 @@ const SchoolResourceCategory = ({ user }) => {
     setTextElements(prev => ({ ...prev, [`show${elementType.charAt(0).toUpperCase() + elementType.slice(1)}`]: !prev[`show${elementType.charAt(0).toUpperCase() + elementType.slice(1)}`] }));
   };
 
+  const startLogoDrag = (e, container) => {
+    if (!isEditingLogo) return;
+    if (!container) return;
+    e.preventDefault();
+    e.stopPropagation();
+    dragStateRef.current = { type: 'logo', element: null, container };
+    setIsDraggingLogo(true);
+    setIsDraggingText(null);
+  };
+
+  const startTextDrag = (e, elementType, container) => {
+    if (!isEditingText) return;
+    if (!container) return;
+    e.preventDefault();
+    e.stopPropagation();
+    dragStateRef.current = { type: 'text', element: elementType, container };
+    setIsDraggingText(elementType);
+    setIsDraggingLogo(false);
+  };
+
   const handleLogoDrag = (e, container) => {
     if (!isDraggingLogo || !container) return;
     
@@ -1055,9 +1052,16 @@ const SchoolResourceCategory = ({ user }) => {
     await fetchTextPosition(record.resource_id);
   }
 
-  setTimeout(() => {
+  const lowerType = (record.file_type || '').toLowerCase();
+  const lowerPath = (record.file_path || '').toLowerCase();
+  const extension = lowerPath.split('.').pop() || '';
+  const isImage = lowerType.includes('image') || /\.(jpg|jpeg|png|gif|bmp|tiff|webp|svg)$/.test(lowerPath);
+  const isPdf = lowerType.includes('pdf') || extension === 'pdf';
+  const isVideo = lowerType.includes('video') || ['mp4', 'webm', 'ogg', 'mov', 'avi', 'mkv'].includes(extension);
+
+  if (!isImage && !isPdf && !isVideo) {
     setPreviewLoading(false);
-  }, 3000);
+  }
 };
   const isImageResource = (record) => {
     if (!record) return false;
@@ -1072,6 +1076,49 @@ const SchoolResourceCategory = ({ user }) => {
     const path = (record.file_path || '').toLowerCase();
     return type.includes('pdf') || path.endsWith('.pdf');
   };
+
+  const getPdfPageRef = (index) => {
+    if (!pdfPageRefs.current[index]) {
+      pdfPageRefs.current[index] = React.createRef();
+    }
+    return pdfPageRefs.current[index];
+  };
+
+  const loadPdfPages = async (resource) => {
+    if (!resource) return;
+
+    setPdfPagesLoading(true);
+    setPreviewLoading(true);
+    pdfPageRefs.current = [];
+
+    try {
+      const response = await api.get(`/resources/${resource.resource_id}/pdf-metadata`);
+      const pageCount = response.data?.page_count || 1;
+      const width = 800;
+      const pages = Array.from({ length: pageCount }, (_, index) => ({
+        pageNumber: index + 1,
+        url: `${API}/resources/${resource.resource_id}/pdf-page/${index + 1}?width=${width}`
+      }));
+      setPdfPages(pages);
+    } catch (error) {
+      console.error('Error loading PDF preview:', error);
+      message.error('Failed to load PDF preview');
+      setPdfPages([]);
+      setPreviewLoading(false);
+    } finally {
+      setPdfPagesLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!previewResource) return;
+
+    if (isPdfResource(previewResource)) {
+      loadPdfPages(previewResource);
+    } else {
+      setPdfPages([]);
+    }
+  }, [previewResource]);
 
   const handleDownload = async (record, format = 'image') => {
     try {
@@ -1149,15 +1196,6 @@ const SchoolResourceCategory = ({ user }) => {
   const renderPreview = () => {
     if (!previewResource) return null;
 
-    if (previewLoading) {
-      return (
-        <div style={{ textAlign: 'center', padding: '40px' }}>
-          <LoadingOutlined style={{ fontSize: '48px', color: '#1890ff' }} />
-          <p>Loading preview...</p>
-        </div>
-      );
-    }
-
     const fileType = previewResource.file_type ? previewResource.file_type.toLowerCase() : '';
     const fileExtension = previewResource.file_path?.split('.').pop()?.toLowerCase() || '';
     const previewUrl = `${API}/resources/${previewResource.resource_id}/preview`;
@@ -1182,6 +1220,24 @@ const SchoolResourceCategory = ({ user }) => {
             position: 'relative'
           }}>
             {content}
+            {previewLoading && (
+              <div style={{
+                position: 'absolute',
+                top: 0,
+                left: 0,
+                right: 0,
+                bottom: 0,
+                background: 'rgba(255, 255, 255, 0.7)',
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                justifyContent: 'center',
+                zIndex: 20
+              }}>
+                <LoadingOutlined style={{ fontSize: '48px', color: '#1890ff' }} />
+                <p style={{ marginTop: '12px' }}>Loading preview...</p>
+              </div>
+            )}
           </div>
         </div>
       );
@@ -1222,9 +1278,7 @@ const SchoolResourceCategory = ({ user }) => {
               logoUrl={logoUrl}
               logoPosition={logoPosition}
               isEditingLogo={isEditingLogo}
-              isDraggingLogo={isDraggingLogo}
-              setIsDraggingLogo={setIsDraggingLogo}
-              handleLogoDrag={handleLogoDrag}
+              onStartLogoDrag={startLogoDrag}
               containerRef={imageContainerRef}
               showLogo={showLogo}
             />
@@ -1235,8 +1289,7 @@ const SchoolResourceCategory = ({ user }) => {
               textPosition={textPosition}
               isEditingText={isEditingText}
               isDraggingText={isDraggingText}
-              setIsDraggingText={setIsDraggingText}
-              handleTextDrag={handleTextDrag}
+              onStartTextDrag={startTextDrag}
               containerRef={imageContainerRef}
               textElements={textElements}
               address={address}
@@ -1250,43 +1303,90 @@ const SchoolResourceCategory = ({ user }) => {
     // PDFs
     if (fileType.includes('pdf') || fileExtension === 'pdf') {
       const pdfContent = (
-        <div ref={pdfContainerRef} style={{ width: '100%', height: '100%', position: 'relative', overflow: 'hidden', backgroundColor: '#f5f5f5' }}>
-          <iframe
-            ref={iframeRef}
-            src={previewUrl}
-            style={{ width: '100%', height: '100%', border: 'none', position: 'absolute', top: 0, left: 0, zIndex: 1 }}
-            title={previewResource.name}
-            onLoad={() => setPreviewLoading(false)}
-            onError={() => {
-              setPreviewLoading(false);
-              message.error('Failed to load PDF preview');
-            }}
-          />
-          {categoryFilter !== 'multimedia' && logoUrl && showLogo && (
-            <LogoOverlay
-              logoUrl={logoUrl}
-              logoPosition={logoPosition}
-              isEditingLogo={isEditingLogo}
-              isDraggingLogo={isDraggingLogo}
-              setIsDraggingLogo={setIsDraggingLogo}
-              handleLogoDrag={handleLogoDrag}
-              containerRef={pdfContainerRef}
-              showLogo={showLogo}
-            />
+        <div
+          style={{ 
+            width: '100%', 
+            height: '100%', 
+            overflow: 'auto', 
+            backgroundColor: '#f5f5f5',
+            padding: '16px'
+          }}
+          className={isDraggingLogo || isDraggingText ? 'dragging-active' : ''}
+        >
+          {pdfPagesLoading && (
+            <div style={{ textAlign: 'center', padding: '24px' }}>
+              <LoadingOutlined style={{ fontSize: '32px', color: '#1890ff' }} />
+              <p>Loading PDF pages...</p>
+            </div>
           )}
-          {categoryFilter !== 'multimedia' && (schoolInfo.school_name || schoolInfo.email || schoolInfo.contact_number || address) && (
-            <TextOverlay
-              schoolInfo={schoolInfo}
-              textPosition={textPosition}
-              isEditingText={isEditingText}
-              isDraggingText={isDraggingText}
-              setIsDraggingText={setIsDraggingText}
-              handleTextDrag={handleTextDrag}
-              containerRef={pdfContainerRef}
-              textElements={textElements}
-              address={address}
-            />
+
+          {!pdfPagesLoading && pdfPages.length === 0 && (
+            <div style={{ textAlign: 'center', padding: '24px' }}>
+              <p>Unable to load PDF preview. Please try again.</p>
+            </div>
           )}
+
+          {pdfPages.map((page, index) => {
+            const pageRef = getPdfPageRef(index);
+            return (
+              <div
+                key={`page-${page.pageNumber}`}
+                ref={pageRef}
+                style={{
+                  position: 'relative',
+                  width: 'fit-content',
+                  margin: '0 auto 16px'
+                }}
+              >
+                <img
+                  src={page.url}
+                  alt={`Page ${page.pageNumber}`}
+                  style={{
+                    display: 'block',
+                    width: '800px',
+                    maxWidth: '100%',
+                    height: 'auto',
+                    backgroundColor: '#fff',
+                    boxShadow: '0 2px 10px rgba(0,0,0,0.08)',
+                    borderRadius: '4px'
+                  }}
+                  onLoad={() => {
+                    if (index === 0) {
+                      setPreviewLoading(false);
+                    }
+                  }}
+                  onError={() => {
+                    if (index === 0) {
+                      setPreviewLoading(false);
+                    }
+                    message.error('Failed to load PDF page preview');
+                  }}
+                />
+                {categoryFilter !== 'multimedia' && logoUrl && showLogo && (
+                  <LogoOverlay
+                    logoUrl={logoUrl}
+                    logoPosition={logoPosition}
+                    isEditingLogo={isEditingLogo}
+                    onStartLogoDrag={startLogoDrag}
+                    containerRef={pageRef}
+                    showLogo={showLogo}
+                  />
+                )}
+                {categoryFilter !== 'multimedia' && (schoolInfo.school_name || schoolInfo.email || schoolInfo.contact_number || address) && (
+                  <TextOverlay
+                    schoolInfo={schoolInfo}
+                    textPosition={textPosition}
+                    isEditingText={isEditingText}
+                    isDraggingText={isDraggingText}
+                    onStartTextDrag={startTextDrag}
+                    containerRef={pageRef}
+                    textElements={textElements}
+                    address={address}
+                  />
+                )}
+              </div>
+            );
+          })}
         </div>
       );
       return wrapWithHeaderFooter(pdfContent);
@@ -1815,7 +1915,10 @@ const SchoolResourceCategory = ({ user }) => {
           setPreviewLoading(false);
           setIsEditingLogo(false);
           setIsEditingText(false);
+          setIsDraggingLogo(false);
           setIsDraggingText(null);
+          dragStateRef.current = { type: null, element: null, container: null };
+          setPdfPages([]);
         }}
         footer={[
           <Button key="close" onClick={() => setIsPreviewModalVisible(false)}>Close</Button>,
@@ -2420,3 +2523,4 @@ const SchoolResourceCategory = ({ user }) => {
 };
 
 export default SchoolResourceCategory;
+

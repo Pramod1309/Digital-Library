@@ -159,3 +159,79 @@
 ::-webkit-scrollbar-thumb:hover {
   background: #94a3b8;
 }
+
+.pdf-page-area {
+  overflow: hidden;
+  position: absolute;
+  clip-path: inset(0% 0% 0% 0%);
+  /* Uncomment below to see the PDF page boundary for debugging */
+  /* border: 2px solid red !important; */
+  /* background-color: rgba(255, 0, 0, 0.1) !important; */
+}
+
+/* Ensure overlays cannot overflow outside the PDF page area */
+.pdf-page-area > div,
+.pdf-page-area > img {
+  max-width: 100%;
+  max-height: 100%;
+  overflow: hidden;
+  position: absolute !important;
+}
+
+/* Force logo to stay within bounds */
+.pdf-page-area img[alt="School Logo"] {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  overflow: hidden;
+}
+
+/* Force text overlays to stay within bounds */
+.pdf-page-area div[style*="position: absolute"] {
+  max-width: 90%;
+  max-height: 90%;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+/* Container for PDF overlays */
+.pdf-overlay-container {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  overflow: hidden;
+  pointer-events: none;
+  z-index: 10;
+}
+
+.pdf-overlay-container > div {
+  pointer-events: auto;
+  overflow: hidden;
+}
+
+/* Fix for PDF scrolling - overlays should stay within page bounds */
+.pdf-page-area {
+  position: absolute;
+  overflow: hidden;
+  clip-path: inset(0% 0% 0% 0%);
+  transform-origin: top left;
+}
+
+/* Prevent dragging outside bounds */
+.dragging-active {
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* Ensure iframe doesn't interfere */
+iframe {
+  pointer-events: auto;
+}
+
+/* Smooth positioning */
+.pdf-page-area {
+  transform-origin: top left;
+  will-change: top, left, width, height;
+}

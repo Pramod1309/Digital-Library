@@ -577,131 +577,101 @@ def get_school_logo_path(school: School) -> str:
                 return alt_path
     return None
 
+def get_attr(obj, name: str, default=None):
+    if obj is None:
+        return default
+    if isinstance(obj, dict):
+        return obj.get(name, default)
+    return getattr(obj, name, default)
+
+def render_text_image(
+    text: str,
+    font_name: str,
+    font_style: str,
+    font_size: int,
+    color_hex: str,
+    opacity: float,
+    rotation: int
+) -> Image.Image:
+    if not text:
+        return None
+
+    font_size = max(1, int(round(font_size)))
+    font = resolve_pil_font(font_name, font_style, font_size)
+
+    # Measure text
+    temp = Image.new('RGBA', (1, 1), (255, 255, 255, 0))
+    draw = ImageDraw.Draw(temp)
+    try:
+        bbox = draw.multiline_textbbox((0, 0), text, font=font, align='center')
+    except Exception:
+        bbox = draw.textbbox((0, 0), text, font=font)
+
+    text_w = max(1, int(bbox[2] - bbox[0]))
+    text_h = max(1, int(bbox[3] - bbox[1]))
+    padding = max(2, int(font_size * 0.2))
+
+    img = Image.new('RGBA', (text_w + padding * 2, text_h + padding * 2), (255, 255, 255, 0))
+    draw = ImageDraw.Draw(img)
+
+    r, g, b = hex_to_rgb(color_hex, default="#000000")
+    alpha = int(255 * clamp(opacity, 0.0, 1.0))
+    draw.multiline_text((padding, padding), text, font=font, fill=(r, g, b, alpha), align='center')
+
+    rotation = normalize_rotation(rotation)
+    rotation = (360 - rotation) % 360
+    if rotation:
+        img = img.rotate(rotation, expand=True, resample=Image.Resampling.BICUBIC)
+
+    return img
+
 def add_watermark_to_pdf(pdf_path: str, school: School, positions: WatermarkPosition) -> str:
-    """Add watermark to PDF with school info"""
+    """Add watermark to PDF with school info (logo + text)"""
     try:
         print(f"Adding watermark to PDF for school: {school.school_name}")
-        
-        # Open PDF
-        pdf_document = fitz.open(pdf_path)
-        
-        # Create temp file
+
+        logo_path = get_school_logo_path(school)
+        school_info = {
+            "school_name": school.school_name,
+            "email": school.email,
+            "contact_number": school.contact_number
+        }
+
+        text_position = {
+            "name_x": positions.school_name_x,
+            "name_y": positions.school_name_y,
+            "name_size": positions.school_name_size,
+            "name_opacity": positions.school_name_opacity,
+            "name_rotation": 0,
+            "name_font": "Arial",
+            "name_style": "normal",
+            "name_color": "#000000",
+            "show_name": True,
+            "contact_x": positions.contact_x,
+            "contact_y": positions.contact_y,
+            "contact_size": positions.contact_size,
+            "contact_opacity": positions.contact_opacity,
+            "contact_rotation": 0,
+            "contact_font": "Arial",
+            "contact_style": "normal",
+            "contact_color": "#000000",
+            "show_contact": True,
+            "show_address": False
+        }
+
         temp_file = tempfile.NamedTemporaryFile(suffix='.pdf', delete=False)
         output_path = temp_file.name
-        
-        # Get school logo if available
-        logo_path = get_school_logo_path(school)
-        
-        # Process each page
-        for page_num in range(len(pdf_document)):
-            page = pdf_document[page_num]
-            page_width = page.rect.width
-            page_height = page.rect.height
-            
-            # Add logo if available
-            if logo_path and os.path.exists(logo_path):
-                try:
-                    logo_img = Image.open(logo_path)
-                    if logo_img.mode != 'RGBA':
-                        logo_img = logo_img.convert('RGBA')
-                    
-                    # Apply opacity
-                    if positions.logo_opacity < 1.0:
-                        alpha = logo_img.split()[3]
-                        alpha = alpha.point(lambda p: p * positions.logo_opacity)
-                        logo_img.putalpha(alpha)
-                    
-                    # Resize logo
-                    logo_width_pixels = int(page_width * (positions.logo_width / 100))
-                    aspect_ratio = logo_img.width / logo_img.height
-                    logo_height_pixels = int(logo_width_pixels / aspect_ratio)
-                    logo_img = logo_img.resize((logo_width_pixels, logo_height_pixels), Image.Resampling.LANCZOS)
-                    
-                    # Convert to bytes
-                    logo_bytes = io.BytesIO()
-                    logo_img.save(logo_bytes, format='PNG')
-                    logo_bytes.seek(0)
-                    
-                    # Position logo
-                    x_position = page_width * (positions.logo_x / 100)
-                    y_position = page_height * (positions.logo_y / 100)
-                    
-                    rect = fitz.Rect(
-                        x_position - (logo_width_pixels / 2),
-                        y_position - (logo_height_pixels / 2),
-                        x_position + (logo_width_pixels / 2),
-                        y_position + (logo_height_pixels / 2)
-                    )
-                    
-                    page.insert_image(rect, stream=logo_bytes.getvalue())
-                    print(f"Added logo to page {page_num + 1}")
-                except Exception as e:
-                    print(f"Error adding logo: {e}")
-            
-            # Add school name
-            school_name_x = page_width * (positions.school_name_x / 100)
-            school_name_y = page_height * (positions.school_name_y / 100)
-            
-            # Draw school name
-            try:
-                text = f"{school.school_name}"
-                rect = fitz.Rect(
-                    school_name_x - 200,
-                    school_name_y - 20,
-                    school_name_x + 200,
-                    school_name_y + 20
-                )
-                
-                # Calculate font size based on positions
-                font_size = positions.school_name_size * 0.75  # Convert to points
-                
-                page.insert_textbox(
-                    rect,
-                    text,
-                    fontsize=font_size,
-                    color=(0, 0, 0, positions.school_name_opacity),
-                    align=1  # Center aligned
-                )
-                print(f"Added school name to page {page_num + 1}")
-            except Exception as e:
-                print(f"Error adding school name: {e}")
-            
-            # Add contact info
-            contact_x = page_width * (positions.contact_x / 100)
-            contact_y = page_height * (positions.contact_y / 100)
-            
-            contact_text = f"{school.email}"
-            if school.contact_number:
-                contact_text += f"\n{school.contact_number}"
-            
-            try:
-                contact_rect = fitz.Rect(
-                    contact_x - 200,
-                    contact_y - 30,
-                    contact_x + 200,
-                    contact_y + 30
-                )
-                
-                contact_font_size = positions.contact_size * 0.75  # Convert to points
-                
-                page.insert_textbox(
-                    contact_rect,
-                    contact_text,
-                    fontsize=contact_font_size,
-                    color=(0, 0, 0, positions.contact_opacity),
-                    align=1  # Center aligned
-                )
-                print(f"Added contact info to page {page_num + 1}")
-            except Exception as e:
-                print(f"Error adding contact info: {e}")
-        
-        # Save watermarked PDF
-        pdf_document.save(output_path)
-        pdf_document.close()
-        
-        print(f"Watermarked PDF saved to: {output_path}")
-        return output_path
-        
+        temp_file.close()
+
+        return add_logo_and_text_to_pdf(
+            pdf_path,
+            logo_path,
+            positions,
+            school_info,
+            text_position,
+            output_path
+        )
+
     except Exception as e:
         print(f"Error adding watermark to PDF: {e}")
         import traceback
@@ -2274,6 +2244,93 @@ async def preview_resource(
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
+@api_router.get("/resources/{resource_id}/pdf-metadata")
+async def pdf_metadata(
+    resource_id: str,
+    db: Session = Depends(get_db)
+):
+    """Return basic PDF metadata for rendering previews"""
+    try:
+        resource = db.query(Resource).filter(Resource.resource_id == resource_id).first()
+        if not resource:
+            raise HTTPException(status_code=404, detail="Resource not found")
+
+        try:
+            full_file_path = get_full_file_path(resource.file_path)
+        except FileNotFoundError:
+            raise HTTPException(status_code=404, detail="File not found on server")
+        file_type = (resource.file_type or "").lower()
+        if ("pdf" not in file_type) and (not full_file_path.lower().endswith(".pdf")):
+            raise HTTPException(status_code=400, detail="Resource is not a PDF")
+
+        pdf_document = fitz.open(full_file_path)
+        page_sizes = [
+            {"width": page.rect.width, "height": page.rect.height}
+            for page in pdf_document
+        ]
+        pdf_document.close()
+
+        return {"page_count": len(page_sizes), "page_sizes": page_sizes}
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"PDF metadata error: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+@api_router.get("/resources/{resource_id}/pdf-page/{page_number}")
+async def pdf_page_image(
+    resource_id: str,
+    page_number: int,
+    width: int = 800,
+    db: Session = Depends(get_db)
+):
+    """Render a single PDF page as PNG for preview"""
+    try:
+        resource = db.query(Resource).filter(Resource.resource_id == resource_id).first()
+        if not resource:
+            raise HTTPException(status_code=404, detail="Resource not found")
+
+        try:
+            full_file_path = get_full_file_path(resource.file_path)
+        except FileNotFoundError:
+            raise HTTPException(status_code=404, detail="File not found on server")
+        file_type = (resource.file_type or "").lower()
+        if ("pdf" not in file_type) and (not full_file_path.lower().endswith(".pdf")):
+            raise HTTPException(status_code=400, detail="Resource is not a PDF")
+
+        if page_number < 1:
+            raise HTTPException(status_code=400, detail="Invalid page number")
+
+        width = int(clamp(width, 300, 1800))
+
+        pdf_document = fitz.open(full_file_path)
+        if page_number > len(pdf_document):
+            pdf_document.close()
+            raise HTTPException(status_code=404, detail="Page not found")
+
+        page = pdf_document[page_number - 1]
+        zoom = width / page.rect.width if page.rect.width else 1.0
+        matrix = fitz.Matrix(zoom, zoom)
+        pix = page.get_pixmap(matrix=matrix, alpha=False)
+        image_bytes = pix.tobytes("png")
+        pdf_document.close()
+
+        return Response(
+            content=image_bytes,
+            media_type="image/png",
+            headers={"Cache-Control": "public, max-age=3600"}
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"PDF page render error: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
 # Debug endpoint to check file structure
 @api_router.get("/debug/files")
 async def debug_files():
@@ -3219,211 +3276,165 @@ def add_logo_and_text_to_pdf(pdf_path, logo_path, logo_position, school_info, te
         print(f"Logo path: {logo_path}")
         print(f"School info: {school_info}")
         print(f"Output path: {output_path}")
-        
+
         if not os.path.exists(pdf_path):
             print(f"ERROR: PDF file does not exist: {pdf_path}")
             return None
-        
-        # Open PDF
+
         pdf_document = fitz.open(pdf_path)
         print(f"PDF opened successfully. Pages: {len(pdf_document)}")
-        
-        # Open logo image if exists
-        logo_img = None
+
+        # Load original logo once
+        logo_original = None
         if logo_path and os.path.exists(logo_path):
             try:
-                logo_img = Image.open(logo_path)
-                print(f"Logo loaded: {logo_img.size}")
-                if logo_img.mode != 'RGBA':
-                    logo_img = logo_img.convert('RGBA')
-                
-                # Apply opacity
-                if hasattr(logo_position, 'logo_opacity') and logo_position.logo_opacity < 1.0:
-                    alpha = logo_img.split()[3]
-                    alpha = alpha.point(lambda p: p * logo_position.logo_opacity)
-                    logo_img.putalpha(alpha)
-                    print(f"Applied opacity: {logo_position.logo_opacity}")
+                logo_original = Image.open(logo_path)
+                if logo_original.mode != 'RGBA':
+                    logo_original = logo_original.convert('RGBA')
             except Exception as e:
                 print(f"Error loading logo: {e}")
-                logo_img = None
+                logo_original = None
         else:
             print(f"Logo not found or not provided: {logo_path}")
-        
-        # Get first page for dimensions
-        first_page = pdf_document[0]
-        page_width = first_page.rect.width
-        page_height = first_page.rect.height
-        print(f"Page dimensions: {page_width}x{page_height}")
-        
-        # Add logo if exists
-        if logo_img:
-            # Calculate logo size - use logo_width if available, otherwise use width attribute
-            if hasattr(logo_position, 'logo_width'):
-                logo_width_pixels = int(page_width * (logo_position.logo_width / 100))
-            else:
-                logo_width_pixels = int(page_width * (getattr(logo_position, 'width', 20) / 100))
-            
-            aspect_ratio = logo_img.width / logo_img.height
-            logo_height_pixels = int(logo_width_pixels / aspect_ratio)
-            print(f"Logo size: {logo_width_pixels}x{logo_height_pixels}")
-            
-            # Resize logo
-            logo_img = logo_img.resize((logo_width_pixels, logo_height_pixels), Image.Resampling.LANCZOS)
-            
-            # Apply rotation if needed
-            if hasattr(logo_position, 'logo_rotation'):
-                logo_rotation = logo_position.logo_rotation or 0
-            else:
-                logo_rotation = getattr(logo_position, 'rotation', 0) or 0
-            
-            # Normalize rotation (0-360)
-            logo_rotation = (360 - logo_rotation) % 360
-            if logo_rotation:
-                print(f"Applying logo rotation: {logo_rotation} degrees")
-                logo_img = logo_img.rotate(logo_rotation, expand=True, resample=Image.Resampling.BICUBIC)
-                logo_width_pixels, logo_height_pixels = logo_img.size
-            
-            # Convert to bytes
-            logo_bytes = io.BytesIO()
-            logo_img.save(logo_bytes, format='PNG')
-            logo_bytes.seek(0)
-            
-            # Get logo position coordinates
-            if hasattr(logo_position, 'logo_x'):
-                logo_x = logo_position.logo_x
-                logo_y = logo_position.logo_y
-            else:
-                logo_x = getattr(logo_position, 'x_position', 50)
-                logo_y = getattr(logo_position, 'y_position', 10)
-            
-            # Add logo to each page
-            for page_num in range(len(pdf_document)):
-                page = pdf_document[page_num]
-                x_position = page.rect.width * (logo_x / 100)
-                y_position = page.rect.height * (logo_y / 100)
-                print(f"Page {page_num+1}: Logo at ({x_position}, {y_position})")
-                
+
+        def tp(key, default):
+            if not text_position:
+                return default
+            return text_position.get(key, default)
+
+        show_name = parse_bool(tp('show_name', True), True)
+        show_contact = parse_bool(tp('show_contact', True), True)
+        show_address = parse_bool(tp('show_address', False), False)
+
+        for page_num in range(len(pdf_document)):
+            page = pdf_document[page_num]
+            page_w = page.rect.width
+            page_h = page.rect.height
+            scale_factor = page_w / 800 if page_w else 1.0
+
+            # --- Logo ---
+            if logo_original:
+                logo_x = get_attr(logo_position, 'logo_x', get_attr(logo_position, 'x_position', 50))
+                logo_y = get_attr(logo_position, 'logo_y', get_attr(logo_position, 'y_position', 10))
+                logo_width_pct = get_attr(logo_position, 'logo_width', get_attr(logo_position, 'width', 20))
+                logo_opacity = clamp(get_attr(logo_position, 'logo_opacity', get_attr(logo_position, 'opacity', 1.0)), 0.1, 1.0)
+                logo_rotation = get_attr(logo_position, 'logo_rotation', get_attr(logo_position, 'rotation', 0)) or 0
+                logo_rotation = (360 - normalize_rotation(logo_rotation)) % 360
+
+                logo_width = max(1, int(round(page_w * (float(logo_width_pct) / 100.0))))
+                aspect_ratio = logo_original.width / logo_original.height if logo_original.height else 1.0
+                logo_height = max(1, int(round(logo_width / aspect_ratio)))
+
+                logo_img = logo_original.copy()
+                if logo_opacity < 1.0:
+                    alpha = logo_img.split()[3]
+                    alpha = alpha.point(lambda p: int(p * logo_opacity))
+                    logo_img.putalpha(alpha)
+
+                logo_img = logo_img.resize((logo_width, logo_height), Image.Resampling.LANCZOS)
+
+                if logo_rotation:
+                    logo_img = logo_img.rotate(logo_rotation, expand=True, resample=Image.Resampling.BICUBIC)
+                    logo_width, logo_height = logo_img.size
+
+                logo_bytes = io.BytesIO()
+                logo_img.save(logo_bytes, format='PNG')
+                logo_bytes.seek(0)
+
+                x_position = page_w * (float(logo_x) / 100.0)
+                y_position = page_h * (float(logo_y) / 100.0)
+
                 rect = fitz.Rect(
-                    x_position - (logo_width_pixels / 2),
-                    y_position - (logo_height_pixels / 2),
-                    x_position + (logo_width_pixels / 2),
-                    y_position + (logo_height_pixels / 2)
+                    x_position - (logo_width / 2),
+                    y_position - (logo_height / 2),
+                    x_position + (logo_width / 2),
+                    y_position + (logo_height / 2)
                 )
-                
                 page.insert_image(rect, stream=logo_bytes.getvalue())
-                print(f"  Logo added to page {page_num+1}")
-        else:
-            print("No logo to add")
-        
-        # Add text watermarks if school info exists
-        if school_info and text_position:
-            print("Adding text watermarks...")
-            show_name = parse_bool(text_position.get('show_name', True), True)
-            show_contact = parse_bool(text_position.get('show_contact', True), True)
-            show_address = parse_bool(text_position.get('show_address', False), False)
-            
-            print(f"Show name: {show_name}, Show contact: {show_contact}, Show address: {show_address}")
-            
-            for page_num in range(len(pdf_document)):
-                page = pdf_document[page_num]
-                page_w = page.rect.width
-                page_h = page.rect.height
-                
-                # School name
+
+            # --- Text ---
+            if school_info and text_position:
                 if show_name and school_info.get('school_name'):
-                    name_x = page_w * (text_position.get('name_x', 50) / 100)
-                    name_y = page_h * (text_position.get('name_y', 25) / 100)
-                    name_size = text_position.get('name_size', 20)
-                    name_rotation = normalize_rotation(text_position.get('name_rotation', 0))
-                    
-                    print(f"Page {page_num+1}: Adding school name '{school_info['school_name']}' at ({name_x}, {name_y}) with rotation {name_rotation}°")
-                    
-                    # Create text rectangle
-                    rect = fitz.Rect(
-                        name_x - 200,
-                        name_y - 30,
-                        name_x + 200,
-                        name_y + 30
+                    name_x = page_w * (float(tp('name_x', 50)) / 100.0)
+                    name_y = page_h * (float(tp('name_y', 25)) / 100.0)
+                    name_size = max(1, int(round(float(tp('name_size', 20)) * scale_factor)))
+                    name_img = render_text_image(
+                        school_info.get('school_name', '').strip(),
+                        tp('name_font', 'Arial'),
+                        tp('name_style', 'normal'),
+                        name_size,
+                        tp('name_color', '#000000'),
+                        float(tp('name_opacity', 1.0)),
+                        int(tp('name_rotation', 0))
                     )
-                    
-                    # Insert text with rotation
-                    page.insert_textbox(
-                        rect,
-                        school_info['school_name'],
-                        fontsize=name_size,
-                        align=1,  # Center alignment
-                        rotate=name_rotation  # Apply rotation
-                    )
-                
-                # Contact info
+                    if name_img:
+                        img_bytes = io.BytesIO()
+                        name_img.save(img_bytes, format='PNG')
+                        img_bytes.seek(0)
+                        w, h = name_img.size
+                        rect = fitz.Rect(name_x - w / 2, name_y - h / 2, name_x + w / 2, name_y + h / 2)
+                        page.insert_image(rect, stream=img_bytes.getvalue())
+
                 contact_lines = []
                 if school_info.get('email'):
                     contact_lines.append(f"Email: {school_info['email']}")
                 if school_info.get('contact_number'):
                     contact_lines.append(f"Phone: {school_info['contact_number']}")
                 contact_text = "\n".join(contact_lines)
-                
+
                 if show_contact and contact_text:
-                    contact_x = page_w * (text_position.get('contact_x', 50) / 100)
-                    contact_y = page_h * (text_position.get('contact_y', 90) / 100)
-                    contact_size = text_position.get('contact_size', 12)
-                    contact_rotation = normalize_rotation(text_position.get('contact_rotation', 0))
-                    
-                    print(f"Page {page_num+1}: Adding contact info at ({contact_x}, {contact_y}) with rotation {contact_rotation}°")
-                    
-                    rect = fitz.Rect(
-                        contact_x - 250,
-                        contact_y - 40,
-                        contact_x + 250,
-                        contact_y + 40
-                    )
-                    
-                    page.insert_textbox(
-                        rect,
+                    contact_x = page_w * (float(tp('contact_x', 50)) / 100.0)
+                    contact_y = page_h * (float(tp('contact_y', 90)) / 100.0)
+                    contact_size = max(1, int(round(float(tp('contact_size', 12)) * scale_factor)))
+                    contact_img = render_text_image(
                         contact_text,
-                        fontsize=contact_size,
-                        align=1,
-                        rotate=contact_rotation
+                        tp('contact_font', 'Arial'),
+                        tp('contact_style', 'normal'),
+                        contact_size,
+                        tp('contact_color', '#000000'),
+                        float(tp('contact_opacity', 1.0)),
+                        int(tp('contact_rotation', 0))
                     )
-                
-                # Address / message
-                address_text = (text_position.get('address', '') or '').strip()
+                    if contact_img:
+                        img_bytes = io.BytesIO()
+                        contact_img.save(img_bytes, format='PNG')
+                        img_bytes.seek(0)
+                        w, h = contact_img.size
+                        rect = fitz.Rect(contact_x - w / 2, contact_y - h / 2, contact_x + w / 2, contact_y + h / 2)
+                        page.insert_image(rect, stream=img_bytes.getvalue())
+
+                address_text = (tp('address', '') or '').strip()
                 if show_address and address_text:
-                    address_x = page_w * (text_position.get('address_x', 50) / 100)
-                    address_y = page_h * (text_position.get('address_y', 85) / 100)
-                    address_size = text_position.get('address_size', 10)
-                    address_rotation = normalize_rotation(text_position.get('address_rotation', 0))
-                    
-                    print(f"Page {page_num+1}: Adding address at ({address_x}, {address_y}) with rotation {address_rotation}°")
-                    
-                    rect = fitz.Rect(
-                        address_x - 200,
-                        address_y - 30,
-                        address_x + 200,
-                        address_y + 30
-                    )
-                    
-                    page.insert_textbox(
-                        rect,
+                    address_x = page_w * (float(tp('address_x', 50)) / 100.0)
+                    address_y = page_h * (float(tp('address_y', 85)) / 100.0)
+                    address_size = max(1, int(round(float(tp('address_size', 10)) * scale_factor)))
+                    address_img = render_text_image(
                         address_text,
-                        fontsize=address_size,
-                        align=1,
-                        rotate=address_rotation
+                        tp('address_font', 'Arial'),
+                        tp('address_style', 'normal'),
+                        address_size,
+                        tp('address_color', '#000000'),
+                        float(tp('address_opacity', 1.0)),
+                        int(tp('address_rotation', 0))
                     )
-        else:
-            print("No text watermarks to add")
-        
-        # Save watermarked PDF
+                    if address_img:
+                        img_bytes = io.BytesIO()
+                        address_img.save(img_bytes, format='PNG')
+                        img_bytes.seek(0)
+                        w, h = address_img.size
+                        rect = fitz.Rect(address_x - w / 2, address_y - h / 2, address_x + w / 2, address_y + h / 2)
+                        page.insert_image(rect, stream=img_bytes.getvalue())
+
         pdf_document.save(output_path)
         pdf_document.close()
-        
+
         print(f"PDF saved to: {output_path}")
         print(f"File exists: {os.path.exists(output_path)}")
         print(f"File size: {os.path.getsize(output_path)} bytes")
         print(f"--- EXIT add_logo_and_text_to_pdf ---\n")
-        
+
         return output_path
-        
+
     except Exception as e:
         print(f"Error in add_logo_and_text_to_pdf: {str(e)}")
         import traceback
