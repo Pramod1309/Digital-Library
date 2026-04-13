@@ -5,7 +5,14 @@ import os
 import warnings
 from dotenv import load_dotenv
 from pathlib import Path
-from database import Base, engine, Admin, SessionLocal, SchoolWatermarkText
+from database import (
+    Base,
+    engine,
+    Admin,
+    SessionLocal,
+    SchoolWatermarkText,
+    Resource,
+)
 from passlib.context import CryptContext
 
 # Suppress bcrypt version warning
@@ -38,21 +45,26 @@ def migrate_database():
         # Check if contact_number column exists in schools table
         from sqlalchemy import inspect, text
         inspector = inspect(engine)
-        columns = [col['name'] for col in inspector.get_columns('schools')]
+        table_names = inspector.get_table_names()
+        columns = [col['name'] for col in inspector.get_columns('schools')] if 'schools' in table_names else []
 
-        if 'contact_number' not in columns:
-            print("Migrating database to add contact_number field to schools table...")
-            try:
-                # For SQLite, we use ALTER TABLE
-                db.execute(text("ALTER TABLE schools ADD COLUMN contact_number VARCHAR(20)"))
-                db.commit()
-                print("Added contact_number column to schools table")
-            except Exception as e:
-                print(f"  Note: {e}")
-                print("  Column might already exist or SQLite limitation encountered")
+        school_column_defs = [
+            ("contact_number", "VARCHAR(20)"),
+            ("logo_path", "VARCHAR(500)"),
+        ]
+        for col_name, col_def in school_column_defs:
+            if col_name not in columns:
+                print(f"Migrating database to add {col_name} field to schools table...")
+                try:
+                    # For SQLite, we use ALTER TABLE
+                    db.execute(text(f"ALTER TABLE schools ADD COLUMN {col_name} {col_def}"))
+                    db.commit()
+                    print(f"Added {col_name} column to schools table")
+                except Exception as e:
+                    print(f"  Note: {e}")
+                    print("  Column might already exist or SQLite limitation encountered")
 
         # Check if school_watermark_texts table exists
-        table_names = inspector.get_table_names()
         if 'school_watermark_texts' not in table_names:
             print("Creating school_watermark_texts table...")
             SchoolWatermarkText.__table__.create(bind=engine)
@@ -88,6 +100,35 @@ def migrate_database():
                         db.execute(text(f"ALTER TABLE school_watermark_texts ADD COLUMN {col_name} {col_def}"))
                         db.commit()
                         print(f"Added {col_name} column to school_watermark_texts")
+                    except Exception as e:
+                        print(f"  Note: {e}")
+                        print(f"  Column {col_name} might already exist or SQLite limitation encountered")
+
+        # Add missing columns to resources table
+        if 'resources' not in table_names:
+            print("Creating resources table...")
+            Resource.__table__.create(bind=engine)
+            print("Created resources table")
+        else:
+            resource_columns = [col['name'] for col in inspector.get_columns('resources')]
+            resource_column_defs = [
+                ("class_level", "VARCHAR(100)"),
+                ("subject", "VARCHAR(100)"),
+                ("sub_category", "VARCHAR(255)"),
+                ("consent_to_share", "VARCHAR(10)"),
+                ("tags", "TEXT DEFAULT ''"),
+                ("uploaded_by_type", "VARCHAR(50) DEFAULT 'admin'"),
+                ("uploaded_by_id", "VARCHAR(100)"),
+                ("uploaded_by_name", "VARCHAR(255)"),
+                ("approval_status", "VARCHAR(50) DEFAULT 'approved'"),
+                ("download_count", "INTEGER DEFAULT 0"),
+            ]
+            for col_name, col_def in resource_column_defs:
+                if col_name not in resource_columns:
+                    try:
+                        db.execute(text(f"ALTER TABLE resources ADD COLUMN {col_name} {col_def}"))
+                        db.commit()
+                        print(f"Added {col_name} column to resources")
                     except Exception as e:
                         print(f"  Note: {e}")
                         print(f"  Column {col_name} might already exist or SQLite limitation encountered")

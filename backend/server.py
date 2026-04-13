@@ -3306,6 +3306,13 @@ def add_logo_and_text_to_pdf(pdf_path, logo_path, logo_position, school_info, te
         show_contact = parse_bool(tp('show_contact', True), True)
         show_address = parse_bool(tp('show_address', False), False)
 
+        # Render at higher pixel density to avoid blurry watermark in downloads
+        try:
+            pdf_scale = float(os.environ.get("PDF_WATERMARK_SCALE", "2.0"))
+        except Exception:
+            pdf_scale = 2.0
+        pdf_scale = max(1.0, min(pdf_scale, 4.0))
+
         for page_num in range(len(pdf_document)):
             page = pdf_document[page_num]
             page_w = page.rect.width
@@ -3331,11 +3338,13 @@ def add_logo_and_text_to_pdf(pdf_path, logo_path, logo_position, school_info, te
                     alpha = alpha.point(lambda p: int(p * logo_opacity))
                     logo_img.putalpha(alpha)
 
-                logo_img = logo_img.resize((logo_width, logo_height), Image.Resampling.LANCZOS)
+                logo_px_w = max(1, int(round(logo_width * pdf_scale)))
+                logo_px_h = max(1, int(round(logo_height * pdf_scale)))
+                logo_img = logo_img.resize((logo_px_w, logo_px_h), Image.Resampling.LANCZOS)
 
                 if logo_rotation:
                     logo_img = logo_img.rotate(logo_rotation, expand=True, resample=Image.Resampling.BICUBIC)
-                    logo_width, logo_height = logo_img.size
+                    logo_px_w, logo_px_h = logo_img.size
 
                 logo_bytes = io.BytesIO()
                 logo_img.save(logo_bytes, format='PNG')
@@ -3344,11 +3353,13 @@ def add_logo_and_text_to_pdf(pdf_path, logo_path, logo_position, school_info, te
                 x_position = page_w * (float(logo_x) / 100.0)
                 y_position = page_h * (float(logo_y) / 100.0)
 
+                rect_w = logo_px_w / pdf_scale
+                rect_h = logo_px_h / pdf_scale
                 rect = fitz.Rect(
-                    x_position - (logo_width / 2),
-                    y_position - (logo_height / 2),
-                    x_position + (logo_width / 2),
-                    y_position + (logo_height / 2)
+                    x_position - (rect_w / 2),
+                    y_position - (rect_h / 2),
+                    x_position + (rect_w / 2),
+                    y_position + (rect_h / 2)
                 )
                 page.insert_image(rect, stream=logo_bytes.getvalue())
 
@@ -3362,7 +3373,7 @@ def add_logo_and_text_to_pdf(pdf_path, logo_path, logo_position, school_info, te
                         school_info.get('school_name', '').strip(),
                         tp('name_font', 'Arial'),
                         tp('name_style', 'normal'),
-                        name_size,
+                        int(round(name_size * pdf_scale)),
                         tp('name_color', '#000000'),
                         float(tp('name_opacity', 1.0)),
                         int(tp('name_rotation', 0))
@@ -3372,7 +3383,12 @@ def add_logo_and_text_to_pdf(pdf_path, logo_path, logo_position, school_info, te
                         name_img.save(img_bytes, format='PNG')
                         img_bytes.seek(0)
                         w, h = name_img.size
-                        rect = fitz.Rect(name_x - w / 2, name_y - h / 2, name_x + w / 2, name_y + h / 2)
+                        rect = fitz.Rect(
+                            name_x - (w / (2 * pdf_scale)),
+                            name_y - (h / (2 * pdf_scale)),
+                            name_x + (w / (2 * pdf_scale)),
+                            name_y + (h / (2 * pdf_scale))
+                        )
                         page.insert_image(rect, stream=img_bytes.getvalue())
 
                 contact_lines = []
@@ -3390,7 +3406,7 @@ def add_logo_and_text_to_pdf(pdf_path, logo_path, logo_position, school_info, te
                         contact_text,
                         tp('contact_font', 'Arial'),
                         tp('contact_style', 'normal'),
-                        contact_size,
+                        int(round(contact_size * pdf_scale)),
                         tp('contact_color', '#000000'),
                         float(tp('contact_opacity', 1.0)),
                         int(tp('contact_rotation', 0))
@@ -3400,7 +3416,12 @@ def add_logo_and_text_to_pdf(pdf_path, logo_path, logo_position, school_info, te
                         contact_img.save(img_bytes, format='PNG')
                         img_bytes.seek(0)
                         w, h = contact_img.size
-                        rect = fitz.Rect(contact_x - w / 2, contact_y - h / 2, contact_x + w / 2, contact_y + h / 2)
+                        rect = fitz.Rect(
+                            contact_x - (w / (2 * pdf_scale)),
+                            contact_y - (h / (2 * pdf_scale)),
+                            contact_x + (w / (2 * pdf_scale)),
+                            contact_y + (h / (2 * pdf_scale))
+                        )
                         page.insert_image(rect, stream=img_bytes.getvalue())
 
                 address_text = (tp('address', '') or '').strip()
@@ -3412,7 +3433,7 @@ def add_logo_and_text_to_pdf(pdf_path, logo_path, logo_position, school_info, te
                         address_text,
                         tp('address_font', 'Arial'),
                         tp('address_style', 'normal'),
-                        address_size,
+                        int(round(address_size * pdf_scale)),
                         tp('address_color', '#000000'),
                         float(tp('address_opacity', 1.0)),
                         int(tp('address_rotation', 0))
@@ -3422,7 +3443,12 @@ def add_logo_and_text_to_pdf(pdf_path, logo_path, logo_position, school_info, te
                         address_img.save(img_bytes, format='PNG')
                         img_bytes.seek(0)
                         w, h = address_img.size
-                        rect = fitz.Rect(address_x - w / 2, address_y - h / 2, address_x + w / 2, address_y + h / 2)
+                        rect = fitz.Rect(
+                            address_x - (w / (2 * pdf_scale)),
+                            address_y - (h / (2 * pdf_scale)),
+                            address_x + (w / (2 * pdf_scale)),
+                            address_y + (h / (2 * pdf_scale))
+                        )
                         page.insert_image(rect, stream=img_bytes.getvalue())
 
         pdf_document.save(output_path)
