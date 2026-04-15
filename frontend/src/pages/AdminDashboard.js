@@ -484,12 +484,16 @@ const AdminDashboard = ({ user, setUser }) => {
             <Route path="/schools" element={renderSchoolManagement()} />
             <Route path="/batch-watermark" element={<AdminResourceWatermark />} />
             
-            {/* Resource Management - Use a wrapper component to extract category from URL */}
+            {/* Resource Management - Use a wrapper component to extract category and subcategory from URL */}
             <Route path="/resources" element={<ResourceManagement />}>
               <Route index element={<ResourcesHome />} />
               <Route 
                 path=":category" 
                 element={<AdminResourceCategory category={location.pathname.split('/').pop()} />}
+              />
+              <Route 
+                path=":category/:subcategory" 
+                element={<AdminResourceCategory category={location.pathname.split('/')[3]} subCategory={location.pathname.split('/')[4]} />}
               />
             </Route>
             

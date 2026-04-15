@@ -21,6 +21,100 @@ import {
 import { Link, useLocation } from 'react-router-dom';
 import '../styles/Sidebar.css';
 
+// Import category configuration
+const CATEGORY_CONFIG = {
+  'academic': {
+    title: 'Academic Resources',
+    description: 'Manage curriculum, worksheets, and other teaching materials',
+    subcategories: {
+      'all': 'All Academic',
+      'activity-sheet': 'Activity Sheet',
+      'assessment': 'Assessment',
+      'curriculum': 'Curriculum',
+      'manual-guidelines': 'Manual & Guidelines',
+      'study-material': 'Study Material',
+      'syllabus': 'Syllabus',
+      'teaching-aid': 'Teaching Aid',
+      'worksheet': 'Worksheet'
+    }
+  },
+  'marketing': {
+    title: 'Marketing Materials',
+    description: 'Manage brochures, banners, and promotional content',
+    subcategories: {
+      'all': 'All Marketing',
+      'advertisement': 'Advertisement',
+      'banner': 'Banner',
+      'brochure': 'Brochure',
+      'email-template': 'Email Template',
+      'flyer': 'Flyer',
+      'presentation': 'Presentation',
+      'promotional-video': 'Promotional Video',
+      'social-media': 'Social Media Post'
+    }
+  },
+  'administrative': {
+    title: 'Administrative Resources',
+    description: 'Manage forms, templates, and policy documents',
+    subcategories: {
+      'all': 'All Administrative',
+      'agreement': 'Agreement',
+      'certificate': 'Certificate',
+      'form': 'Form',
+      'guideline': 'Guideline',
+      'letter': 'Official Letter',
+      'policy': 'Policy Document',
+      'report': 'Report',
+      'template': 'Template'
+    }
+  },
+  'training': {
+    title: 'Training Resources',
+    description: 'Manage teacher training materials and guides',
+    subcategories: {
+      'all': 'All Training',
+      'certification': 'Certification Program',
+      'handbook': 'Handbook',
+      'manual': 'Training Manual',
+      'online-course': 'Online Course',
+      'orientation': 'Orientation Material',
+      'skill-development': 'Skill Development',
+      'teacher-training': 'Teacher Training',
+      'workshop': 'Workshop Material'
+    }
+  },
+  'event': {
+    title: 'Event & Celebration',
+    description: 'Manage event plans and celebration materials',
+    subcategories: {
+      'all': 'All Events',
+      'annual-day': 'Annual Day',
+      'celebration': 'Celebration Material',
+      'competition': 'Competition',
+      'cultural-event': 'Cultural Event',
+      'festival': 'Festival Celebration',
+      'graduation': 'Graduation Ceremony',
+      'parents-meeting': 'Parents Meeting',
+      'sports-day': 'Sports Day'
+    }
+  },
+  'multimedia': {
+    title: 'Multimedia Collection',
+    description: 'Manage videos, audio, and interactive content',
+    subcategories: {
+      'all': 'All Multimedia',
+      'animation': 'Animation',
+      'audio': 'Audio',
+      'graphic': 'Graphic',
+      'interactive': 'Interactive Content',
+      'photograph': 'Photograph',
+      'podcast': 'Podcast',
+      'video': 'Video',
+      'virtual-tour': 'Virtual Tour'
+    }
+  }
+};
+
 const { Sider } = Layout;
 
 const SchoolSidebar = ({ collapsed, onCollapse }) => {
@@ -28,6 +122,51 @@ const SchoolSidebar = ({ collapsed, onCollapse }) => {
   const {
     token: { colorBgContainer },
   } = theme.useToken();
+
+  // Create resource menu items with sub-categories
+  const createResourceMenuItems = () => {
+    const resourceItems = [
+      {
+        key: 'all_resources',
+        icon: <FileTextOutlined />,
+        label: <Link to="/school/resources">All Resources</Link>,
+      },
+      {
+        key: 'my_uploads',
+        icon: <CloudUploadOutlined />,
+        label: <Link to="/school/resources/my-uploads">My Uploads</Link>,
+      }
+    ];
+
+    // Add categories with their sub-categories
+    Object.entries(CATEGORY_CONFIG).forEach(([categoryKey, categoryData]) => {
+      const subCategoryItems = Object.entries(categoryData.subcategories).map(([subKey, subLabel]) => ({
+        key: `${categoryKey}_${subKey}`,
+        label: <Link to={`/school/resources/${categoryKey}/${subKey}`}>{subLabel}</Link>
+      }));
+
+      resourceItems.push({
+        key: categoryKey,
+        icon: getCategoryIcon(categoryKey),
+        label: categoryData.title,
+        children: subCategoryItems
+      });
+    });
+
+    return resourceItems;
+  };
+
+  const getCategoryIcon = (categoryKey) => {
+    const iconMap = {
+      'academic': <BookOutlined />,
+      'marketing': <FileImageOutlined />,
+      'administrative': <FileTextOutlined />,
+      'training': <FileWordOutlined />,
+      'event': <FilePptOutlined />,
+      'multimedia': <VideoCameraOutlined />
+    };
+    return iconMap[categoryKey] || <FileOutlined />;
+  };
 
   const menuItems = [
     {
@@ -39,48 +178,7 @@ const SchoolSidebar = ({ collapsed, onCollapse }) => {
       key: 'resources',
       icon: <FileOutlined />,
       label: 'Resource Management',
-      children: [
-        {
-          key: 'all_resources',
-          icon: <FileTextOutlined />,
-          label: <Link to="/school/resources">All Resources</Link>,
-        },
-        {
-          key: 'academic',
-          icon: <BookOutlined />,
-          label: <Link to="/school/resources/academic">Academic Resources</Link>,
-        },
-        {
-          key: 'marketing',
-          icon: <FileImageOutlined />,
-          label: <Link to="/school/resources/marketing">Marketing Materials</Link>,
-        },
-        {
-          key: 'administrative',
-          icon: <FileTextOutlined />,
-          label: <Link to="/school/resources/administrative">Administrative</Link>,
-        },
-        {
-          key: 'training',
-          icon: <FileWordOutlined />,
-          label: <Link to="/school/resources/training">Training Resources</Link>,
-        },
-        {
-          key: 'event',
-          icon: <FilePptOutlined />,
-          label: <Link to="/school/resources/event">Event & Celebration</Link>,
-        },
-        {
-          key: 'multimedia',
-          icon: <VideoCameraOutlined />,
-          label: <Link to="/school/resources/multimedia">Multimedia Collection</Link>,
-        },
-        {
-          key: 'my_uploads',
-          icon: <CloudUploadOutlined />,
-          label: <Link to="/school/resources/my-uploads">My Uploads</Link>,
-        }
-      ],
+      children: createResourceMenuItems()
     },
     {
       key: 'communication',

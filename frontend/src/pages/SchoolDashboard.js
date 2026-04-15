@@ -116,6 +116,7 @@ const SchoolDashboard = ({ user, setUser }) => {
             <Route path="/resources" element={<SchoolResourceManagement />}>
               <Route index element={<SchoolResourcesHome />} />
               <Route path=":category" element={<SchoolResourceCategory user={user} />} />
+              <Route path=":category/:subcategory" element={<SchoolResourceCategory user={user} />} />
               <Route path="my-uploads" element={<SchoolMyUploads user={user} />} />
             </Route>
             

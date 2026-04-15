@@ -30,6 +30,100 @@ import {
 import { Link, useLocation, useNavigate } from 'react-router-dom'; // ADDED useNavigate
 import '../styles/Sidebar.css';
 
+// Import category configuration
+const CATEGORY_CONFIG = {
+  'academic': {
+    title: 'Academic Resources',
+    description: 'Manage curriculum, worksheets, and other teaching materials',
+    subcategories: {
+      'all': 'All Academic',
+      'activity-sheet': 'Activity Sheet',
+      'assessment': 'Assessment',
+      'curriculum': 'Curriculum',
+      'manual-guidelines': 'Manual & Guidelines',
+      'study-material': 'Study Material',
+      'syllabus': 'Syllabus',
+      'teaching-aid': 'Teaching Aid',
+      'worksheet': 'Worksheet'
+    }
+  },
+  'marketing': {
+    title: 'Marketing Materials',
+    description: 'Manage brochures, banners, and promotional content',
+    subcategories: {
+      'all': 'All Marketing',
+      'advertisement': 'Advertisement',
+      'banner': 'Banner',
+      'brochure': 'Brochure',
+      'email-template': 'Email Template',
+      'flyer': 'Flyer',
+      'presentation': 'Presentation',
+      'promotional-video': 'Promotional Video',
+      'social-media': 'Social Media Post'
+    }
+  },
+  'administrative': {
+    title: 'Administrative Resources',
+    description: 'Manage forms, templates, and policy documents',
+    subcategories: {
+      'all': 'All Administrative',
+      'agreement': 'Agreement',
+      'certificate': 'Certificate',
+      'form': 'Form',
+      'guideline': 'Guideline',
+      'letter': 'Official Letter',
+      'policy': 'Policy Document',
+      'report': 'Report',
+      'template': 'Template'
+    }
+  },
+  'training': {
+    title: 'Training Resources',
+    description: 'Manage teacher training materials and guides',
+    subcategories: {
+      'all': 'All Training',
+      'certification': 'Certification Program',
+      'handbook': 'Handbook',
+      'manual': 'Training Manual',
+      'online-course': 'Online Course',
+      'orientation': 'Orientation Material',
+      'skill-development': 'Skill Development',
+      'teacher-training': 'Teacher Training',
+      'workshop': 'Workshop Material'
+    }
+  },
+  'event': {
+    title: 'Event & Celebration',
+    description: 'Manage event plans and celebration materials',
+    subcategories: {
+      'all': 'All Events',
+      'annual-day': 'Annual Day',
+      'celebration': 'Celebration Material',
+      'competition': 'Competition',
+      'cultural-event': 'Cultural Event',
+      'festival': 'Festival Celebration',
+      'graduation': 'Graduation Ceremony',
+      'parents-meeting': 'Parents Meeting',
+      'sports-day': 'Sports Day'
+    }
+  },
+  'multimedia': {
+    title: 'Multimedia Collection',
+    description: 'Manage videos, audio, and interactive content',
+    subcategories: {
+      'all': 'All Multimedia',
+      'animation': 'Animation',
+      'audio': 'Audio',
+      'graphic': 'Graphic',
+      'interactive': 'Interactive Content',
+      'photograph': 'Photograph',
+      'podcast': 'Podcast',
+      'video': 'Video',
+      'virtual-tour': 'Virtual Tour'
+    }
+  }
+};
+
 const { Sider } = Layout;
 
 const Sidebar = ({ collapsed, onCollapse }) => {
@@ -43,6 +137,53 @@ const Sidebar = ({ collapsed, onCollapse }) => {
   const {
     token: { colorBgContainer },
   } = theme.useToken();
+
+  const createResourceMenuItems = () => {
+    const resourceItems = [
+      {
+        key: 'all_resources',
+        icon: <FileTextOutlined />,
+        label: 'All Resources',
+        onClick: () => handleMenuClick('/admin/resources')
+      },
+      {
+        key: 'school_uploads',
+        icon: <UploadOutlined />,
+        label: 'School Uploads',
+        onClick: () => handleMenuClick('/admin/school-uploads')
+      }
+    ];
+
+    // Add categories with their sub-categories
+    Object.entries(CATEGORY_CONFIG).forEach(([categoryKey, categoryData]) => {
+      const subCategoryItems = Object.entries(categoryData.subcategories).map(([subKey, subLabel]) => ({
+        key: `${categoryKey}_${subKey}`,
+        label: subLabel,
+        onClick: () => handleMenuClick(`/admin/resources/${categoryKey}/${subKey}`)
+      }));
+
+      resourceItems.push({
+        key: categoryKey,
+        icon: getCategoryIcon(categoryKey),
+        label: categoryData.title,
+        children: subCategoryItems
+      });
+    });
+
+    return resourceItems;
+  };
+
+  const getCategoryIcon = (categoryKey) => {
+    const iconMap = {
+      'academic': <BookOutlined />,
+      'marketing': <FileImageOutlined />,
+      'administrative': <FileTextOutlined />,
+      'training': <FileWordOutlined />,
+      'event': <FilePptOutlined />,
+      'multimedia': <VideoCameraOutlined />
+    };
+    return iconMap[categoryKey] || <FileOutlined />;
+  };
 
   const menuItems = [
     {
@@ -67,56 +208,7 @@ const Sidebar = ({ collapsed, onCollapse }) => {
       key: 'resources',
       icon: <FileOutlined />,
       label: 'Resource Management',
-      children: [
-        {
-          key: 'all_resources',
-          icon: <FileTextOutlined />,
-          label: 'All Resources',
-          onClick: () => handleMenuClick('/admin/resources')
-        },
-        {
-          key: 'school_uploads',
-          icon: <UploadOutlined />,
-          label: 'School Uploads',
-          onClick: () => handleMenuClick('/admin/school-uploads')
-        },
-        {
-          key: 'academic',
-          icon: <BookOutlined />,
-          label: 'Academic Resources',
-          onClick: () => handleMenuClick('/admin/resources/academic')
-        },
-        {
-          key: 'marketing',
-          icon: <FileImageOutlined />,
-          label: 'Marketing Resources',
-          onClick: () => handleMenuClick('/admin/resources/marketing')
-        },
-        {
-          key: 'administrative',
-          icon: <FileTextOutlined />,
-          label: 'Administrative',
-          onClick: () => handleMenuClick('/admin/resources/administrative')
-        },
-        {
-          key: 'training',
-          icon: <FileWordOutlined />,
-          label: 'Training Resources',
-          onClick: () => handleMenuClick('/admin/resources/training')
-        },
-        {
-          key: 'event',
-          icon: <FilePptOutlined />,
-          label: 'Event & Celebration',
-          onClick: () => handleMenuClick('/admin/resources/event')
-        },
-        {
-          key: 'multimedia',
-          icon: <VideoCameraOutlined />,
-          label: 'Multimedia Collection',
-          onClick: () => handleMenuClick('/admin/resources/multimedia')
-        }
-      ],
+      children: createResourceMenuItems()
     },
     {
       key: 'analytics',
@@ -287,25 +379,6 @@ const Sidebar = ({ collapsed, onCollapse }) => {
         items={menuItems}
         style={{ borderRight: 0 }}
       />
-      <div className="logout-container">
-        <Menu
-          theme="light"
-          mode="inline"
-          className="logout-menu"
-        >
-          <Menu.Item 
-            key="logout" 
-            icon={<LogoutOutlined />}
-            onClick={() => {
-              sessionStorage.removeItem('token');
-              sessionStorage.removeItem('user');
-              window.location.href = '/';
-            }}
-          >
-            Logout
-          </Menu.Item>
-        </Menu>
-      </div>
     </Sider>
   );
 };

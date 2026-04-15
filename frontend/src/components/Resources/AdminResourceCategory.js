@@ -34,6 +34,7 @@ const CATEGORY_CONFIG = {
       'activity-sheet': 'Activity Sheet',
       'assessment': 'Assessment',
       'curriculum': 'Curriculum',
+      'manual-guidelines': 'Manual & Guidelines',
       'study-material': 'Study Material',
       'syllabus': 'Syllabus',
       'teaching-aid': 'Teaching Aid',
@@ -117,7 +118,7 @@ const CATEGORY_CONFIG = {
   }
 };
 
-const AdminResourceCategory = ({ category, title, description }) => {
+const AdminResourceCategory = ({ category, subCategory, title, description }) => {
   const [resources, setResources] = useState([]);
   const [loading, setLoading] = useState(false);
   const [statusFilter, setStatusFilter] = useState('all'); // 'all', 'pending', 'approved', 'rejected'
@@ -145,12 +146,12 @@ const AdminResourceCategory = ({ category, title, description }) => {
 
   useEffect(() => {
     setCategoryFilter(category || 'all');
-    setSubCategoryFilter('all');
-  }, [category]);
+    setSubCategoryFilter(subCategory || 'all');
+  }, [category, subCategory]);
 
   useEffect(() => {
     fetchResources();
-  }, [categoryFilter, subCategoryFilter]);
+  }, [categoryFilter, subCategoryFilter, selectedClass, selectedSubject, statusFilter]);
 
   const fetchResources = async () => {
     setLoading(true);
@@ -167,7 +168,21 @@ const AdminResourceCategory = ({ category, title, description }) => {
         params.sub_category = subCategoryFilter;
       }
       
-      console.log('Fetching resources with params:', params);
+      // Add class filter if not 'all'
+      if (selectedClass !== 'all') {
+        params.class_level = selectedClass;
+      }
+      
+      // Add subject filter if not 'all'
+      if (selectedSubject !== 'all') {
+        params.subject = selectedSubject;
+      }
+      
+      // Add status filter if not 'all'
+      if (statusFilter !== 'all') {
+        params.approval_status = statusFilter;
+      }
+      
       const response = await api.get('/admin/resources', { params });
       
       const formattedResources = response.data.map((resource, index) => {
@@ -196,7 +211,38 @@ const AdminResourceCategory = ({ category, title, description }) => {
         };
       });
       
-      setResources(formattedResources);
+      // Sort resources to ensure numbered files appear in ascending order
+      const sortedResources = formattedResources.sort((a, b) => {
+        // Extract base name and number from file names
+        const extractNumber = (name) => {
+          const match = name.match(/(.*?)(\d+)(\.[^.]+)?$/);
+          if (match) {
+            const [, base, num, ext] = match;
+            return { base, number: parseInt(num, 10), ext: ext || '' };
+          }
+          return { base: name, number: null, ext: '' };
+        };
+        
+        const aInfo = extractNumber(a.name || '');
+        const bInfo = extractNumber(b.name || '');
+        
+        // If both have numbers, sort by base name first, then by number
+        if (aInfo.number !== null && bInfo.number !== null) {
+          if (aInfo.base !== bInfo.base) {
+            return aInfo.base.localeCompare(bInfo.base);
+          }
+          return aInfo.number - bInfo.number;
+        }
+        
+        // If only one has a number, the one with number comes last
+        if (aInfo.number !== null) return 1;
+        if (bInfo.number !== null) return -1;
+        
+        // If neither has numbers, sort alphabetically
+        return (a.name || '').localeCompare(b.name || '');
+      });
+      
+      setResources(sortedResources);
     } catch (error) {
       console.error('Error fetching resources:', error);
       message.error('Failed to load resources');
@@ -829,19 +875,6 @@ const AdminResourceCategory = ({ category, title, description }) => {
               }}
               title={`PDF thumbnail - ${resource.name}`}
             />
-            <div style={{
-              position: 'absolute',
-              top: 0,
-              left: 0,
-              right: 0,
-              bottom: 0,
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              background: 'rgba(0,0,0,0.1)'
-            }}>
-              <FilePdfOutlined style={{ fontSize: '32px', color: '#ff4d4f', opacity: 0.8 }} />
-            </div>
           </div>
         </div>
       );
@@ -1036,7 +1069,7 @@ const AdminResourceCategory = ({ category, title, description }) => {
 
   const columns = [
     {
-      title: 'Resource',
+      title: 'Title',
       dataIndex: 'name',
       key: 'name',
       render: (text, record) => (
@@ -1069,6 +1102,17 @@ const AdminResourceCategory = ({ category, title, description }) => {
       width: '30%',
     },
     {
+      title: 'Sub-Title',
+      dataIndex: 'tags',
+      key: 'tags',
+      render: (tags) => {
+        if (!tags) return '-';
+        const tagArray = tags.split(',').map(tag => tag.trim()).filter(Boolean);
+        return tagArray.length > 0 ? tagArray.join(', ') : '-';
+      },
+      width: '15%',
+    },
+    {
       title: 'Status',
       dataIndex: 'approval_status',
       key: 'approval_status',
@@ -1090,7 +1134,7 @@ const AdminResourceCategory = ({ category, title, description }) => {
       width: '25%',
     },
     {
-      title: 'Class',
+      title: 'Program',
       dataIndex: 'class_level',
       key: 'class_level',
       render: (level) => level ? <Tag color="blue">{level}</Tag> : <Tag>All</Tag>,
@@ -1526,11 +1570,71 @@ const AdminResourceCategory = ({ category, title, description }) => {
       >
         <Form form={form} layout="vertical" preserve={false}>
           <Form.Item
+            name="class_level"
+            label="All Programs"
+          >
+            <Select placeholder="Select program (optional)" allowClear>
+              <Option value="Playgroup">Playgroup</Option>
+              <Option value="Nursery">Nursery</Option>
+              <Option value="LKG">LKG</Option>
+              <Option value="UKG">UKG</Option>
+            </Select>
+          </Form.Item>
+
+          <Form.Item
+            name="subject"
+            label="Subjects"
+          >
+            <Select placeholder="Select subject (optional)" allowClear>
+              {subjectOptions.map(option => (
+                <Option key={option.value} value={option.value}>
+                  {option.label}
+                </Option>
+              ))}
+            </Select>
+          </Form.Item>
+
+          {/* Sub-category selection for non-"all" categories */}
+          {categoryFilter !== 'all' && (
+            <Form.Item
+              name="sub_category"
+              label="Sub-Category"
+            >
+              <Select placeholder="Select sub-category (optional)" allowClear>
+                {Object.entries(categoryInfo.subcategories).map(([key, label]) => {
+                  if (key !== 'all') {
+                    return <Option key={key} value={key}>{label}</Option>;
+                  }
+                  return null;
+                })}
+              </Select>
+            </Form.Item>
+          )}
+
+          <Form.Item
             name="name"
-            label="Resource Name"
+            label="Title"
             rules={[{ required: true, message: 'Please enter resource name' }]}
           >
             <Input placeholder="Enter resource name" />
+          </Form.Item>
+
+          <Form.Item
+            name="tags"
+            label="Sub-Title"
+          >
+            <Select
+              mode="tags"
+              placeholder="Add sub-title (press Enter to add)"
+              style={{ width: '100%' }}
+            >
+              <Option value="worksheet">Worksheet</Option>
+              <Option value="printable">Printable</Option>
+              <Option value="activity">Activity</Option>
+              <Option value="lesson-plan">Lesson Plan</Option>
+              <Option value="assessment">Assessment</Option>
+              <Option value="template">Template</Option>
+            </Select>
           </Form.Item>
 
           <Form.Item
@@ -1552,66 +1656,6 @@ const AdminResourceCategory = ({ category, title, description }) => {
                 : 'You can select multiple files at once. They will be numbered automatically.'
               }
             </div>
-          </Form.Item>
-
-          {/* Sub-category selection for non-"all" categories */}
-          {categoryFilter !== 'all' && (
-            <Form.Item
-              name="sub_category"
-              label="Sub-category"
-            >
-              <Select placeholder="Select sub-category (optional)" allowClear>
-                {Object.entries(categoryInfo.subcategories).map(([key, label]) => {
-                  if (key !== 'all') {
-                    return <Option key={key} value={key}>{label}</Option>;
-                  }
-                  return null;
-                })}
-              </Select>
-            </Form.Item>
-          )}
-
-          <Form.Item
-            name="subject"
-            label="Subject"
-          >
-            <Select placeholder="Select subject (optional)" allowClear>
-              {subjectOptions.map(option => (
-                <Option key={option.value} value={option.value}>
-                  {option.label}
-                </Option>
-              ))}
-            </Select>
-          </Form.Item>
-
-          <Form.Item
-            name="class_level"
-            label="Class Level"
-          >
-            <Select placeholder="Select class level (optional)" allowClear>
-              <Option value="Playgroup">Playgroup</Option>
-              <Option value="Nursery">Nursery</Option>
-              <Option value="LKG">LKG</Option>
-              <Option value="UKG">UKG</Option>
-            </Select>
-          </Form.Item>
-
-          <Form.Item
-            name="tags"
-            label="Tags"
-          >
-            <Select
-              mode="tags"
-              placeholder="Add tags (press Enter to add)"
-              style={{ width: '100%' }}
-            >
-              <Option value="worksheet">Worksheet</Option>
-              <Option value="printable">Printable</Option>
-              <Option value="activity">Activity</Option>
-              <Option value="lesson-plan">Lesson Plan</Option>
-              <Option value="assessment">Assessment</Option>
-              <Option value="template">Template</Option>
-            </Select>
           </Form.Item>
 
           <Form.Item
@@ -1730,23 +1774,33 @@ const AdminResourceCategory = ({ category, title, description }) => {
       >
         <Form form={editForm} layout="vertical">
           <Form.Item
-            name="name"
-            label="Resource Name"
-            rules={[{ required: true, message: 'Please enter resource name' }]}
+            name="class_level"
+            label="All Programs"
           >
-            <Input placeholder="Enter resource name" />
+            <Select placeholder="Select program (optional)" allowClear>
+              <Option value="playgroup">Playgroup</Option>
+              <Option value="nursery">Nursery</Option>
+              <Option value="lkg">LKG</Option>
+              <Option value="ukg">UKG</Option>
+            </Select>
           </Form.Item>
           
           <Form.Item
-            name="description"
-            label="Description"
+            name="subject"
+            label="Subjects"
           >
-            <TextArea rows={3} placeholder="Enter resource description" />
+            <Select placeholder="Select subject (optional)" allowClear>
+              {subjectOptions.map(option => (
+                <Option key={option.value} value={option.value}>
+                  {option.label}
+                </Option>
+              ))}
+            </Select>
           </Form.Item>
           
           <Form.Item
             name="sub_category"
-            label="Sub-category"
+            label="Sub-Category"
           >
             <Select placeholder="Select sub-category" allowClear>
               {Object.entries(categoryInfo.subcategories || {}).map(([key, label]) => (
@@ -1756,27 +1810,30 @@ const AdminResourceCategory = ({ category, title, description }) => {
           </Form.Item>
           
           <Form.Item
-            name="class_level"
-            label="Class Level"
+            name="name"
+            label="Title"
+            rules={[{ required: true, message: 'Please enter resource name' }]}
           >
-            <Select placeholder="Select class level" allowClear>
-              <Option value="playgroup">PlayGroup</Option>
-              <Option value="nursery">Nursery</Option>
-              <Option value="lkg">LKG</Option>
-              <Option value="ukg">UKG</Option>
-            </Select>
+            <Input placeholder="Enter resource name" />
           </Form.Item>
           
           <Form.Item
             name="tags"
-            label="Tags"
+            label="Sub-Title"
           >
             <Select
               mode="tags"
-              placeholder="Enter tags (press Enter to add)"
+              placeholder="Enter sub-title (press Enter to add)"
               style={{ width: '100%' }}
             >
             </Select>
+          </Form.Item>
+          
+          <Form.Item
+            name="description"
+            label="Description"
+          >
+            <TextArea rows={3} placeholder="Enter resource description" />
           </Form.Item>
           
           <Form.Item>

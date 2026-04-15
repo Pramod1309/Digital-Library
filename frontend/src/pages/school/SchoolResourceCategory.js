@@ -40,43 +40,109 @@ const getStaticFileUrl = (path) => {
 const { Option } = Select;
 const { TextArea } = Input;
 
-// Sub-category mapping for all categories
-const subCategoryMap = {
-  academic: [
-    'Activity Sheets', 'Assessments', 'Flashcards', 'Handwriting Practice',
-    'Number & Counting Activities', 'Phonics Materials', 'Rhymes & Poems',
-    'Story-based Learning', 'Worksheets'
-  ],
-  marketing: [
-    'Admission Campaign Designs', 'Banners', 'Brochures', 'Email Templates', 'Flyers',
-    'Pamphlets', 'Posters', 'Social Media Posts', 'Standee Designs', 'Video Ads'
-  ],
-  administrative: [
-    'Admission Forms', 'Attendance Sheets', 'Certificates', 'Circulars & Notices',
-    'Fee Management Sheets', 'ID Cards', 'Policy Documents', 'Report Cards',
-    'Staff Records', 'Student Records Templates'
-  ],
-  training: [
-    'Activity Training Videos', 'Child Psychology Basics', 'Classroom Management Guides',
-    'First Aid Guides', 'Lesson Delivery Techniques', 'Parent Communication Training',
-    'Safety Training', 'Skill Development Programs', 'Teacher Training Modules', 'Teaching Methods'
-  ],
-  event: [
-    'Activity Plans', 'Annual Day', 'Certificates & Awards', 'Competition Materials',
-    'Decoration Ideas', 'Fancy Dress Ideas', 'Festival Celebrations', 'Invitation Cards',
-    'Sports Day', 'Stage Scripts'
-  ],
-  multimedia: [
-    'Audio Stories', 'Classroom Recordings', 'DIY Activity Videos', 'Dance Videos',
-    'Educational Videos', 'Interactive Games', 'Learning Animations', 'Music & Sounds',
-    'Rhymes Videos', 'Story Videos'
-  ]
+// Import category configuration (same as admin component)
+const CATEGORY_CONFIG = {
+  'all': {
+    title: 'All Resources',
+    description: 'Browse every approved resource available to your school',
+    subcategories: {}
+  },
+  'academic': {
+    title: 'Academic Resources',
+    description: 'Manage curriculum, worksheets, and other teaching materials',
+    subcategories: {
+      'all': 'All Academic',
+      'activity-sheet': 'Activity Sheet',
+      'assessment': 'Assessment',
+      'curriculum': 'Curriculum',
+      'manual-guidelines': 'Manual & Guidelines',
+      'study-material': 'Study Material',
+      'syllabus': 'Syllabus',
+      'teaching-aid': 'Teaching Aid',
+      'worksheet': 'Worksheet'
+    }
+  },
+  'marketing': {
+    title: 'Marketing Materials',
+    description: 'Manage brochures, banners, and promotional content',
+    subcategories: {
+      'advertisement': 'Advertisement',
+      'all': 'All Marketing',
+      'banner': 'Banner',
+      'brochure': 'Brochure',
+      'email-template': 'Email Template',
+      'flyer': 'Flyer',
+      'presentation': 'Presentation',
+      'promotional-video': 'Promotional Video',
+      'social-media': 'Social Media Post'
+    }
+  },
+  'administrative': {
+    title: 'Administrative Resources',
+    description: 'Manage forms, templates, and policy documents',
+    subcategories: {
+      'agreement': 'Agreement',
+      'all': 'All Administrative',
+      'certificate': 'Certificate',
+      'form': 'Form',
+      'guideline': 'Guideline',
+      'letter': 'Official Letter',
+      'policy': 'Policy Document',
+      'report': 'Report',
+      'template': 'Template'
+    }
+  },
+  'training': {
+    title: 'Training Resources',
+    description: 'Manage teacher training materials and guides',
+    subcategories: {
+      'all': 'All Training',
+      'certification': 'Certification Program',
+      'handbook': 'Handbook',
+      'manual': 'Training Manual',
+      'online-course': 'Online Course',
+      'orientation': 'Orientation Material',
+      'skill-development': 'Skill Development',
+      'teacher-training': 'Teacher Training',
+      'workshop': 'Workshop Material'
+    }
+  },
+  'event': {
+    title: 'Event & Celebration',
+    description: 'Manage event plans and celebration materials',
+    subcategories: {
+      'all': 'All Events',
+      'annual-day': 'Annual Day',
+      'celebration': 'Celebration Material',
+      'competition': 'Competition',
+      'cultural-event': 'Cultural Event',
+      'festival': 'Festival Celebration',
+      'graduation': 'Graduation Ceremony',
+      'parents-meeting': 'Parents Meeting',
+      'sports-day': 'Sports Day'
+    }
+  },
+  'multimedia': {
+    title: 'Multimedia Collection',
+    description: 'Manage videos, audio, and interactive content',
+    subcategories: {
+      'all': 'All Multimedia',
+      'animation': 'Animation',
+      'audio': 'Audio',
+      'graphic': 'Graphic',
+      'interactive': 'Interactive Content',
+      'photograph': 'Photograph',
+      'podcast': 'Podcast',
+      'video': 'Video',
+      'virtual-tour': 'Virtual Tour'
+    }
+  }
 };
 
-// Class options - Only PlayGroup, Nursery, LKG, UKG
+// Class options - Only Playgroup, Nursery, LKG, UKG
 const classOptions = [
   { value: 'all', label: 'All Classes' },
-  { value: 'playgroup', label: 'PlayGroup' },
+  { value: 'playgroup', label: 'Playgroup' },
   { value: 'nursery', label: 'Nursery' },
   { value: 'lkg', label: 'LKG' },
   { value: 'ukg', label: 'UKG' }
@@ -93,6 +159,104 @@ const subjectOptions = [
   { value: 'music', label: 'Music' },
   { value: 'pe', label: 'Physical Education' }
 ];
+
+const CLASS_LABELS = {
+  all: 'All Classes',
+  playgroup: 'Playgroup',
+  nursery: 'Nursery',
+  lkg: 'LKG',
+  ukg: 'UKG'
+};
+
+const SUBJECT_LABELS = {
+  all: 'All Subjects',
+  english: 'English',
+  maths: 'Maths',
+  evs: 'EVS',
+  hindi: 'Hindi',
+  arts: 'Arts & Crafts',
+  music: 'Music',
+  pe: 'Physical Education'
+};
+
+const normalizeToken = (value) => (
+  (value ?? '')
+    .toString()
+    .trim()
+    .toLowerCase()
+    .replace(/&/g, 'and')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim()
+);
+
+const CLASS_ALIASES = {
+  all: 'all',
+  playgroup: 'playgroup',
+  'play group': 'playgroup',
+  nursery: 'nursery',
+  lkg: 'lkg',
+  ukg: 'ukg'
+};
+
+const SUBJECT_ALIASES = Object.entries(SUBJECT_LABELS).reduce((aliases, [key, label]) => {
+  aliases[normalizeToken(key)] = key;
+  aliases[normalizeToken(label)] = key;
+  return aliases;
+}, {});
+
+const SUB_CATEGORY_ALIASES = Object.values(CATEGORY_CONFIG).reduce((aliases, categoryData) => {
+  Object.entries(categoryData.subcategories || {}).forEach(([key, label]) => {
+    const normalizedKey = normalizeToken(key);
+    const normalizedLabel = normalizeToken(label);
+
+    aliases[normalizedKey] = key;
+    aliases[normalizedLabel] = key;
+
+    if (key !== 'all') {
+      aliases[`${normalizedKey}s`] = key;
+      aliases[`${normalizedLabel}s`] = key;
+    }
+  });
+
+  return aliases;
+}, {});
+
+const normalizeClassValue = (value) => {
+  const normalizedValue = normalizeToken(value);
+  return CLASS_ALIASES[normalizedValue] || normalizedValue.replace(/\s+/g, '');
+};
+
+const normalizeSubjectValue = (value) => {
+  const normalizedValue = normalizeToken(value);
+  return SUBJECT_ALIASES[normalizedValue] || normalizedValue;
+};
+
+const normalizeSubCategoryValue = (value) => {
+  const normalizedValue = normalizeToken(value);
+  return SUB_CATEGORY_ALIASES[normalizedValue] || normalizedValue.replace(/\s+/g, '-');
+};
+
+const normalizeStatusValue = (value) => normalizeToken(value);
+
+const getClassLabel = (value) => CLASS_LABELS[normalizeClassValue(value)] || value || CLASS_LABELS.all;
+
+const getSubjectLabel = (value) => SUBJECT_LABELS[normalizeSubjectValue(value)] || value || SUBJECT_LABELS.all;
+
+const getSubCategoryLabel = (value, category) => {
+  if (!value) return '-';
+
+  const normalizedValue = normalizeSubCategoryValue(value);
+
+  if (category && CATEGORY_CONFIG[category]?.subcategories?.[normalizedValue]) {
+    return CATEGORY_CONFIG[category].subcategories[normalizedValue];
+  }
+
+  const matchingCategory = Object.values(CATEGORY_CONFIG).find(
+    (categoryData) => categoryData.subcategories?.[normalizedValue]
+  );
+
+  return matchingCategory?.subcategories?.[normalizedValue] || value;
+};
 
 // TextOverlay Component - Renders text on document (no controls here)
 const TextOverlay = ({ 
@@ -398,7 +562,7 @@ const LogoOverlay = ({
 };
 
 const SchoolResourceCategory = ({ user }) => {
-  const { category: urlCategory } = useParams();
+  const { category: urlCategory, subcategory: urlSubCategory } = useParams();
   const [resources, setResources] = useState([]);
   const [loading, setLoading] = useState(false);
   const [isModalVisible, setIsModalVisible] = useState(false);
@@ -493,17 +657,19 @@ const SchoolResourceCategory = ({ user }) => {
     };
   }, [isDraggingLogo, isDraggingText]);
   
-  // Update categoryFilter when urlCategory changes
+  // Update categoryFilter and subCategoryFilter when URL params change
   useEffect(() => {
-    if (urlCategory) {
-      setCategoryFilter(urlCategory);
-    }
-  }, [urlCategory]);
+    setCategoryFilter(urlCategory || 'all');
+    setSubCategoryFilter(urlSubCategory || 'all');
+  }, [urlCategory, urlSubCategory]);
   
   useEffect(() => {
     fetchResources();
+  }, [categoryFilter, user.school_id]);
+
+  useEffect(() => {
     fetchSchoolInfo();
-  }, [categoryFilter, subCategoryFilter, subjectFilter, user.school_id]);
+  }, [user.school_id]);
 
   const fetchResources = async () => {
     setLoading(true);
@@ -530,11 +696,47 @@ const SchoolResourceCategory = ({ user }) => {
           file_path: file_path,
           is_own_upload: isOwnUpload,
           display_status: isOwnUpload ? resource.approval_status : 'approved',
-          sub_category: resource.sub_category || resource.tags || ''
+          sub_category: resource.sub_category || resource.tags || '',
+          normalized_class_level: normalizeClassValue(resource.class_level),
+          normalized_subject: normalizeSubjectValue(resource.subject),
+          normalized_sub_category: normalizeSubCategoryValue(resource.sub_category || resource.tags || ''),
+          normalized_status: normalizeStatusValue(isOwnUpload ? resource.approval_status : 'approved'),
+          school_download_count: resource.school_download_count || 0
         };
       });
       
-      setResources(formattedResources);
+      // Sort resources to ensure numbered files appear in ascending order
+      const sortedResources = formattedResources.sort((a, b) => {
+        // Extract base name and number from file names
+        const extractNumber = (name) => {
+          const match = name.match(/(.*?)(\d+)(\.[^.]+)?$/);
+          if (match) {
+            const [, base, num, ext] = match;
+            return { base, number: parseInt(num, 10), ext: ext || '' };
+          }
+          return { base: name, number: null, ext: '' };
+        };
+        
+        const aInfo = extractNumber(a.name || '');
+        const bInfo = extractNumber(b.name || '');
+        
+        // If both have numbers, sort by base name first, then by number
+        if (aInfo.number !== null && bInfo.number !== null) {
+          if (aInfo.base !== bInfo.base) {
+            return aInfo.base.localeCompare(bInfo.base);
+          }
+          return aInfo.number - bInfo.number;
+        }
+        
+        // If only one has a number, the one with number comes last
+        if (aInfo.number !== null) return 1;
+        if (bInfo.number !== null) return -1;
+        
+        // If neither has numbers, sort alphabetically
+        return (a.name || '').localeCompare(b.name || '');
+      });
+      
+      setResources(sortedResources);
     } catch (error) {
       console.error('Error fetching resources:', error);
       message.error('Failed to load resources');
@@ -581,14 +783,19 @@ const SchoolResourceCategory = ({ user }) => {
   }
 };
 
+  const handleCategoryChange = (nextCategory) => {
+    setCategoryFilter(nextCategory);
+    setSubCategoryFilter('all');
+  };
+
   const categoryMenuItems = [
-    { key: 'academic', label: 'Academic Resources', onClick: () => setCategoryFilter('academic') },
-    { key: 'marketing', label: 'Marketing Materials', onClick: () => setCategoryFilter('marketing') },
-    { key: 'administrative', label: 'Administrative Resources', onClick: () => setCategoryFilter('administrative') },
-    { key: 'training', label: 'Training Resources', onClick: () => setCategoryFilter('training') },
-    { key: 'event', label: 'Event & Celebration', onClick: () => setCategoryFilter('event') },
-    { key: 'multimedia', label: 'Multimedia Collection', onClick: () => setCategoryFilter('multimedia') },
-    { key: 'all', label: 'All Categories', onClick: () => setCategoryFilter('all') }
+    { key: 'academic', label: CATEGORY_CONFIG.academic.title, onClick: () => handleCategoryChange('academic') },
+    { key: 'marketing', label: CATEGORY_CONFIG.marketing.title, onClick: () => handleCategoryChange('marketing') },
+    { key: 'administrative', label: CATEGORY_CONFIG.administrative.title, onClick: () => handleCategoryChange('administrative') },
+    { key: 'training', label: CATEGORY_CONFIG.training.title, onClick: () => handleCategoryChange('training') },
+    { key: 'event', label: CATEGORY_CONFIG.event.title, onClick: () => handleCategoryChange('event') },
+    { key: 'multimedia', label: CATEGORY_CONFIG.multimedia.title, onClick: () => handleCategoryChange('multimedia') },
+    { key: 'all', label: 'All Categories', onClick: () => handleCategoryChange('all') }
   ];
 
   const handleUpload = async () => {
@@ -1169,6 +1376,15 @@ const SchoolResourceCategory = ({ user }) => {
       document.body.removeChild(link);
       window.URL.revokeObjectURL(blobUrl);
       
+      // Update school download count in UI
+      setResources(prevResources =>
+        prevResources.map(res =>
+          res.resource_id === record.resource_id
+            ? { ...res, school_download_count: (res.school_download_count || 0) + 1 }
+            : res
+        )
+      );
+      
       message.success(format === 'pdf' ? 'PDF download started with school branding!' : 'Download started with school branding!');
     } catch (error) {
       console.error('Download error:', error);
@@ -1443,13 +1659,15 @@ const SchoolResourceCategory = ({ user }) => {
   };
 
   const filteredResources = resources.filter(resource => {
-    const matchesSearch = resource.name?.toLowerCase().includes(searchText.toLowerCase()) ||
-      resource.description?.toLowerCase().includes(searchText.toLowerCase());
-    const matchesClass = selectedClass === 'all' || resource.class_level === selectedClass;
-    const matchesSubject = subjectFilter === 'all' || resource.subject === subjectFilter;
-    const matchesSubCategory = subCategoryFilter === 'all' || resource.sub_category === subCategoryFilter;
-    const matchesStatus = selectedStatus === 'all' || resource.display_status === selectedStatus;
-    
+    const normalizedSearchText = searchText.trim().toLowerCase();
+    const matchesSearch = !normalizedSearchText ||
+      resource.name?.toLowerCase().includes(normalizedSearchText) ||
+      resource.description?.toLowerCase().includes(normalizedSearchText);
+    const matchesClass = selectedClass === 'all' || resource.normalized_class_level === selectedClass;
+    const matchesSubject = subjectFilter === 'all' || resource.normalized_subject === subjectFilter;
+    const matchesSubCategory = subCategoryFilter === 'all' || resource.normalized_sub_category === subCategoryFilter;
+    const matchesStatus = selectedStatus === 'all' || resource.normalized_status === selectedStatus;
+
     return matchesSearch && matchesClass && matchesSubject && matchesSubCategory && matchesStatus;
   });
 
@@ -1541,11 +1759,32 @@ const SchoolResourceCategory = ({ user }) => {
       );
     }
 
-    // PDFs
+    // PDFs - show first page as thumbnail
     if (fileType.includes('pdf') || fileExtension === 'pdf') {
       return (
-        <div style={{ height: '150px', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#f5f5f5' }}>
-          <FilePdfOutlined style={{ fontSize: '48px', color: '#ff4d4f' }} />
+        <div
+          style={{
+            height: '150px',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            background: '#f5f5f5',
+            overflow: 'hidden',
+            position: 'relative'
+          }}
+        >
+          <div style={{ position: 'relative', width: '100%', height: '100%' }}>
+            <iframe
+              src={`${fileUrl}#page=1&toolbar=0&navpanes=0&scrollbar=0&zoom=50`}
+              style={{
+                width: '100%',
+                height: '100%',
+                border: 'none',
+                pointerEvents: 'none'
+              }}
+              title={`PDF thumbnail - ${resource.name}`}
+            />
+          </div>
         </div>
       );
     }
@@ -1560,7 +1799,7 @@ const SchoolResourceCategory = ({ user }) => {
 
   const columns = [
     {
-      title: 'Resource',
+      title: 'Title',
       dataIndex: 'name',
       key: 'name',
       render: (text, record) => (
@@ -1568,61 +1807,96 @@ const SchoolResourceCategory = ({ user }) => {
           {getFileIcon(record.file_type, 24)}
           <div>
             <div>{text}</div>
+            {record.sub_category && (
+              <div style={{ fontSize: '11px', color: '#1890ff', marginTop: '2px' }}>
+                📁 {getSubCategoryLabel(record.sub_category, record.category)}
+              </div>
+            )}
             {record.is_own_upload && <Tag color="blue" style={{ marginTop: 4 }}>Your Upload</Tag>}
           </div>
         </Space>
       ),
-      width: '25%',
+      width: '20%',
     },
     {
-      title: 'Class',
+      title: 'Program',
       dataIndex: 'class_level',
       key: 'class_level',
-      render: (level) => {
-        const classMap = {
-          'playgroup': 'PlayGroup',
-          'nursery': 'Nursery',
-          'lkg': 'LKG',
-          'ukg': 'UKG',
-          'all': 'All Classes'
-        };
-        const displayLevel = classMap[level] || level || 'All Classes';
-        return <Tag color="blue">{displayLevel}</Tag>;
-      },
-      width: '10%',
+      render: (level) => <Tag color="blue">{getClassLabel(level)}</Tag>,
+      width: '8%',
     },
     {
       title: 'Subject',
       dataIndex: 'subject',
       key: 'subject',
-      render: (subject) => {
-        const subjectMap = {
-          'english': 'English',
-          'maths': 'Maths',
-          'evs': 'EVS',
-          'hindi': 'Hindi',
-          'arts': 'Arts & Crafts',
-          'music': 'Music',
-          'pe': 'Physical Education',
-          'all': 'All Subjects'
-        };
-        const displaySubject = subjectMap[subject] || subject || 'All Subjects';
-        return <Tag color="green">{displaySubject}</Tag>;
-      },
-      width: '10%',
+      render: (subject) => <Tag color="green">{getSubjectLabel(subject)}</Tag>,
+      width: '8%',
     },
     {
-      title: 'Sub-category',
+      title: 'Sub-Category',
       dataIndex: 'sub_category',
       key: 'sub_category',
-      render: (sub) => sub ? <Tag color="purple">{sub}</Tag> : '-',
+      render: (sub, record) => sub ? <Tag color="purple">{getSubCategoryLabel(sub, record.category)}</Tag> : '-',
+      width: '12%',
+    },
+    {
+      title: 'Sub-Title',
+      dataIndex: 'tags',
+      key: 'tags',
+      render: (tags) => tags ? (
+        <div style={{ maxWidth: '150px' }}>
+          {tags.split(',').map((tag, index) => (
+            <Tag key={index} size="small" style={{ margin: '1px' }}>{tag.trim()}</Tag>
+          ))}
+        </div>
+      ) : '-',
+      width: '12%',
+    },
+    {
+      title: 'Description',
+      dataIndex: 'description',
+      key: 'description',
+      ellipsis: true,
+      render: (text) => text ? (
+        <Tooltip title={text}>
+          <span style={{ maxWidth: '150px', display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {text}
+          </span>
+        </Tooltip>
+      ) : '-',
       width: '15%',
+    },
+    {
+      title: 'Size',
+      dataIndex: 'file_size',
+      key: 'file_size',
+      render: (size) => {
+        if (!size) return '-';
+        return size < 1024 * 1024
+          ? `${(size / 1024).toFixed(1)} KB`
+          : `${(size / (1024 * 1024)).toFixed(2)} MB`;
+      },
+      width: '8%',
+    },
+    {
+      title: 'Downloads',
+      dataIndex: 'school_download_count',
+      key: 'school_download_count',
+      render: (count) => <Badge count={count || 0} showZero style={{ backgroundColor: '#52c41a' }} />,
+      width: '8%',
+    },
+    {
+      title: 'Uploaded',
+      dataIndex: 'created_at',
+      key: 'created_at',
+      render: (date) => date ? new Date(date).toLocaleDateString() : '-',
+      width: '8%',
     },
     {
       title: 'Status',
       key: 'status',
       render: (_, record) => getStatusTag(record),
-      width: '12%',
+      width: '8%',
     },
     {
       title: 'Actions',
@@ -1643,31 +1917,13 @@ const SchoolResourceCategory = ({ user }) => {
           </Tooltip>
         </Space>
       ),
-      width: '10%',
+      width: '8%',
     },
   ];
 
   const renderGridView = () => (
     <Row gutter={[16, 16]}>
       {filteredResources.map(resource => {
-        const classMap = {
-          'playgroup': 'PlayGroup',
-          'nursery': 'Nursery',
-          'lkg': 'LKG',
-          'ukg': 'UKG',
-          'all': 'All Classes'
-        };
-        const subjectMap = {
-          'english': 'English',
-          'maths': 'Maths',
-          'evs': 'EVS',
-          'hindi': 'Hindi',
-          'arts': 'Arts & Crafts',
-          'music': 'Music',
-          'pe': 'Physical Education',
-          'all': 'All Subjects'
-        };
-        
         return (
           <Col xs={24} sm={12} md={8} lg={6} key={resource.key}>
             <Card
@@ -1676,10 +1932,25 @@ const SchoolResourceCategory = ({ user }) => {
               cover={
                 <div style={{ cursor: 'pointer' }} onClick={() => handlePreview(resource)}>
                   {renderThumbnail(resource)}
-                  {resource.is_own_upload && (
+                  {resource.sub_category && (
                     <div style={{
                       position: 'absolute',
                       top: 8,
+                      left: 8,
+                      background: 'rgba(24, 144, 255, 0.8)',
+                      color: 'white',
+                      padding: '2px 6px',
+                      borderRadius: '4px',
+                      fontSize: '10px',
+                      fontWeight: 'bold'
+                    }}>
+                      {getSubCategoryLabel(resource.sub_category, resource.category)?.substring(0, 12) || resource.sub_category?.substring(0, 12)}
+                    </div>
+                  )}
+                  {resource.is_own_upload && (
+                    <div style={{
+                      position: 'absolute',
+                      top: resource.sub_category ? 32 : 8,
                       left: 8,
                       background: 'rgba(24, 144, 255, 0.9)',
                       color: 'white',
@@ -1722,9 +1993,12 @@ const SchoolResourceCategory = ({ user }) => {
                   {resource.description || 'No description provided'}
                 </div>
                 <Space size={[4, 4]} wrap>
-                  <Tag color="blue">{classMap[resource.class_level] || resource.class_level || 'All Classes'}</Tag>
-                  <Tag color="green">{subjectMap[resource.subject] || resource.subject || 'All Subjects'}</Tag>
-                  {resource.sub_category && <Tag color="purple">{resource.sub_category}</Tag>}
+                  <Tag color="blue">{getClassLabel(resource.class_level)}</Tag>
+                  <Tag color="green">{getSubjectLabel(resource.subject)}</Tag>
+                  {resource.sub_category && <Tag color="purple">{getSubCategoryLabel(resource.sub_category, resource.category)}</Tag>}
+                  {resource.tags && resource.tags.split(',').map((tag, index) => (
+                    <Tag key={index} color="default" style={{ margin: '1px', fontSize: '10px' }}>{tag.trim()}</Tag>
+                  ))}
                   {getStatusTag(resource)}
                 </Space>
               </div>
@@ -1749,29 +2023,11 @@ const SchoolResourceCategory = ({ user }) => {
   };
 
   const getCategoryDisplayName = (category) => {
-    if (category === 'all') return 'All Resources';
-    const names = {
-      academic: 'Academic Resources',
-      marketing: 'Marketing Materials',
-      administrative: 'Administrative Resources',
-      training: 'Training Resources',
-      event: 'Event & Celebration',
-      multimedia: 'Multimedia Collection'
-    };
-    return names[category] || category;
+    return CATEGORY_CONFIG[category]?.title || category || CATEGORY_CONFIG.all.title;
   };
 
   const getCategoryDescription = (category) => {
-    const descriptions = {
-      academic: 'Worksheets, lesson plans, assessments, and teaching materials',
-      marketing: 'Posters, flyers, banners, and promotional content',
-      administrative: 'Forms, templates, and policy documents',
-      training: 'Teacher training modules and professional development',
-      event: 'Event plans, celebration materials, and certificates',
-      multimedia: 'Videos, audio, and interactive content',
-      all: 'Browse all resource categories'
-    };
-    return descriptions[category] || `Manage ${category} resources`;
+    return CATEGORY_CONFIG[category]?.description || `Manage ${category} resources`;
   };
 
   return (
@@ -1809,11 +2065,11 @@ const SchoolResourceCategory = ({ user }) => {
               style={{ width: 150 }}
               placeholder="Filter by class"
             >
-              <Option value="all">All Classes</Option>
-              <Option value="playgroup">PlayGroup</Option>
-              <Option value="nursery">Nursery</Option>
-              <Option value="lkg">LKG</Option>
-              <Option value="ukg">UKG</Option>
+              {classOptions.map(option => (
+                <Option key={option.value} value={option.value}>
+                  {option.label}
+                </Option>
+              ))}
             </Select>
             
             {/* Subject Filter */}
@@ -1823,28 +2079,27 @@ const SchoolResourceCategory = ({ user }) => {
               style={{ width: 150 }}
               placeholder="Filter by subject"
             >
-              <Option value="all">All Subjects</Option>
-              <Option value="english">English</Option>
-              <Option value="maths">Maths</Option>
-              <Option value="evs">EVS</Option>
-              <Option value="hindi">Hindi</Option>
-              <Option value="arts">Arts & Crafts</Option>
-              <Option value="music">Music</Option>
-              <Option value="pe">Physical Education</Option>
+              {subjectOptions.map(option => (
+                <Option key={option.value} value={option.value}>
+                  {option.label}
+                </Option>
+              ))}
             </Select>
             
             {/* Sub-category Filter */}
             <Select
               value={subCategoryFilter}
-              onChange={setSubCategoryFilter}
+              onChange={(value) => setSubCategoryFilter(value || 'all')}
               style={{ width: 180 }}
               placeholder="Filter by sub-category"
               allowClear
             >
               <Option value="all">All Sub-categories</Option>
-              {(subCategoryMap[categoryFilter] || []).map(sub => (
-                <Option key={sub} value={sub}>{sub}</Option>
-              ))}
+              {CATEGORY_CONFIG[categoryFilter] && Object.entries(CATEGORY_CONFIG[categoryFilter].subcategories)
+                .filter(([key]) => key !== 'all')
+                .map(([key, label]) => (
+                  <Option key={key} value={key}>{label}</Option>
+                ))}
             </Select>
             
             {/* Status Filter */}

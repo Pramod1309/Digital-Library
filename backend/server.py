@@ -1952,6 +1952,10 @@ async def update_resource(
 async def get_school_resources(
     category: Optional[str] = None,
     school_id: Optional[str] = None,
+    class_level: Optional[str] = None,
+    subject: Optional[str] = None,
+    sub_category: Optional[str] = None,
+    approval_status: Optional[str] = None,
     db: Session = Depends(get_db)
 ):
     """Get resources visible to schools (approved admin resources + own uploads)"""
@@ -1960,8 +1964,25 @@ async def get_school_resources(
         (Resource.uploaded_by_id == school_id)
     )
     
+    # Apply category filter
     if category:
         query = query.filter(Resource.category == category)
+    
+    # Apply sub-category filter
+    if sub_category:
+        query = query.filter(Resource.sub_category == sub_category)
+    
+    # Apply class level filter
+    if class_level:
+        query = query.filter(Resource.class_level == class_level)
+    
+    # Apply subject filter
+    if subject:
+        query = query.filter(Resource.subject == subject)
+    
+    # Apply approval status filter
+    if approval_status:
+        query = query.filter(Resource.approval_status == approval_status)
     
     # Only show approved resources or school's own pending uploads
     query = query.filter(
