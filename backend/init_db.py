@@ -154,27 +154,50 @@ def migrate_database():
         db.close()
 
 def seed_admin():
-    """Seed the admin user"""
+    """Seed the admin users"""
     db = SessionLocal()
     try:
-        # Check if admin already exists
-        existing_admin = db.query(Admin).filter(Admin.email == "pramodjadhav1876@gmail.com").first()
+        # Admin credentials to seed
+        admin_credentials = [
+            {
+                "email": "pramodjadhav1876@gmail.com",
+                "password": "Pramod@1309"
+            },
+            {
+                "email": "wli.sonam2025@gmail.com",
+                "password": "Sonam@2026"
+            },
+            {
+                "email": "wli.dipali2025@gmail.com",
+                "password": "Dipali@2026"
+            },
+            {
+                "email": "darshanap@wonderlearning.in",
+                "password": "Darshana@2026"
+            }
+        ]
         
-        if not existing_admin:
-            admin_password = "Pramod@1309"
-            admin_password_hash = pwd_context.hash(admin_password)
+        for admin_creds in admin_credentials:
+            # Check if admin already exists
+            existing_admin = db.query(Admin).filter(Admin.email == admin_creds["email"]).first()
             
-            admin = Admin(
-                email="pramodjadhav1876@gmail.com",
-                password_plain=admin_password,
-                password_hash=admin_password_hash
-            )
-            
-            db.add(admin)
-            db.commit()
-            print("✓ Admin user seeded successfully")
-        else:
-            print("✓ Admin user already exists")
+            if not existing_admin:
+                admin_password_hash = pwd_context.hash(admin_creds["password"])
+                
+                admin = Admin(
+                    email=admin_creds["email"],
+                    password_plain=admin_creds["password"],
+                    password_hash=admin_password_hash
+                )
+                
+                db.add(admin)
+                print(f"✓ Admin user {admin_creds['email']} seeded successfully")
+            else:
+                print(f"✓ Admin user {admin_creds['email']} already exists")
+        
+        db.commit()
+        print("✓ All admin users processed successfully")
+        
     except Exception as e:
         print(f"Error seeding admin: {e}")
         db.rollback()

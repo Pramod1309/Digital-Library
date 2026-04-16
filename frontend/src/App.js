@@ -25,6 +25,18 @@ function App() {
               <Navigate to="/school" />
             )
           ) : (
+            <Navigate to="/login" />
+          )} 
+        />
+        <Route 
+          path="/login" 
+          element={user ? (
+            user.user_type === 'admin' ? (
+              <Navigate to="/admin" />
+            ) : (
+              <Navigate to="/school" />
+            )
+          ) : (
             <LoginPage setUser={setUser} />
           )} 
         />
@@ -33,7 +45,7 @@ function App() {
           element={user && user.user_type === 'admin' ? (
             <AdminDashboard user={user} setUser={setUser} />
           ) : (
-            <Navigate to="/" />
+            <Navigate to="/login" />
           )} 
         />
         <Route 
@@ -41,7 +53,7 @@ function App() {
           element={user && user.user_type === 'school' ? (
             <SchoolDashboard user={user} setUser={setUser} />
           ) : (
-            <Navigate to="/" />
+            <Navigate to="/login" />
           )} 
         />
       </Routes>
