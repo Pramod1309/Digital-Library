@@ -1597,14 +1597,18 @@ def get_next_available_school_id(db: Session) -> str:
     return str(existing_ids[-1] + 1)
 
 @api_router.post("/admin/generate-qr")
-async def generate_qr_code(db: Session = Depends(get_db)):
+async def generate_qr_code(request: Request, db: Session = Depends(get_db)):
     """Generate QR code for school registration"""
     try:
-        # Better environment detection for production
+        # Get the actual request host to determine environment
+        request_host = request.headers.get("host", "")
+        request_url = str(request.url)
+        
+        # More reliable production detection using request host
         is_production = (
+            "koshquest.in" in request_host or
+            "koshquest.in" in request_url or
             config.environment == "production" or 
-            "koshquest.in" in config.domain or
-            "koshquest.in" in config.backend_url or
             os.environ.get("ENVIRONMENT") == "production"
         )
         
@@ -1636,6 +1640,8 @@ async def generate_qr_code(db: Session = Depends(get_db)):
             "environment": environment,
             "qr_filename": qr_image_filename,
             "is_production": is_production,
+            "request_host": request_host,
+            "request_url": request_url,
             "message": "QR code generated successfully"
         }
         
