@@ -1600,19 +1600,28 @@ def get_next_available_school_id(db: Session) -> str:
 async def generate_qr_code(db: Session = Depends(get_db)):
     """Generate QR code for school registration"""
     try:
-        # Environment-aware registration URL and QR image
-        if config.environment == "production":
+        # Better environment detection for production
+        is_production = (
+            config.environment == "production" or 
+            "koshquest.in" in config.domain or
+            "koshquest.in" in config.backend_url or
+            os.environ.get("ENVIRONMENT") == "production"
+        )
+        
+        if is_production:
             registration_url = "https://koshquest.in/register-school"
             qr_image_filename = "school_registration_qr_production.png"
+            environment = "production"
         else:
             registration_url = "http://localhost:3000/register-school"
             qr_image_filename = "school_registration_qr_localhost.png"
+            environment = "development"
         
         # Path to environment-specific QR image
         qr_image_path = ROOT_DIR / "public" / qr_image_filename
         
         if not qr_image_path.exists():
-            raise HTTPException(status_code=404, detail="QR code image not found")
+            raise HTTPException(status_code=404, detail="QR code image not found: {qr_image_filename}")
         
         # Read the static QR image
         with open(qr_image_path, "rb") as qr_file:
@@ -1624,8 +1633,9 @@ async def generate_qr_code(db: Session = Depends(get_db)):
         return {
             "qr_code": f"data:image/png;base64,{qr_base64}",
             "registration_url": registration_url,
-            "environment": config.environment,
+            "environment": environment,
             "qr_filename": qr_image_filename,
+            "is_production": is_production,
             "message": "QR code generated successfully"
         }
         
