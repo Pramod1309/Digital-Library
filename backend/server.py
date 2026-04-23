@@ -26,6 +26,8 @@ import zipfile
 import json
 import asyncio
 from types import SimpleNamespace
+import qrcode
+import base64
 
 
 # Import database
@@ -80,6 +82,9 @@ app.mount("/uploads", StaticFiles(directory=str(ROOT_DIR / "uploads")), name="up
 
 # Also serve uploads through /api/uploads for proper routing
 app.mount("/api/uploads", StaticFiles(directory=str(ROOT_DIR / "uploads")), name="api_uploads")
+
+# Mount public directory for static files like QR code images
+app.mount("/public", StaticFiles(directory=str(ROOT_DIR / "public")), name="public")
 
 # Pydantic Models
 class LoginRequest(BaseModel):
@@ -1561,6 +1566,127 @@ async def delete_school(school_id: str, db: Session = Depends(get_db)):
     db.commit()
     
     return {"message": "School deleted successfully"}
+
+# ==================== QR CODE REGISTRATION ====================
+
+def get_next_available_school_id(db: Session) -> str:
+    """Get the next available school ID (finds gaps in sequence)"""
+    # Get all existing school IDs as integers
+    existing_schools = db.query(School.school_id).all()
+    existing_ids = []
+    
+    for school in existing_schools:
+        try:
+            existing_ids.append(int(school.school_id))
+        except ValueError:
+            # Skip non-numeric IDs if any exist
+            continue
+    
+    if not existing_ids:
+        return "1"
+    
+    # Sort the IDs
+    existing_ids.sort()
+    
+    # Find the first missing ID
+    for i, id in enumerate(existing_ids, 1):
+        if i != id:
+            return str(i)
+    
+    # If no gaps found, return next ID
+    return str(existing_ids[-1] + 1)
+
+@api_router.post("/admin/generate-qr")
+async def generate_qr_code(db: Session = Depends(get_db)):
+    """Generate QR code for school registration"""
+    try:
+        # Environment-aware registration URL and QR image
+        if config.environment == "production":
+            registration_url = "https://koshquest.in/register-school"
+            qr_image_filename = "school_registration_qr_production.png"
+        else:
+            registration_url = "http://localhost:3000/register-school"
+            qr_image_filename = "school_registration_qr_localhost.png"
+        
+        # Path to environment-specific QR image
+        qr_image_path = ROOT_DIR / "public" / qr_image_filename
+        
+        if not qr_image_path.exists():
+            raise HTTPException(status_code=404, detail="QR code image not found")
+        
+        # Read the static QR image
+        with open(qr_image_path, "rb") as qr_file:
+            qr_image_data = qr_file.read()
+        
+        # Convert to base64 for easy display
+        qr_base64 = base64.b64encode(qr_image_data).decode()
+        
+        return {
+            "qr_code": f"data:image/png;base64,{qr_base64}",
+            "registration_url": registration_url,
+            "environment": config.environment,
+            "qr_filename": qr_image_filename,
+            "message": "QR code generated successfully"
+        }
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to generate QR code: {str(e)}")
+
+@api_router.post("/register-school", response_model=SchoolResponse)
+async def register_school_via_qr(
+    school_name: str = Form(...),
+    email: str = Form(...),
+    contact_number: Optional[str] = Form(None),
+    password: str = Form(...),
+    logo: Optional[UploadFile] = File(None),
+    db: Session = Depends(get_db)
+):
+    """Register a new school via QR code scan (no school_id required)"""
+    # Check if email already exists
+    existing_school = db.query(School).filter(School.email == email).first()
+    
+    if existing_school:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Email already exists"
+        )
+    
+    # Get next available school ID automatically
+    school_id = get_next_available_school_id(db)
+    
+    # Handle logo upload
+    logo_path = None
+    if logo:
+        # Create school-specific folder
+        school_folder = UPLOAD_DIR / school_id
+        school_folder.mkdir(parents=True, exist_ok=True)
+        
+        # Save logo
+        file_extension = logo.filename.split('.')[-1]
+        logo_filename = f"logo.{file_extension}"
+        logo_file_path = school_folder / logo_filename
+        
+        with open(logo_file_path, "wb") as buffer:
+            shutil.copyfileobj(logo.file, buffer)
+        
+        logo_path = f"/uploads/school_logos/{school_id}/{logo_filename}"
+    
+    # Create school
+    password_hash = get_password_hash(password)
+    new_school = School(
+        school_id=school_id,
+        school_name=school_name,
+        email=email,
+        contact_number=contact_number,
+        password_hash=password_hash,
+        logo_path=logo_path
+    )
+    
+    db.add(new_school)
+    db.commit()
+    db.refresh(new_school)
+    
+    return new_school
 
 @api_router.post("/school/logout")
 async def school_logout(school_id: str, school_name: str, db: Session = Depends(get_db)):

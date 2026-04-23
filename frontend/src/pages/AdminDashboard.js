@@ -58,6 +58,9 @@ const AdminDashboard = ({ user, setUser }) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [showAddModal, setShowAddModal] = useState(false);
   const [editingSchool, setEditingSchool] = useState(null);
+  const [showQRModal, setShowQRModal] = useState(false);
+  const [qrCode, setQrCode] = useState(null);
+  const [qrLoading, setQrLoading] = useState(false);
   const [formData, setFormData] = useState({
     school_id: '',
     school_name: '',
@@ -219,6 +222,21 @@ const AdminDashboard = ({ user, setUser }) => {
     }
   };
 
+  const handleGenerateQR = async () => {
+    setQrLoading(true);
+    setError('');
+    
+    try {
+      const response = await api.post('/admin/generate-qr');
+      setQrCode(response.data);
+      setShowQRModal(true);
+    } catch (err) {
+      setError('Failed to generate QR code');
+    } finally {
+      setQrLoading(false);
+    }
+  };
+
   const openEditModal = (school) => {
     setEditingSchool(school);
     setFormData({
@@ -249,6 +267,14 @@ const AdminDashboard = ({ user, setUser }) => {
               fontSize: '14px'
             }}
           />
+          <Button 
+            type="primary" 
+            onClick={handleGenerateQR}
+            loading={qrLoading}
+            style={{ backgroundColor: '#52c41a', borderColor: '#52c41a' }}
+          >
+            Generate QR Code
+          </Button>
           <Button type="primary" onClick={() => setShowAddModal(true)}>
             Add New School
           </Button>
@@ -419,6 +445,61 @@ const AdminDashboard = ({ user, setUser }) => {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* QR Code Modal */}
+      {showQRModal && qrCode && (
+        <div className="modal-overlay" data-testid="qr-modal">
+          <div className="modal" style={{ maxWidth: '500px' }}>
+            <h2>QR Code for School Registration</h2>
+            
+            <div style={{ textAlign: 'center', margin: '20px 0' }}>
+              <img 
+                src={qrCode.qr_code} 
+                alt="School Registration QR Code" 
+                style={{ 
+                  width: '250px', 
+                  height: '250px', 
+                  border: '1px solid #d9d9d9',
+                  borderRadius: '8px'
+                }} 
+              />
+            </div>
+            
+            <div style={{ textAlign: 'center', marginBottom: '20px' }}>
+              <p style={{ color: '#666', fontSize: '14px' }}>
+                Share this QR code with schools to register directly.
+                Schools can scan this code to access the registration form.
+              </p>
+              <p style={{ color: '#666', fontSize: '12px', marginTop: '10px' }}>
+                Registration URL: {qrCode.registration_url}
+              </p>
+            </div>
+
+            <div className="modal-actions">
+              <button
+                type="button"
+                className="submit-btn"
+                onClick={() => {
+                  navigator.clipboard.writeText(qrCode.registration_url);
+                  alert('Registration URL copied to clipboard!');
+                }}
+              >
+                Copy URL
+              </button>
+              <button
+                type="button"
+                className="cancel-btn"
+                onClick={() => {
+                  setShowQRModal(false);
+                  setQrCode(null);
+                }}
+              >
+                Close
+              </button>
+            </div>
           </div>
         </div>
       )}

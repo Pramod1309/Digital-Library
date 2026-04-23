@@ -4,6 +4,7 @@ import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-d
 import LoginPage from './pages/LoginPage';
 import AdminDashboard from './pages/AdminDashboard';
 import SchoolDashboard from './pages/SchoolDashboard';
+import SchoolRegistration from './pages/SchoolRegistration';
 import './App.css';
 
 function App() {
@@ -55,6 +56,10 @@ function App() {
           ) : (
             <Navigate to="/login" />
           )} 
+        />
+        <Route 
+          path="/register-school" 
+          element={<SchoolRegistration />} 
         />
       </Routes>
     </Router>
