@@ -97,6 +97,7 @@ class Resource(Base):
     uploaded_by_name = Column(String(255), nullable=True)  # school name if uploaded by school
     approval_status = Column(String(50), default='approved')  # 'pending', 'approved', 'rejected'
     download_count = Column(Integer, default=0)
+    is_video_link = Column(Boolean, default=False)  # True for video links, False for uploaded files
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 

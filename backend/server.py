@@ -152,6 +152,7 @@ class ResourceResponse(BaseModel):
     uploaded_by_name: Optional[str] = None
     approval_status: str
     download_count: int
+    is_video_link: bool = False
     created_at: datetime
     updated_at: datetime
 
@@ -1831,7 +1832,8 @@ async def upload_resource(
             subject=subject,
             tags=tags,
             uploaded_by_type='admin',
-            approval_status='approved'
+            approval_status='approved',
+            is_video_link=False
         )
         
         db.add(new_resource)
@@ -1845,6 +1847,70 @@ async def upload_resource(
         db.refresh(resource)
     
     return uploaded_resources
+
+@api_router.post("/admin/resources/upload-link", response_model=ResourceResponse)
+async def upload_video_link(
+    name: str = Form(...),
+    category: str = Form(...),
+    sub_category: Optional[str] = Form(None),
+    description: Optional[str] = Form(None),
+    class_level: Optional[str] = Form(None),
+    subject: Optional[str] = Form(None),
+    tags: Optional[str] = Form(None),
+    file_path: str = Form(...),
+    file_type: str = Form('video/mp4'),
+    file_size: int = Form(0),
+    is_video_link: bool = Form(True),
+    db: Session = Depends(get_db),
+    current_admin: dict = Depends(get_current_admin)
+):
+    """Upload a video link resource - Admin only"""
+    try:
+        # Validate video link
+        if not file_path or not file_path.startswith('http'):
+            raise HTTPException(status_code=400, detail="Invalid video link provided")
+        
+        # Check if it's a valid video platform URL
+        valid_domains = ['youtube.com', 'youtu.be', 'vimeo.com', 'dailymotion.com', 'bilibili.com']
+        is_valid_domain = any(domain in file_path.lower() for domain in valid_domains)
+        
+        if not is_valid_domain:
+            raise HTTPException(
+                status_code=400, 
+                detail="Unsupported video platform. Please use YouTube, Vimeo, Dailymotion, or Bilibili"
+            )
+        
+        # Generate unique resource ID
+        resource_id = str(uuid.uuid4())
+        
+        # Create resource record for video link
+        new_resource = Resource(
+            resource_id=resource_id,
+            name=name,
+            description=description,
+            category=category,
+            sub_category=sub_category,
+            file_path=file_path,
+            file_type=file_type,
+            file_size=file_size,
+            class_level=class_level,
+            subject=subject,
+            tags=tags,
+            uploaded_by_type='admin',
+            approval_status='approved',
+            is_video_link=is_video_link
+        )
+        
+        db.add(new_resource)
+        db.commit()
+        db.refresh(new_resource)
+        
+        return new_resource
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to upload video link: {str(e)}")
 
 @api_router.get("/admin/resources", response_model=List[ResourceResponse])
 async def get_all_resources(
@@ -2082,6 +2148,7 @@ async def update_resource(
         resource.file_path = f"/uploads/resources/{resource.category}/{safe_filename}"
         resource.file_type = file.content_type or f"application/{file_extension}"
         resource.file_size = file_size
+        resource.is_video_link = False
 
     resource.updated_at = datetime.utcnow()
     db.commit()
@@ -2198,7 +2265,8 @@ async def school_upload_resource(
         uploaded_by_type='school',
         uploaded_by_id=school_id,
         uploaded_by_name=school_name,
-        approval_status='pending'
+        approval_status='pending',
+        is_video_link=False
     )
     
     db.add(new_resource)

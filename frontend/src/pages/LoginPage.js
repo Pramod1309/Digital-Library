@@ -5,7 +5,7 @@ import '../styles/LoginPage.css';
 
 const LoginPage = ({ setUser }) => {
   const navigate = useNavigate();
-  const [activeTab, setActiveTab] = useState('admin');
+  const [activeTab, setActiveTab] = useState('school');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
@@ -71,7 +71,7 @@ const LoginPage = ({ setUser }) => {
           </div>
           <h1 className="library-title" data-testid="library-title">Wonder Learning Digital Library</h1>
           <div className="info-content">
-            <p className="info-subtitle">Empowering Schools Through Digital Education</p>
+            <p className="info-subtitle">"Empowering preschools through educational excellence"</p>
             <div className="info-points">
               <div className="info-point">
                 <svg className="icon" fill="currentColor" viewBox="0 0 20 20">
@@ -110,18 +110,6 @@ const LoginPage = ({ setUser }) => {
               
               <div className="tabs" data-testid="login-tabs">
                 <button
-                  data-testid="admin-tab"
-                  className={`tab ${activeTab === 'admin' ? 'active' : ''}`}
-                  onClick={() => {
-                    setActiveTab('admin');
-                    setError('');
-                    setEmail('');
-                    setPassword('');
-                  }}
-                >
-                  Admin Login
-                </button>
-                <button
                   data-testid="school-tab"
                   className={`tab ${activeTab === 'school' ? 'active' : ''}`}
                   onClick={() => {
@@ -132,6 +120,18 @@ const LoginPage = ({ setUser }) => {
                   }}
                 >
                   School Login
+                </button>
+                <button
+                  data-testid="admin-tab"
+                  className={`tab ${activeTab === 'admin' ? 'active' : ''}`}
+                  onClick={() => {
+                    setActiveTab('admin');
+                    setError('');
+                    setEmail('');
+                    setPassword('');
+                  }}
+                >
+                  Admin Login
                 </button>
               </div>
 

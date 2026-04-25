@@ -19,6 +19,8 @@ import config from '../../config';
 
 const BACKEND_URL = config.apiBaseUrl;
 const API = `${BACKEND_URL}/api`;
+const VIDEO_LINK_DOMAINS = ['youtube.com', 'youtu.be', 'vimeo.com', 'dailymotion.com', 'bilibili.com'];
+const VIDEO_FILE_EXTENSIONS = ['mp4', 'webm', 'ogg', 'mov', 'avi', 'mkv'];
 
 // Update this helper function at the top of your file:
 const getStaticFileUrl = (path) => {
@@ -35,6 +37,264 @@ const getStaticFileUrl = (path) => {
   
   // For other files, use /api/uploads
   return `${BACKEND_URL}/uploads/${cleanPath}`;
+};
+
+const isKnownVideoLink = (filePath = '') => {
+  if (!filePath) return false;
+
+  const normalizedPath = filePath.toLowerCase();
+  return VIDEO_LINK_DOMAINS.some((domain) => normalizedPath.includes(domain));
+};
+
+const isVideoLinkResource = (resource) => {
+  if (!resource) return false;
+  return resource.is_video_link === true || resource.is_video_link === 'true' || isKnownVideoLink(resource.file_path);
+};
+
+const getVideoLinkMeta = (videoUrl = '') => {
+  const youtubeMatch = videoUrl.match(/(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/)([^&\n?#]+)/);
+  const vimeoMatch = videoUrl.match(/vimeo\.com\/(\d+)/);
+
+  if (youtubeMatch) {
+    const videoId = youtubeMatch[1];
+    return {
+      platformName: 'YouTube',
+      thumbnailUrl: `https://img.youtube.com/vi/${videoId}/hqdefault.jpg`,
+      embedUrl: `https://www.youtube.com/embed/${videoId}?autoplay=0&rel=0&modestbranding=1`
+    };
+  }
+
+  if (vimeoMatch) {
+    const videoId = vimeoMatch[1];
+    return {
+      platformName: 'Vimeo',
+      thumbnailUrl: '',
+      embedUrl: `https://player.vimeo.com/video/${videoId}?autoplay=0&byline=0&portrait=0&title=0`
+    };
+  }
+
+  if (videoUrl.toLowerCase().includes('dailymotion.com')) {
+    return { platformName: 'Dailymotion', thumbnailUrl: '', embedUrl: '' };
+  }
+
+  if (videoUrl.toLowerCase().includes('bilibili.com')) {
+    return { platformName: 'Bilibili', thumbnailUrl: '', embedUrl: '' };
+  }
+
+  return { platformName: 'Video Link', thumbnailUrl: '', embedUrl: '' };
+};
+
+const VideoThumbnail = ({ videoUrl, resource, fileType }) => {
+  const [thumbnailSrc, setThumbnailSrc] = useState('');
+  const [isLoading, setIsLoading] = useState(true);
+  const [showFallback, setShowFallback] = useState(false);
+  const videoRef = useRef(null);
+
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video || !videoUrl) {
+      setThumbnailSrc('');
+      setIsLoading(false);
+      setShowFallback(true);
+      return undefined;
+    }
+
+    let isCancelled = false;
+
+    setThumbnailSrc('');
+    setIsLoading(true);
+    setShowFallback(false);
+
+    const markFallback = () => {
+      if (isCancelled) return;
+      setThumbnailSrc('');
+      setIsLoading(false);
+      setShowFallback(true);
+    };
+
+    const captureFrame = () => {
+      if (isCancelled) return;
+
+      try {
+        if (!video.videoWidth || !video.videoHeight) {
+          markFallback();
+          return;
+        }
+
+        const canvas = document.createElement('canvas');
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+
+        const context = canvas.getContext('2d');
+        if (!context) {
+          markFallback();
+          return;
+        }
+
+        context.drawImage(video, 0, 0, canvas.width, canvas.height);
+        setThumbnailSrc(canvas.toDataURL('image/jpeg', 0.82));
+        setIsLoading(false);
+        setShowFallback(false);
+      } catch (error) {
+        console.error('Video thumbnail capture failed:', error);
+        markFallback();
+      }
+    };
+
+    const seekToPreviewFrame = () => {
+      if (isCancelled) return;
+
+      const duration = Number.isFinite(video.duration) ? video.duration : 0;
+      const targetTime = duration > 0.25 ? Math.max(0.1, Math.min(1, duration - 0.1)) : 0;
+
+      if (targetTime === 0) {
+        captureFrame();
+        return;
+      }
+
+      try {
+        if (Math.abs(video.currentTime - targetTime) < 0.05) {
+          captureFrame();
+        } else {
+          video.currentTime = targetTime;
+        }
+      } catch (error) {
+        console.error('Video thumbnail seek failed:', error);
+        captureFrame();
+      }
+    };
+
+    const handleLoadedMetadata = () => {
+      if (video.readyState >= 2) {
+        seekToPreviewFrame();
+      }
+    };
+
+    const handleLoadedData = () => {
+      seekToPreviewFrame();
+    };
+
+    const handleSeeked = () => {
+      captureFrame();
+    };
+
+    video.addEventListener('loadedmetadata', handleLoadedMetadata);
+    video.addEventListener('loadeddata', handleLoadedData);
+    video.addEventListener('seeked', handleSeeked);
+    video.addEventListener('error', markFallback);
+
+    video.load();
+
+    return () => {
+      isCancelled = true;
+      video.removeEventListener('loadedmetadata', handleLoadedMetadata);
+      video.removeEventListener('loadeddata', handleLoadedData);
+      video.removeEventListener('seeked', handleSeeked);
+      video.removeEventListener('error', markFallback);
+    };
+  }, [videoUrl]);
+
+  return (
+    <div style={{
+      position: 'relative',
+      width: '100%',
+      height: '150px',
+      background: 'linear-gradient(135deg, #031b34 0%, #123f75 100%)',
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      overflow: 'hidden'
+    }}>
+      {thumbnailSrc && (
+        <img
+          src={thumbnailSrc}
+          alt={resource.name}
+          style={{
+            width: '100%',
+            height: '100%',
+            objectFit: 'cover'
+          }}
+        />
+      )}
+
+      <video
+        ref={videoRef}
+        muted
+        playsInline
+        crossOrigin="anonymous"
+        preload="metadata"
+        style={{
+          position: 'absolute',
+          width: 1,
+          height: 1,
+          opacity: 0,
+          pointerEvents: 'none'
+        }}
+      >
+        <source src={videoUrl} type={fileType || 'video/mp4'} />
+      </video>
+
+      {!thumbnailSrc && (
+        <div style={{
+          position: 'absolute',
+          inset: 0,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          background: showFallback ? 'linear-gradient(135deg, #0b63b5 0%, #1890ff 100%)' : 'transparent'
+        }}>
+          <div style={{
+            background: 'rgba(0,0,0,0.55)',
+            borderRadius: '50%',
+            width: '48px',
+            height: '48px',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center'
+          }}>
+            {isLoading ? (
+              <LoadingOutlined style={{ fontSize: '20px', color: 'white' }} />
+            ) : (
+              <VideoCameraOutlined style={{ fontSize: '22px', color: 'white' }} />
+            )}
+          </div>
+        </div>
+      )}
+
+      {thumbnailSrc && (
+        <div style={{
+          position: 'absolute',
+          top: '50%',
+          left: '50%',
+          transform: 'translate(-50%, -50%)',
+          background: 'rgba(0,0,0,0.55)',
+          borderRadius: '50%',
+          width: '48px',
+          height: '48px',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center'
+        }}>
+          <VideoCameraOutlined style={{ fontSize: '22px', color: 'white' }} />
+        </div>
+      )}
+
+      <div style={{
+        position: 'absolute',
+        bottom: '8px',
+        left: '8px',
+        background: 'rgba(0,0,0,0.8)',
+        color: 'white',
+        padding: '2px 6px',
+        borderRadius: '4px',
+        fontSize: '10px',
+        fontWeight: 'bold',
+        zIndex: 2
+      }}>
+        Video
+      </div>
+    </div>
+  );
 };
 
 const { Option } = Select;
@@ -1261,10 +1521,10 @@ const SchoolResourceCategory = ({ user }) => {
 
   const lowerType = (record.file_type || '').toLowerCase();
   const lowerPath = (record.file_path || '').toLowerCase();
-  const extension = lowerPath.split('.').pop() || '';
+  const extension = lowerPath.split('.').pop()?.split('?')[0] || '';
   const isImage = lowerType.includes('image') || /\.(jpg|jpeg|png|gif|bmp|tiff|webp|svg)$/.test(lowerPath);
   const isPdf = lowerType.includes('pdf') || extension === 'pdf';
-  const isVideo = lowerType.includes('video') || ['mp4', 'webm', 'ogg', 'mov', 'avi', 'mkv'].includes(extension);
+  const isVideo = lowerType.includes('video') || VIDEO_FILE_EXTENSIONS.includes(extension) || isVideoLinkResource(record);
 
   if (!isImage && !isPdf && !isVideo) {
     setPreviewLoading(false);
@@ -1329,6 +1589,27 @@ const SchoolResourceCategory = ({ user }) => {
 
   const handleDownload = async (record, format = 'image') => {
     try {
+      if (isVideoLinkResource(record)) {
+        const openLink = document.createElement('a');
+        openLink.href = record.file_path;
+        openLink.target = '_blank';
+        openLink.rel = 'noopener noreferrer';
+        document.body.appendChild(openLink);
+        openLink.click();
+        document.body.removeChild(openLink);
+
+        setResources(prevResources =>
+          prevResources.map(res =>
+            res.resource_id === record.resource_id
+              ? { ...res, school_download_count: (res.school_download_count || 0) + 1 }
+              : res
+          )
+        );
+
+        message.success('Opening video link...');
+        return;
+      }
+
       const token = sessionStorage.getItem('token');
       const downloadUrl = `${API}/resources/${record.resource_id}/download-with-logo`;
       const urlWithParams = new URL(downloadUrl);
@@ -1394,6 +1675,17 @@ const SchoolResourceCategory = ({ user }) => {
 
   const getDownloadMenuItems = (record) => {
     if (!record) return [];
+
+    if (isVideoLinkResource(record)) {
+      return [
+        {
+          key: 'open-link',
+          label: 'Open Video Link',
+          onClick: () => handleDownload(record)
+        }
+      ];
+    }
+
     return [
       {
         key: 'original',
@@ -1413,8 +1705,15 @@ const SchoolResourceCategory = ({ user }) => {
     if (!previewResource) return null;
 
     const fileType = previewResource.file_type ? previewResource.file_type.toLowerCase() : '';
-    const fileExtension = previewResource.file_path?.split('.').pop()?.toLowerCase() || '';
-    const previewUrl = `${API}/resources/${previewResource.resource_id}/preview`;
+    const fileExtension = previewResource.file_path?.split('.').pop()?.split('?')[0]?.toLowerCase() || '';
+    const isVideoLink = isVideoLinkResource(previewResource);
+    const getPreviewUrl = () => {
+      if (isVideoLink) {
+        return previewResource.file_path;
+      }
+      return `${API}/resources/${previewResource.resource_id}/preview`;
+    };
+    const previewUrl = getPreviewUrl();
 
     // Helper function to wrap content (no header/footer spacing)
     const wrapWithHeaderFooter = (content) => {
@@ -1609,12 +1908,41 @@ const SchoolResourceCategory = ({ user }) => {
     }
 
     // Videos
-    if (fileType.includes('video') || ['mp4', 'webm', 'ogg'].includes(fileExtension)) {
+    if (fileType.includes('video') || VIDEO_FILE_EXTENSIONS.includes(fileExtension) || isVideoLink) {
+      const videoSrc = isVideoLink ? previewResource.file_path : previewUrl;
+      const videoLinkMeta = getVideoLinkMeta(videoSrc);
+
+      if (isVideoLink && videoLinkMeta.embedUrl) {
+        const embeddedVideoContent = (
+          <iframe
+            src={videoLinkMeta.embedUrl}
+            style={{
+              width: '100%',
+              height: '100%',
+              border: 'none',
+              borderRadius: '8px'
+            }}
+            title={previewResource.name}
+            allow={videoLinkMeta.platformName === 'YouTube'
+              ? 'accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share'
+              : 'autoplay; fullscreen; picture-in-picture'
+            }
+            allowFullScreen
+            onLoad={() => setPreviewLoading(false)}
+            onError={() => {
+              setPreviewLoading(false);
+              message.error(`Failed to load ${videoLinkMeta.platformName} video preview`);
+            }}
+          />
+        );
+
+        return wrapWithHeaderFooter(embeddedVideoContent);
+      }
+
       const videoContent = (
         <video
           ref={el => { if (el && previewResource) videoRefs.current[previewResource.resource_id] = el; }}
           controls
-          autoPlay
           preload="metadata"
           style={{ width: '100%', maxHeight: '100%', borderRadius: '8px' }}
           onLoadedMetadata={() => setPreviewLoading(false)}
@@ -1623,7 +1951,7 @@ const SchoolResourceCategory = ({ user }) => {
             message.error('Failed to load video preview');
           }}
         >
-          <source src={previewUrl} type={previewResource.file_type || 'video/mp4'} />
+          <source src={videoSrc} type={previewResource.file_type || 'video/mp4'} />
         </video>
       );
       return wrapWithHeaderFooter(videoContent);
@@ -1687,7 +2015,7 @@ const SchoolResourceCategory = ({ user }) => {
   const renderThumbnail = (resource) => {
     const fileUrl = resource.file_path;
     const fileType = resource.file_type?.toLowerCase() || '';
-    const fileExtension = fileUrl?.split('.').pop()?.toLowerCase() || '';
+    const fileExtension = fileUrl?.split('.').pop()?.split('?')[0]?.toLowerCase() || '';
 
     // Images
     const imageExtensions = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg'];
@@ -1708,54 +2036,98 @@ const SchoolResourceCategory = ({ user }) => {
     }
 
     // Videos
-    if (fileType.includes('video') || ['mp4', 'webm', 'ogg', 'mov', 'avi', 'mkv'].includes(fileExtension)) {
-      return (
-        <div style={{ 
-          position: 'relative', 
-          width: '100%', 
-          height: '150px',
-          backgroundColor: '#000',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          overflow: 'hidden'
-        }}>
-          <video
-            muted
-            style={{
-              width: '100%',
-              height: '100%',
-              objectFit: 'cover',
-              opacity: 0.7
-            }}
-            onMouseEnter={(e) => {
-              e.target.muted = true;
-              e.target.play().catch(err => console.log('Video play error:', err));
-            }}
-            onMouseLeave={(e) => {
-              e.target.pause();
-              e.target.currentTime = 0;
-            }}
-          >
-            <source src={fileUrl} type={resource.file_type || 'video/mp4'} />
-          </video>
-          <div style={{
-            position: 'absolute',
-            top: '50%',
-            left: '50%',
-            transform: 'translate(-50%, -50%)',
-            background: 'rgba(0,0,0,0.5)',
-            borderRadius: '50%',
-            width: '48px',
-            height: '48px',
+    const isVideoLink = isVideoLinkResource(resource);
+    if (fileType.includes('video') || VIDEO_FILE_EXTENSIONS.includes(fileExtension) || isVideoLink) {
+      if (isVideoLink) {
+        const videoLinkMeta = getVideoLinkMeta(fileUrl);
+
+        return (
+          <div style={{ 
+            position: 'relative', 
+            width: '100%', 
+            height: '150px',
+            backgroundColor: '#000',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
-            pointerEvents: 'none'
+            overflow: 'hidden'
           }}>
-            <VideoCameraOutlined style={{ fontSize: '24px', color: 'white' }} />
+            {videoLinkMeta.thumbnailUrl ? (
+              <>
+                <img
+                  src={videoLinkMeta.thumbnailUrl}
+                  alt={resource.name}
+                  style={{
+                    width: '100%',
+                    height: '100%',
+                    objectFit: 'cover'
+                  }}
+                  onError={(e) => {
+                    e.target.style.display = 'none';
+                    e.target.nextSibling.style.display = 'flex';
+                  }}
+                />
+                <div style={{
+                  position: 'absolute',
+                  top: '50%',
+                  left: '50%',
+                  transform: 'translate(-50%, -50%)',
+                  background: 'rgba(0,0,0,0.7)',
+                  borderRadius: '50%',
+                  width: '48px',
+                  height: '48px',
+                  display: 'none',
+                  alignItems: 'center',
+                  justifyContent: 'center'
+                }}>
+                  <VideoCameraOutlined style={{ fontSize: '20px', color: 'white' }} />
+                </div>
+              </>
+            ) : (
+              <div style={{
+                width: '100%',
+                height: '100%',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                backgroundColor: videoLinkMeta.platformName === 'Vimeo' ? '#00adef' : '#1890ff'
+              }}>
+                <div style={{
+                  background: 'rgba(0,0,0,0.7)',
+                  borderRadius: '50%',
+                  width: '48px',
+                  height: '48px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center'
+                }}>
+                  <VideoCameraOutlined style={{ fontSize: '20px', color: 'white' }} />
+                </div>
+              </div>
+            )}
+            <div style={{
+              position: 'absolute',
+              bottom: '8px',
+              left: '8px',
+              background: 'rgba(0,0,0,0.8)',
+              color: 'white',
+              padding: '2px 6px',
+              borderRadius: '4px',
+              fontSize: '10px',
+              fontWeight: 'bold'
+            }}>
+              {videoLinkMeta.platformName}
+            </div>
           </div>
-        </div>
+        );
+      }
+
+      return (
+        <VideoThumbnail
+          videoUrl={fileUrl}
+          resource={resource}
+          fileType={resource.file_type}
+        />
       );
     }
 

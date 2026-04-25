@@ -1,23 +1,293 @@
 import React, { useState, useEffect, useRef } from 'react';
-import {
-  Card, Table, Button, Space, Input, Select, Tag, Upload, Modal, Form, Row, Col, message, Badge, Tooltip, Dropdown
+import { 
+  Table, 
+  Card, 
+  Button, 
+  Space, 
+  Input, 
+  Select, 
+  Modal, 
+  message, 
+  Upload, 
+  Tag, 
+  Popconfirm, 
+  Dropdown, 
+  Menu,
+  Form,
+  Checkbox,
+  Divider,
+  Tooltip,
+  Row,
+  Col,
+  Badge
 } from 'antd';
-import {
-  UploadOutlined, SearchOutlined, DownloadOutlined, DeleteOutlined, EyeOutlined,
-  FilePdfOutlined, FileImageOutlined, FileWordOutlined, FilePptOutlined,
-  FileZipOutlined, FileUnknownOutlined, FileExcelOutlined, VideoCameraOutlined,
-  AudioOutlined, AppstoreOutlined, UnorderedListOutlined, FileTextOutlined,
-  LoadingOutlined, CheckOutlined, CloseOutlined, DownOutlined, EditOutlined
+import { 
+  PlusOutlined, 
+  DeleteOutlined, 
+  EditOutlined, 
+  EyeOutlined, 
+  SearchOutlined, 
+  UploadOutlined,
+  DownloadOutlined,
+  FileOutlined,
+  VideoCameraOutlined,
+  PictureOutlined,
+  FilePdfOutlined,
+  FileWordOutlined,
+  FileExcelOutlined,
+  FilePowerpointOutlined,
+  FileZipOutlined,
+  FileTextOutlined,
+  FileImageOutlined,
+  PlayCircleOutlined,
+  PauseCircleOutlined,
+  ReloadOutlined,
+  FilterOutlined,
+  FolderOutlined,
+  FileUnknownOutlined,
+  AppstoreOutlined,
+  UnorderedListOutlined,
+  LoadingOutlined
 } from '@ant-design/icons';
+
 import axios from 'axios';
 import api from '../../api/axiosConfig';
 import config from '../../config';
 
 const BACKEND_URL = config.apiBaseUrl;
 const API = `${BACKEND_URL}/api`;
+const VIDEO_LINK_DOMAINS = ['youtube.com', 'youtu.be', 'vimeo.com', 'dailymotion.com', 'bilibili.com'];
 
 const { Option } = Select;
 const { TextArea } = Input;
+
+const isKnownVideoLink = (filePath = '') => {
+  if (!filePath) return false;
+
+  const normalizedPath = filePath.toLowerCase();
+  return VIDEO_LINK_DOMAINS.some((domain) => normalizedPath.includes(domain));
+};
+
+const isVideoLinkResource = (resource) => {
+  if (!resource) return false;
+  return resource.is_video_link === true || resource.is_video_link === 'true' || isKnownVideoLink(resource.file_path);
+};
+
+// VideoThumbnail component for handling uploaded video thumbnails
+const VideoThumbnail = ({ videoUrl, resource, fileType }) => {
+  const [thumbnailSrc, setThumbnailSrc] = useState('');
+  const [isLoading, setIsLoading] = useState(true);
+  const [showFallback, setShowFallback] = useState(false);
+  const videoRef = useRef(null);
+
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video || !videoUrl) {
+      setThumbnailSrc('');
+      setIsLoading(false);
+      setShowFallback(true);
+      return undefined;
+    }
+
+    let isCancelled = false;
+
+    setThumbnailSrc('');
+    setIsLoading(true);
+    setShowFallback(false);
+
+    const markFallback = () => {
+      if (isCancelled) return;
+      setThumbnailSrc('');
+      setIsLoading(false);
+      setShowFallback(true);
+    };
+
+    const captureFrame = () => {
+      if (isCancelled) return;
+
+      try {
+        if (!video.videoWidth || !video.videoHeight) {
+          markFallback();
+          return;
+        }
+
+        const canvas = document.createElement('canvas');
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+
+        const context = canvas.getContext('2d');
+        if (!context) {
+          markFallback();
+          return;
+        }
+
+        context.drawImage(video, 0, 0, canvas.width, canvas.height);
+        const nextThumbnailSrc = canvas.toDataURL('image/jpeg', 0.82);
+
+        setThumbnailSrc(nextThumbnailSrc);
+        setIsLoading(false);
+        setShowFallback(false);
+      } catch (error) {
+        console.error('Video thumbnail capture failed:', error);
+        markFallback();
+      }
+    };
+
+    const seekToPreviewFrame = () => {
+      if (isCancelled) return;
+
+      const duration = Number.isFinite(video.duration) ? video.duration : 0;
+      const targetTime = duration > 0.25 ? Math.max(0.1, Math.min(1, duration - 0.1)) : 0;
+
+      if (targetTime === 0) {
+        captureFrame();
+        return;
+      }
+
+      try {
+        if (Math.abs(video.currentTime - targetTime) < 0.05) {
+          captureFrame();
+        } else {
+          video.currentTime = targetTime;
+        }
+      } catch (error) {
+        console.error('Video thumbnail seek failed:', error);
+        captureFrame();
+      }
+    };
+
+    const handleLoadedMetadata = () => {
+      if (video.readyState >= 2) {
+        seekToPreviewFrame();
+      }
+    };
+
+    const handleLoadedData = () => {
+      seekToPreviewFrame();
+    };
+
+    const handleSeeked = () => {
+      captureFrame();
+    };
+
+    video.addEventListener('loadedmetadata', handleLoadedMetadata);
+    video.addEventListener('loadeddata', handleLoadedData);
+    video.addEventListener('seeked', handleSeeked);
+    video.addEventListener('error', markFallback);
+
+    video.load();
+
+    return () => {
+      isCancelled = true;
+      video.removeEventListener('loadedmetadata', handleLoadedMetadata);
+      video.removeEventListener('loadeddata', handleLoadedData);
+      video.removeEventListener('seeked', handleSeeked);
+      video.removeEventListener('error', markFallback);
+    };
+  }, [videoUrl]);
+
+  return (
+    <div style={{
+      position: 'relative',
+      width: '100%',
+      height: '150px',
+      background: 'linear-gradient(135deg, #031b34 0%, #123f75 100%)',
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      overflow: 'hidden'
+    }}>
+      {thumbnailSrc && (
+        <img
+          src={thumbnailSrc}
+          alt={resource.name}
+          style={{
+            width: '100%',
+            height: '100%',
+            objectFit: 'cover'
+          }}
+        />
+      )}
+
+      <video
+        ref={videoRef}
+        muted
+        playsInline
+        crossOrigin="anonymous"
+        preload="metadata"
+        style={{
+          position: 'absolute',
+          width: 1,
+          height: 1,
+          opacity: 0,
+          pointerEvents: 'none'
+        }}
+      >
+        <source src={videoUrl} type={fileType || 'video/mp4'} />
+      </video>
+
+      {!thumbnailSrc && (
+        <div style={{
+          position: 'absolute',
+          inset: 0,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          background: showFallback ? 'linear-gradient(135deg, #0b63b5 0%, #1890ff 100%)' : 'transparent'
+        }}>
+          <div style={{
+            background: 'rgba(0,0,0,0.55)',
+            borderRadius: '50%',
+            width: '48px',
+            height: '48px',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center'
+          }}>
+            {isLoading ? (
+              <LoadingOutlined style={{ fontSize: '20px', color: 'white' }} />
+            ) : (
+              <VideoCameraOutlined style={{ fontSize: '22px', color: 'white' }} />
+            )}
+          </div>
+        </div>
+      )}
+
+      {thumbnailSrc && (
+        <div style={{
+          position: 'absolute',
+          top: '50%',
+          left: '50%',
+          transform: 'translate(-50%, -50%)',
+          background: 'rgba(0,0,0,0.55)',
+          borderRadius: '50%',
+          width: '48px',
+          height: '48px',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center'
+        }}>
+          <VideoCameraOutlined style={{ fontSize: '22px', color: 'white' }} />
+        </div>
+      )}
+
+      <div style={{
+        position: 'absolute',
+        bottom: '8px',
+        left: '8px',
+        background: 'rgba(0,0,0,0.8)',
+        color: 'white',
+        padding: '2px 6px',
+        borderRadius: '4px',
+        fontSize: '10px',
+        fontWeight: 'bold',
+        zIndex: 2
+      }}>
+        Video
+      </div>
+    </div>
+  );
+};
 
 // Category definitions with descriptions
 const CATEGORY_CONFIG = {
@@ -130,6 +400,8 @@ const AdminResourceCategory = ({ category, subCategory, title, description }) =>
   const [uploading, setUploading] = useState(false);
   const [fileList, setFileList] = useState([]);
   const [searchText, setSearchText] = useState('');
+  const [uploadType, setUploadType] = useState('file'); // 'file' or 'link'
+  const [videoLink, setVideoLink] = useState('');
   const [selectedClass, setSelectedClass] = useState('all');
   const [selectedSubject, setSelectedSubject] = useState('all');
   const [viewMode, setViewMode] = useState('list');
@@ -285,45 +557,98 @@ const AdminResourceCategory = ({ category, subCategory, title, description }) =>
   }));
 
   const handleUpload = async () => {
-    if (fileList.length === 0) {
+    // Validate based on upload type
+    if (uploadType === 'file' && fileList.length === 0) {
       message.warning('Please select at least one file to upload');
+      return;
+    }
+    
+    if (uploadType === 'link' && !videoLink) {
+      message.warning('Please enter a video link');
       return;
     }
 
     try {
       const values = await form.validateFields();
 
-      const formData = new FormData();
-      
-      // Append all selected files
-      fileList.forEach((file) => {
-        formData.append('files', file.originFileObj);
-      });
-      
-      formData.append('name', values.name);
-      formData.append('category', categoryFilter);
-      formData.append('sub_category', values.sub_category || '');
-      formData.append('description', values.description || '');
-      formData.append('class_level', values.class_level || '');
-      formData.append('subject', values.subject || '');
-      formData.append('tags', values.tags ? values.tags.join(',') : '');
+      if (uploadType === 'file') {
+        // Handle file upload (existing logic)
+        const formData = new FormData();
+        
+        // Append all selected files
+        fileList.forEach((file) => {
+          formData.append('files', file.originFileObj);
+        });
+        
+        formData.append('name', values.name);
+        formData.append('category', categoryFilter);
+        formData.append('sub_category', values.sub_category || '');
+        formData.append('description', values.description || '');
+        formData.append('class_level', values.class_level || '');
+        formData.append('subject', values.subject || '');
+        formData.append('tags', values.tags ? values.tags.join(',') : '');
 
-      setUploading(true);
-      const response = await api.post('/admin/resources/upload', formData, {
-        headers: {
-          'Content-Type': 'multipart/form-data',
-        },
-      });
+        setUploading(true);
+        const response = await api.post('/admin/resources/upload', formData, {
+          headers: {
+            'Content-Type': 'multipart/form-data',
+          },
+        });
 
-      const uploadedCount = response.data.length;
-      message.success(`${uploadedCount} resource(s) uploaded successfully!`);
+        const uploadedCount = response.data.length;
+        message.success(`${uploadedCount} resource(s) uploaded successfully!`);
+      } else {
+        // Handle video link upload - send as form data
+        const formData = new FormData();
+        formData.append('name', values.name);
+        formData.append('category', categoryFilter);
+        formData.append('sub_category', values.sub_category || '');
+        formData.append('description', values.description || '');
+        formData.append('class_level', values.class_level || '');
+        formData.append('subject', values.subject || '');
+        formData.append('tags', values.tags ? values.tags.join(',') : '');
+        formData.append('file_path', videoLink);
+        formData.append('file_type', 'video/mp4'); // Default video type for links
+        formData.append('file_size', '0'); // No file size for links
+        formData.append('is_video_link', 'true');
+
+        setUploading(true);
+        const response = await api.post('/admin/resources/upload-link', formData, {
+          headers: {
+            'Content-Type': 'multipart/form-data',
+          },
+        });
+        message.success('Video link uploaded successfully!');
+      }
+
       form.resetFields();
       setFileList([]);
+      setVideoLink('');
+      setUploadType('file');
       setIsModalVisible(false);
       fetchResources();
     } catch (error) {
       console.error('Error uploading resource:', error);
-      message.error(error.response?.data?.detail || 'Failed to upload resource');
+      // Handle validation errors properly
+      let errorMessage = 'Failed to upload resource';
+      
+      if (error.response?.status === 422) {
+        // Validation error - extract the actual message
+        const errorData = error.response.data;
+        if (typeof errorData === 'string') {
+          errorMessage = errorData;
+        } else if (errorData?.detail) {
+          errorMessage = typeof errorData.detail === 'string' ? errorData.detail : 'Validation error occurred';
+        } else if (errorData?.msg) {
+          errorMessage = errorData.msg;
+        }
+      } else if (error.response?.data?.detail) {
+        errorMessage = error.response.data.detail;
+      } else if (error.message) {
+        errorMessage = error.message;
+      }
+      
+      message.error(errorMessage);
     } finally {
       setUploading(false);
     }
@@ -452,6 +777,31 @@ const AdminResourceCategory = ({ category, subCategory, title, description }) =>
 
   const handleDownload = async (record, format = 'image') => {
     try {
+      // For video links, open the original URL directly
+      const isVideoLink = isVideoLinkResource(record);
+      
+      if (isVideoLink) {
+        const downloadLink = document.createElement('a');
+        downloadLink.href = record.file_path;
+        downloadLink.target = '_blank';
+        downloadLink.rel = 'noopener noreferrer';
+        document.body.appendChild(downloadLink);
+        downloadLink.click();
+        document.body.removeChild(downloadLink);
+        
+        // Update download count in UI
+        setResources(prevResources =>
+          prevResources.map(res =>
+            res.resource_id === record.resource_id
+              ? { ...res, download_count: (res.download_count || 0) + 1 }
+              : res
+          )
+        );
+        
+        message.success('Opening video link...');
+        return;
+      }
+      
       const token = sessionStorage.getItem('token');
       const user = JSON.parse(sessionStorage.getItem('user') || '{}');
       
@@ -665,8 +1015,22 @@ const AdminResourceCategory = ({ category, subCategory, title, description }) =>
 
     // Generate proper preview URL
     const getPreviewUrl = () => {
+      // Debug: log the resource data
+      console.log('Preview resource data:', {
+        is_video_link: previewResource.is_video_link,
+        file_path: previewResource.file_path,
+        resource_id: previewResource.resource_id
+      });
+      
+      // For video links, use the direct URL
+      // Check multiple conditions for video link detection
+      if (isVideoLinkResource(previewResource)) {
+        console.log('Using video link URL:', previewResource.file_path);
+        return previewResource.file_path;
+      }
+      // For uploaded files, use the backend preview URL
       const previewUrl = `${API}/resources/${previewResource.resource_id}/preview`;
-      console.log('Using preview URL:', previewUrl);
+      console.log('Using backend preview URL:', previewUrl);
       return previewUrl;
     };
 
@@ -735,8 +1099,78 @@ const AdminResourceCategory = ({ category, subCategory, title, description }) =>
     }
     // Keep existing preview rendering below
 
-    // Check for videos
-    if (fileType.includes('video') || ['mp4', 'webm', 'ogg', 'mov', 'avi', 'mkv'].includes(fileExtension)) {
+    // Check for videos (including video links)
+    const isVideoLink = isVideoLinkResource(previewResource);
+    
+    if (fileType.includes('video') || ['mp4', 'webm', 'ogg', 'mov', 'avi', 'mkv'].includes(fileExtension) || isVideoLink) {
+      // For video links, use the direct URL
+      const videoSrc = isVideoLink ? previewResource.file_path : previewUrl;
+      
+      // Check if it's a YouTube link
+      const youtubeMatch = videoSrc.match(/(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/)([^&\n?#]+)/);
+      if (youtubeMatch && isVideoLink) {
+        const videoId = youtubeMatch[1];
+        const embedUrl = `https://www.youtube.com/embed/${videoId}?autoplay=0&rel=0&modestbranding=1`;
+        return (
+          <div style={{ width: '100%', height: '600px', overflow: 'hidden' }}>
+            <iframe
+              src={embedUrl}
+              style={{
+                width: '100%',
+                height: '100%',
+                border: 'none',
+                borderRadius: '8px'
+              }}
+              title={previewResource.name}
+              allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+              allowFullScreen
+              onLoad={() => {
+                console.log('YouTube iframe loaded successfully');
+                setPreviewLoading(false);
+              }}
+              onError={() => {
+                console.error('YouTube iframe error');
+                setPreviewLoading(false);
+                message.error('Failed to load YouTube video preview');
+              }}
+            />
+          </div>
+        );
+      }
+
+      // Check if it's a Vimeo link
+      const vimeoMatch = videoSrc.match(/vimeo\.com\/(\d+)/);
+      if (vimeoMatch && isVideoLink) {
+        const videoId = vimeoMatch[1];
+        const embedUrl = `https://player.vimeo.com/video/${videoId}?autoplay=0&byline=0&portrait=0&title=0`;
+        return (
+          <div style={{ width: '100%', height: '600px', overflow: 'hidden' }}>
+            <iframe
+              src={embedUrl}
+              style={{
+                width: '100%',
+                height: '100%',
+                border: 'none',
+                borderRadius: '8px'
+              }}
+              title={previewResource.name}
+              allow="autoplay; fullscreen; picture-in-picture"
+              allowFullScreen
+              onLoad={() => {
+                console.log('Vimeo iframe loaded successfully');
+                setPreviewLoading(false);
+              }}
+              onError={() => {
+                console.error('Vimeo iframe error');
+                setPreviewLoading(false);
+                message.error('Failed to load Vimeo video preview');
+              }}
+            />
+          </div>
+        );
+      }
+
+      // For direct video files or other video links
       return (
         <div style={{ textAlign: 'center', maxHeight: '600px', overflow: 'auto' }}>
           <video
@@ -746,7 +1180,7 @@ const AdminResourceCategory = ({ category, subCategory, title, description }) =>
               }
             }}
             controls
-            autoPlay
+            preload="metadata"
             style={{
               width: '100%',
               maxHeight: '600px',
@@ -764,12 +1198,16 @@ const AdminResourceCategory = ({ category, subCategory, title, description }) =>
               // Pause all other videos when one starts playing
               Object.keys(videoRefs.current).forEach(key => {
                 if (key !== previewResource?.resource_id && videoRefs.current[key]) {
-                  videoRefs.current[key].pause();
+                  try {
+                    videoRefs.current[key].pause();
+                  } catch (e) {
+                    // Ignore pause errors
+                  }
                 }
               });
             }}
           >
-            <source src={previewUrl} type={previewResource.file_type || 'video/mp4'} />
+            <source src={videoSrc} type={previewResource.file_type || 'video/mp4'} />
             Your browser does not support the video tag.
           </video>
         </div>
@@ -910,57 +1348,120 @@ const AdminResourceCategory = ({ category, subCategory, title, description }) =>
       );
     }
 
-    // For videos
-    if (fileType.includes('video') || ['mp4', 'webm', 'ogg', 'mov', 'avi', 'mkv'].includes(fileExtension)) {
-      return (
-        <div style={{ 
-          position: 'relative', 
-          width: '100%', 
-          height: '150px',
-          backgroundColor: '#000',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          overflow: 'hidden'
-        }}>
-          <video
-            muted
-            style={{
-              width: '100%',
-              height: '100%',
-              objectFit: 'cover',
-              opacity: 0.7
-            }}
-            onMouseEnter={(e) => {
-              // Mute and play the video on hover
-              e.target.muted = true;
-              e.target.play().catch(e => console.log('Video play error:', e));
-            }}
-            onMouseLeave={(e) => {
-              // Pause and reset the video when mouse leaves
-              e.target.pause();
-              e.target.currentTime = 0;
-            }}
-          >
-            <source src={fileUrl} type={resource.file_type || 'video/mp4'} />
-          </video>
-          <div style={{
-            position: 'absolute',
-            top: '50%',
-            left: '50%',
-            transform: 'translate(-50%, -50%)',
-            background: 'rgba(0,0,0,0.5)',
-            borderRadius: '50%',
-            width: '48px',
-            height: '48px',
+    // For videos (including video links)
+    const isVideoLink = isVideoLinkResource(resource);
+    
+    if (fileType.includes('video') || ['mp4', 'webm', 'ogg', 'mov', 'avi', 'mkv'].includes(fileExtension) || isVideoLink) {
+      // For video links, show actual video thumbnail
+      if (isVideoLink) {
+        const youtubeMatch = fileUrl.match(/(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/)([^&\n?#]+)/);
+        const vimeoMatch = fileUrl.match(/vimeo\.com\/(\d+)/);
+        
+        let thumbnailUrl = '';
+        let platformName = 'Video Link';
+        
+        if (youtubeMatch) {
+          const videoId = youtubeMatch[1];
+          thumbnailUrl = `https://img.youtube.com/vi/${videoId}/hqdefault.jpg`;
+          platformName = 'YouTube';
+        } else if (vimeoMatch) {
+          const videoId = vimeoMatch[1];
+          // For Vimeo, we'll use a placeholder since getting thumbnails requires API
+          thumbnailUrl = '';
+          platformName = 'Vimeo';
+        }
+        
+        return (
+          <div style={{ 
+            position: 'relative', 
+            width: '100%', 
+            height: '150px',
+            backgroundColor: '#000',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
-            pointerEvents: 'none' // Make sure clicks go through to the video
+            overflow: 'hidden'
           }}>
-            <VideoCameraOutlined style={{ fontSize: '24px', color: 'white' }} />
+            {thumbnailUrl ? (
+              <>
+                <img
+                  src={thumbnailUrl}
+                  alt={resource.name}
+                  style={{
+                    width: '100%',
+                    height: '100%',
+                    objectFit: 'cover'
+                  }}
+                  onError={(e) => {
+                    // Fallback to generic thumbnail if image fails to load
+                    e.target.style.display = 'none';
+                    e.target.nextSibling.style.display = 'flex';
+                  }}
+                />
+                <div style={{
+                  position: 'absolute',
+                  top: '50%',
+                  left: '50%',
+                  transform: 'translate(-50%, -50%)',
+                  background: 'rgba(0,0,0,0.7)',
+                  borderRadius: '50%',
+                  width: '48px',
+                  height: '48px',
+                  display: 'none',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  fontSize: '24px'
+                }}>
+                  ▶️
+                </div>
+              </>
+            ) : (
+              <div style={{
+                width: '100%',
+                height: '100%',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                backgroundColor: platformName === 'Vimeo' ? '#00adef' : '#1890ff'
+              }}>
+                <div style={{
+                  background: 'rgba(0,0,0,0.7)',
+                  borderRadius: '50%',
+                  width: '48px',
+                  height: '48px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  fontSize: '24px'
+                }}>
+                  ▶️
+                </div>
+              </div>
+            )}
+            <div style={{
+              position: 'absolute',
+              bottom: '8px',
+              left: '8px',
+              background: 'rgba(0,0,0,0.8)',
+              color: 'white',
+              padding: '2px 6px',
+              borderRadius: '4px',
+              fontSize: '10px',
+              fontWeight: 'bold'
+            }}>
+              {platformName}
+            </div>
           </div>
-        </div>
+        );
+      }
+      
+      // For uploaded video files - use a simpler approach
+      return (
+        <VideoThumbnail 
+          videoUrl={fileUrl} 
+          resource={resource}
+          fileType={resource.file_type}
+        />
       );
     }
 
@@ -1563,6 +2064,8 @@ const AdminResourceCategory = ({ category, subCategory, title, description }) =>
           setIsModalVisible(false);
           form.resetFields();
           setFileList([]);
+          setVideoLink('');
+          setUploadType('file');
         }}
         footer={null}
         width={600}
@@ -1638,25 +2141,60 @@ const AdminResourceCategory = ({ category, subCategory, title, description }) =>
           </Form.Item>
 
           <Form.Item
-            label="Select Files"
+            label="Upload Type"
             required
           >
-            <Upload
-              beforeUpload={beforeUpload}
-              onChange={handleFileChange}
-              fileList={fileList}
-              multiple
-              accept=".pdf,.jpg,.jpeg,.png,.gif,.webp,.svg,.mp4,.webm,.ogg,.mp3,.wav,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.zip,.rar"
+            <Select
+              value={uploadType}
+              onChange={(value) => {
+                setUploadType(value);
+                setFileList([]);
+                setVideoLink('');
+              }}
+              style={{ width: '100%' }}
             >
-              <Button icon={<UploadOutlined />}>Select Files (Max 100MB each)</Button>
-            </Upload>
-            <div style={{ marginTop: 8, fontSize: '12px', color: '#666' }}>
-              {fileList.length > 0 
-                ? `Selected ${fileList.length} file(s). Multiple files will be auto-numbered.`
-                : 'You can select multiple files at once. They will be numbered automatically.'
-              }
-            </div>
+              <Option value="file">Upload File</Option>
+              <Option value="link">Video Link (YouTube, Vimeo, etc.)</Option>
+            </Select>
           </Form.Item>
+
+          {uploadType === 'file' ? (
+            <Form.Item
+              label="Select Files"
+              required
+            >
+              <Upload
+                beforeUpload={beforeUpload}
+                onChange={handleFileChange}
+                fileList={fileList}
+                multiple
+                accept=".pdf,.jpg,.jpeg,.png,.gif,.webp,.svg,.mp4,.webm,.ogg,.mp3,.wav,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.zip,.rar"
+              >
+                <Button icon={<UploadOutlined />}>Select Files (Max 100MB each)</Button>
+              </Upload>
+              <div style={{ marginTop: 8, fontSize: '12px', color: '#666' }}>
+                {fileList.length > 0 
+                  ? `Selected ${fileList.length} file(s). Multiple files will be auto-numbered.`
+                  : 'You can select multiple files at once. They will be numbered automatically.'
+                }
+              </div>
+            </Form.Item>
+          ) : (
+            <Form.Item
+              label="Video Link"
+              required
+            >
+              <Input
+                placeholder="Enter video URL (YouTube, Vimeo, etc.)"
+                value={videoLink}
+                onChange={(e) => setVideoLink(e.target.value)}
+                style={{ width: '100%' }}
+              />
+              <div style={{ marginTop: 8, fontSize: '12px', color: '#666' }}>
+                Supported: YouTube, Vimeo, Dailymotion, and other video platforms
+              </div>
+            </Form.Item>
+          )}
 
           <Form.Item
             name="description"
@@ -1676,7 +2214,7 @@ const AdminResourceCategory = ({ category, subCategory, title, description }) =>
                 type="primary"
                 onClick={handleUpload}
                 loading={uploading}
-                disabled={fileList.length === 0}
+                disabled={(uploadType === 'file' && fileList.length === 0) || (uploadType === 'link' && !videoLink)}
               >
                 {uploading ? 'Uploading...' : 'Upload'}
               </Button>
@@ -1685,6 +2223,8 @@ const AdminResourceCategory = ({ category, subCategory, title, description }) =>
                   setIsModalVisible(false);
                   form.resetFields();
                   setFileList([]);
+                  setVideoLink('');
+                  setUploadType('file');
                 }}
               >
                 Cancel
@@ -1744,13 +2284,15 @@ const AdminResourceCategory = ({ category, subCategory, title, description }) =>
         ]}
         width="90%"
         style={{ top: 20 }}
-        bodyStyle={{ 
-          padding: 0, 
-          height: '70vh', 
-          overflow: 'auto',
-          display: 'flex',
-          justifyContent: 'center',
-          alignItems: 'center'
+        styles={{ 
+          body: {
+            padding: 0, 
+            height: '70vh', 
+            overflow: 'auto',
+            display: 'flex',
+            justifyContent: 'center',
+            alignItems: 'center'
+          }
         }}
         destroyOnClose
       >
