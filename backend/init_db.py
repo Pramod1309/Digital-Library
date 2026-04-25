@@ -122,6 +122,7 @@ def migrate_database():
                 ("uploaded_by_name", "VARCHAR(255)"),
                 ("approval_status", "VARCHAR(50) DEFAULT 'approved'"),
                 ("download_count", "INTEGER DEFAULT 0"),
+                ("is_video_link", "BOOLEAN DEFAULT 0"),
             ]
             for col_name, col_def in resource_column_defs:
                 if col_name not in resource_columns:

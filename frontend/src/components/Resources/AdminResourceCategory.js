@@ -19,7 +19,8 @@ import {
   Tooltip,
   Row,
   Col,
-  Badge
+  Badge,
+  Radio
 } from 'antd';
 import { 
   PlusOutlined, 
@@ -405,6 +406,7 @@ const AdminResourceCategory = ({ category, subCategory, title, description }) =>
   const [selectedClass, setSelectedClass] = useState('all');
   const [selectedSubject, setSelectedSubject] = useState('all');
   const [viewMode, setViewMode] = useState('list');
+  const [namingOption, setNamingOption] = useState('auto'); // 'auto' or 'original'
   const [categoryFilter, setCategoryFilter] = useState(category || 'all');
   const [subCategoryFilter, setSubCategoryFilter] = useState('all');
   const [isEditModalVisible, setIsEditModalVisible] = useState(false);
@@ -587,6 +589,7 @@ const AdminResourceCategory = ({ category, subCategory, title, description }) =>
         formData.append('class_level', values.class_level || '');
         formData.append('subject', values.subject || '');
         formData.append('tags', values.tags ? values.tags.join(',') : '');
+        formData.append('naming_option', namingOption);
 
         setUploading(true);
         const response = await api.post('/admin/resources/upload', formData, {
@@ -2066,6 +2069,7 @@ const AdminResourceCategory = ({ category, subCategory, title, description }) =>
           setFileList([]);
           setVideoLink('');
           setUploadType('file');
+          setNamingOption('auto');
         }}
         footer={null}
         width={600}
@@ -2122,6 +2126,36 @@ const AdminResourceCategory = ({ category, subCategory, title, description }) =>
             <Input placeholder="Enter resource name" />
           </Form.Item>
 
+          {uploadType === 'file' && fileList.length > 0 && (
+            <Form.Item
+              label="File Naming"
+              required
+            >
+              <Radio.Group
+                value={namingOption}
+                onChange={(e) => setNamingOption(e.target.value)}
+                style={{ width: '100%' }}
+              >
+                <Radio value="auto">
+                  <div>
+                    <div style={{ fontWeight: 500 }}>Auto-number files</div>
+                    <div style={{ fontSize: '12px', color: '#666', marginTop: '2px' }}>
+                      Files will be named: "Math", "Math 2", "Math 3", etc.
+                    </div>
+                  </div>
+                </Radio>
+                <Radio value="original" style={{ marginTop: '8px' }}>
+                  <div>
+                    <div style={{ fontWeight: 500 }}>Use original filenames</div>
+                    <div style={{ fontSize: '12px', color: '#666', marginTop: '2px' }}>
+                      Files will keep their original names from upload
+                    </div>
+                  </div>
+                </Radio>
+              </Radio.Group>
+            </Form.Item>
+          )}
+
           <Form.Item
             name="tags"
             label="Sub-Title"
@@ -2150,6 +2184,7 @@ const AdminResourceCategory = ({ category, subCategory, title, description }) =>
                 setUploadType(value);
                 setFileList([]);
                 setVideoLink('');
+                setNamingOption('auto');
               }}
               style={{ width: '100%' }}
             >
@@ -2174,8 +2209,8 @@ const AdminResourceCategory = ({ category, subCategory, title, description }) =>
               </Upload>
               <div style={{ marginTop: 8, fontSize: '12px', color: '#666' }}>
                 {fileList.length > 0 
-                  ? `Selected ${fileList.length} file(s). Multiple files will be auto-numbered.`
-                  : 'You can select multiple files at once. They will be numbered automatically.'
+                  ? `Selected ${fileList.length} file(s). ${namingOption === 'original' ? 'Files will keep their original names.' : 'Files will be auto-numbered.'}`
+                  : 'You can select multiple files at once. Choose naming option below.'
                 }
               </div>
             </Form.Item>
@@ -2225,6 +2260,7 @@ const AdminResourceCategory = ({ category, subCategory, title, description }) =>
                   setFileList([]);
                   setVideoLink('');
                   setUploadType('file');
+                  setNamingOption('auto');
                 }}
               >
                 Cancel

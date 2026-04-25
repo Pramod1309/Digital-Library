@@ -1761,6 +1761,7 @@ async def upload_resource(
     sub_category: Optional[str] = Form(None),
     subject: Optional[str] = Form(None),
     tags: Optional[str] = Form(None),
+    naming_option: str = Form("auto"),
     files: List[UploadFile] = File(...),
     db: Session = Depends(get_db)
 ):
@@ -1801,22 +1802,36 @@ async def upload_resource(
         
         file_path = f"/uploads/resources/{category}/{safe_filename}"
         
-        # Auto-number resource names if multiple files
+        # Handle resource naming based on naming option
         resource_name = name
         if len(files) > 1:
-            # Extract base name and number if already numbered
-            import re
-            match = re.match(r'(.+?)(\d+)$', name.strip())
-            if match:
-                base_name = match.group(1)
-                start_num = int(match.group(2))
-                resource_name = f"{base_name}{start_num + index}"
-            else:
-                # If no number at end, add numbering
-                if index == 0:
-                    resource_name = name
+            if naming_option == "original":
+                # Use original filename without extension
+                original_name = file.filename
+                if original_name:
+                    # Remove file extension
+                    if '.' in original_name:
+                        resource_name = original_name.rsplit('.', 1)[0]
+                    else:
+                        resource_name = original_name
                 else:
+                    # Fallback to indexed naming if no filename
                     resource_name = f"{name} {index + 1}"
+            else:
+                # Auto-number files (default behavior)
+                # Extract base name and number if already numbered
+                import re
+                match = re.match(r'(.+?)(\d+)$', name.strip())
+                if match:
+                    base_name = match.group(1)
+                    start_num = int(match.group(2))
+                    resource_name = f"{base_name}{start_num + index}"
+                else:
+                    # If no number at end, add numbering
+                    if index == 0:
+                        resource_name = name
+                    else:
+                        resource_name = f"{name} {index + 1}"
         
         # Create resource record
         new_resource = Resource(
