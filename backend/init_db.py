@@ -10,6 +10,7 @@ from database import (
     engine,
     Admin,
     SessionLocal,
+    SchoolPasswordResetOTP,
     SchoolWatermarkText,
     Resource,
 )
@@ -55,6 +56,7 @@ def migrate_database():
         school_column_defs = [
             ("contact_number", "VARCHAR(20)"),
             ("logo_path", "VARCHAR(500)"),
+            ("welcome_email_sent_at", "DATETIME"),
         ]
         for col_name, col_def in school_column_defs:
             if col_name not in columns:
@@ -104,6 +106,11 @@ def migrate_database():
                     except Exception as e:
                         print(f"  Note: {e}")
                         print(f"  Column {col_name} might already exist or SQLite limitation encountered")
+
+        if 'school_password_reset_otps' not in table_names:
+            print("Creating school_password_reset_otps table...")
+            SchoolPasswordResetOTP.__table__.create(bind=engine)
+            print("Created school_password_reset_otps table")
 
         if 'resources' not in table_names:
             print("Creating resources table...")

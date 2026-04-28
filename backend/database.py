@@ -50,6 +50,7 @@ class School(Base):
     email = Column(String(255), unique=True, index=True, nullable=False)
     contact_number = Column(String(20), nullable=True)  # NEW: Added contact number field
     password_hash = Column(String(255), nullable=False)
+    welcome_email_sent_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -64,6 +65,24 @@ class PasswordResetToken(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     expires_at = Column(DateTime, nullable=False)
     used = Column(Integer, default=0)  # 0 = not used, 1 = used
+
+class SchoolPasswordResetOTP(Base):
+    __tablename__ = "school_password_reset_otps"
+
+    id = Column(Integer, primary_key=True, index=True)
+    request_id = Column(String(64), unique=True, nullable=False, index=True)
+    school_id = Column(String(100), nullable=False, index=True)
+    school_name = Column(String(255), nullable=False)
+    mobile_number = Column(String(20), nullable=False, index=True)
+    otp_code = Column(String(10), nullable=False)
+    purpose = Column(String(50), default="password_reset", nullable=False)
+    expires_at = Column(DateTime, nullable=False)
+    reset_token = Column(String(64), unique=True, nullable=True, index=True)
+    reset_token_expires_at = Column(DateTime, nullable=True)
+    verified_at = Column(DateTime, nullable=True)
+    used_at = Column(DateTime, nullable=True)
+    attempt_count = Column(Integer, default=0, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
 # Activity Log Model
 class ActivityLog(Base):

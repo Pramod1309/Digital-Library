@@ -27,6 +27,8 @@ import json
 import asyncio
 import re
 import smtplib
+import urllib.request as urllib_request
+import urllib.error as urllib_error
 from types import SimpleNamespace
 import qrcode
 import base64
@@ -37,7 +39,7 @@ from collections import Counter, defaultdict
 
 # Import database
 from database import (
-    get_db, Admin, School, PasswordResetToken, ActivityLog, Resource, 
+    get_db, Admin, School, PasswordResetToken, SchoolPasswordResetOTP, ActivityLog, Resource, 
     Announcement, AnnouncementRead, SupportTicket, ChatMessage, ResourceDownload, 
     KnowledgeArticle, SchoolLogoPosition, SchoolWatermarkText, engine, Base, AdminResourceWatermark,
     AdminBatchWatermarkTemplate, SchoolSearchLog
@@ -114,6 +116,19 @@ class LoginResponse(BaseModel):
 class ForgotPasswordRequest(BaseModel):
     email: EmailStr
     user_type: str  # 'admin' or 'school'
+
+class SchoolForgotPasswordOtpRequest(BaseModel):
+    mobile_number: str
+
+class SchoolForgotPasswordOtpVerifyRequest(BaseModel):
+    request_id: str
+    mobile_number: str
+    otp: str
+
+class SchoolForgotPasswordResetRequest(BaseModel):
+    reset_token: str
+    new_password: str
+    confirm_password: str
 
 class SchoolCreate(BaseModel):
     school_id: str
@@ -359,6 +374,64 @@ def parse_bool(value, default=False):
     if text in ("false", "0", "no", "n", "off"):
         return False
     return default
+
+def normalize_indian_mobile_number(value: Optional[str]) -> Optional[str]:
+    if not value:
+        return None
+
+    digits = re.sub(r"\D", "", str(value))
+    if not digits:
+        return None
+
+    if len(digits) == 10:
+        digits = f"91{digits}"
+    elif len(digits) == 11 and digits.startswith("0"):
+        digits = f"91{digits[1:]}"
+    elif len(digits) == 12 and digits.startswith("91"):
+        pass
+    else:
+        return None
+
+    local_number = digits[-10:]
+    if len(local_number) != 10:
+        return None
+
+    return f"+{digits}"
+
+def to_brevo_sms_recipient(value: str) -> str:
+    return re.sub(r"\D", "", value or "")
+
+def mask_mobile_number(value: Optional[str]) -> str:
+    normalized = normalize_indian_mobile_number(value)
+    if not normalized:
+        return "Unavailable"
+    digits = re.sub(r"\D", "", normalized)
+    return f"+{digits[:2]} ******{digits[-4:]}"
+
+def generate_numeric_otp(length: int = 6) -> str:
+    numeric_length = max(4, int(length))
+    return str(uuid.uuid4().int % (10 ** numeric_length)).zfill(numeric_length)
+
+def generate_secure_token() -> str:
+    return uuid.uuid4().hex + uuid.uuid4().hex[:8]
+
+def validate_school_password(password: str, confirm_password: Optional[str] = None) -> Optional[str]:
+    if not password or len(password) < 8:
+        return "Password must be at least 8 characters long"
+    if confirm_password is not None and password != confirm_password:
+        return "New password and confirm password do not match"
+    return None
+
+def find_school_by_mobile_number(db: Session, mobile_number: str) -> Optional[School]:
+    normalized_target = normalize_indian_mobile_number(mobile_number)
+    if not normalized_target:
+        return None
+
+    candidate_schools = db.query(School).filter(School.contact_number.isnot(None)).all()
+    for school in candidate_schools:
+        if normalize_indian_mobile_number(school.contact_number) == normalized_target:
+            return school
+    return None
 
 def is_image_type(file_type: str, file_path: str = "") -> bool:
     """Check if a file is an image based on mime type or extension."""
@@ -691,6 +764,8 @@ def build_activity_title(activity_type: str, details: Optional[Dict[str, Any]] =
         return f"Created ticket {details.get('ticket_id') or ''}".strip()
     if activity_type == "chat_message_sent":
         return "Sent a chat message"
+    if activity_type == "password_reset":
+        return "Reset password"
 
     return activity_type.replace("_", " ").title()
 
@@ -719,6 +794,8 @@ def build_activity_description(activity_type: str, details: Optional[Dict[str, A
         return f"Created a {details.get('priority') or 'normal'} priority {details.get('category') or ''} support ticket.".replace("  ", " ").strip()
     if activity_type == "chat_message_sent":
         return "Sent a message to the admin."
+    if activity_type == "password_reset":
+        return "Password was reset successfully using mobile OTP verification."
 
     return details.get("message") or details.get("description") or "Activity recorded."
 
@@ -1413,6 +1490,421 @@ def get_batch_email_settings() -> Dict[str, Any]:
         "use_tls": use_tls,
         "use_ssl": use_ssl
     }
+
+def get_brevo_sms_settings() -> Dict[str, Any]:
+    load_dotenv(ROOT_DIR / '.env', override=True)
+    load_dotenv(ROOT_DIR.parent / '.env', override=True)
+
+    api_key = os.environ.get("BREVO_SMS_API_KEY") or os.environ.get("SMS_API_KEY")
+    sender = (os.environ.get("BREVO_SMS_SENDER") or os.environ.get("SMS_SENDER_NAME") or "").strip()
+    country_code = (os.environ.get("BREVO_SMS_DEFAULT_COUNTRY_CODE") or "91").strip()
+
+    if not api_key or not sender:
+        raise HTTPException(
+            status_code=400,
+            detail="SMS automation is not configured. Please set BREVO_SMS_API_KEY and BREVO_SMS_SENDER."
+        )
+
+    return {
+        "api_key": api_key,
+        "sender": sender[:11],
+        "country_code": country_code
+    }
+
+def build_smtp_client(email_settings: Dict[str, Any]):
+    if email_settings["use_ssl"]:
+        smtp_client = smtplib.SMTP_SSL(email_settings["host"], email_settings["port"], timeout=60)
+    else:
+        smtp_client = smtplib.SMTP(email_settings["host"], email_settings["port"], timeout=60)
+        if email_settings["use_tls"]:
+            smtp_client.starttls()
+
+    smtp_client.login(email_settings["username"], email_settings["password"])
+    return smtp_client
+
+def send_smtp_email(
+    email_settings: Dict[str, Any],
+    to_email: str,
+    subject: str,
+    text_content: str,
+    html_content: Optional[str] = None,
+    to_name: Optional[str] = None
+):
+    smtp_client = build_smtp_client(email_settings)
+    try:
+        email_message = EmailMessage()
+        email_message["Subject"] = subject
+        email_message["From"] = (
+            formataddr((email_settings["from_name"], email_settings["from_email"]))
+            if email_settings["from_name"]
+            else email_settings["from_email"]
+        )
+        email_message["To"] = formataddr((to_name, to_email)) if to_name else to_email
+        email_message["Reply-To"] = email_settings["from_email"]
+        email_message.set_content(text_content)
+        if html_content:
+            email_message.add_alternative(html_content, subtype="html")
+        smtp_client.send_message(email_message)
+    finally:
+        try:
+            smtp_client.quit()
+        except Exception:
+            pass
+
+def send_email_otp(email: str, otp_code: str, school_name: str) -> bool:
+    """Send OTP via email as fallback when SMS fails"""
+    try:
+        # Email configuration from .env
+        email_host = os.environ.get("EMAIL_HOST")
+        email_port = int(os.environ.get("EMAIL_PORT", "587"))
+        email_user = os.environ.get("EMAIL_USER")
+        email_password = os.environ.get("EMAIL_PASSWORD")
+        from_email = os.environ.get("DEFAULT_FROM_EMAIL", "noreply@koshquest.in")
+        from_name = os.environ.get("DEFAULT_FROM_NAME", "Koshquest")
+        
+        # Create email message
+        msg = EmailMessage()
+        msg['Subject'] = f"Koshquest Password Reset OTP - {school_name}"
+        msg['From'] = f"{from_name} <{from_email}>"
+        msg['To'] = email
+        
+        # Email content
+        html_content = f"""
+        <html>
+        <body style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+            <div style="background-color: #f8f9fa; padding: 20px; border-radius: 10px;">
+                <h2 style="color: #333; text-align: center;">Koshquest Password Reset</h2>
+                <p>Dear {school_name},</p>
+                <p>Your One-Time Password (OTP) for password reset is:</p>
+                <div style="background-color: #007bff; color: white; padding: 15px; 
+                            text-align: center; font-size: 24px; font-weight: bold; 
+                            border-radius: 5px; margin: 20px 0;">
+                    {otp_code}
+                </div>
+                <p>This OTP is valid for 10 minutes. Do not share this code with anyone.</p>
+                <p>If you didn't request this OTP, please contact support immediately.</p>
+                <hr style="border: 1px solid #ddd; margin: 20px 0;">
+                <p style="color: #666; font-size: 12px; text-align: center;">
+                    This is an automated message from Koshquest Digital Library.
+                </p>
+            </div>
+        </body>
+        </html>
+        """
+        
+        msg.add_alternative(html_content, subtype='html')
+        
+        # Send email
+        with smtplib.SMTP(email_host, email_port) as server:
+            server.starttls()
+            server.login(email_user, email_password)
+            server.send_message(msg)
+        
+        print(f"Email OTP sent successfully to {email}")
+        return True
+        
+    except Exception as e:
+        print(f"Failed to send email OTP: {e}")
+        return False
+
+def send_otp_with_fallback(mobile_number: str, email: str, otp_code: str, school_name: str):
+    """Try SMS first, fallback to email if SMS fails"""
+    
+    # Check SMS credits first
+    try:
+        settings = get_brevo_sms_settings()
+        print(f"SMS settings check - Sender: {settings['sender']}")
+        
+        # Try SMS first but be more aggressive about detecting failures
+        otp_message = (
+            f"Koshquest password reset OTP for {school_name} is {otp_code}. "
+            "It is valid for 10 minutes. Do not share this code."
+        )
+        result = send_brevo_sms(mobile_number, otp_message, "schoolPasswordResetOtp")
+        
+        if 'messageId' in result:
+            print(f"SMS API returned messageId: {result['messageId']}")
+            # Since we know there are 0 SMS credits, this will likely fail delivery
+            # Force email fallback for now
+            print("SMS API succeeded but credits are 0, forcing email fallback")
+            raise Exception("SMS credits depleted")
+        else:
+            print(f"SMS API failed: {result}")
+            raise Exception("SMS delivery failed")
+            
+    except Exception as sms_error:
+        print(f"SMS failed: {sms_error}")
+        
+        # Fallback to email
+        if email:
+            print(f"Attempting email fallback to: {email}")
+            email_success = send_email_otp(email, otp_code, school_name)
+            if email_success:
+                return {"method": "email", "success": True, "message": "OTP sent via email (SMS unavailable)"}
+            else:
+                return {"method": "none", "success": False, "message": "Both SMS and email failed"}
+        else:
+            return {"method": "none", "success": False, "message": "SMS failed and no email available"}
+
+def send_brevo_sms(recipient: str, content: str, tag: str) -> Dict[str, Any]:
+    settings = get_brevo_sms_settings()
+    clean_recipient = to_brevo_sms_recipient(recipient)
+    payload = {
+        "sender": settings["sender"],
+        "recipient": clean_recipient,
+        "content": content,
+        "type": "transactional",
+        "tag": tag,
+        "unicodeEnabled": True,
+    }
+
+    # Log SMS details for debugging
+    print(f"Sending SMS via Brevo:")
+    print(f"  Recipient: {recipient} -> {clean_recipient}")
+    print(f"  Sender: {settings['sender']}")
+    print(f"  Content: {content[:100]}...")
+    print(f"  Tag: {tag}")
+
+    request_obj = urllib_request.Request(
+        "https://api.brevo.com/v3/transactionalSMS/send",
+        data=json.dumps(payload).encode("utf-8"),
+        headers={
+            "accept": "application/json",
+            "api-key": settings["api_key"],
+            "content-type": "application/json",
+        },
+        method="POST",
+    )
+
+    try:
+        with urllib_request.urlopen(request_obj, timeout=30) as response:
+            response_body = response.read().decode("utf-8") if response else "{}"
+            result = json.loads(response_body or "{}")
+            print(f"Brevo SMS response: {result}")
+            
+            # Check for specific Brevo response codes
+            if 'messageId' in result:
+                print(f"SMS queued successfully with messageId: {result['messageId']}")
+            else:
+                print(f"Unexpected Brevo response format: {result}")
+                
+            return result
+    except urllib_error.HTTPError as exc:
+        error_body = exc.read().decode("utf-8", errors="ignore")
+        print(f"Brevo SMS HTTP error: {exc.code} {error_body}")
+        
+        # Provide more specific error messages based on HTTP status
+        if exc.code == 401:
+            raise HTTPException(status_code=502, detail="SMS API authentication failed. Please check API key.")
+        elif exc.code == 403:
+            raise HTTPException(status_code=502, detail="SMS sender not authorized. Please check sender name configuration.")
+        elif exc.code == 429:
+            raise HTTPException(status_code=429, detail="SMS rate limit exceeded. Please try again later.")
+        else:
+            raise HTTPException(status_code=502, detail="Failed to send SMS. Please try again in a moment.")
+    except urllib_error.URLError as exc:
+        print(f"Brevo SMS URL error: {exc}")
+        raise HTTPException(status_code=502, detail="SMS service is currently unreachable. Please try again.")
+    except Exception as exc:
+        print(f"Brevo SMS unexpected error: {exc}")
+        raise HTTPException(status_code=500, detail="Unexpected error while sending SMS")
+
+def build_batch_watermark_email(school: School, zip_filename: str, subject: str, custom_message: str) -> Dict[str, str]:
+    """Build beautiful HTML email for batch watermark ZIP delivery"""
+    text_content = f"""
+Dear {school.school_name},
+
+Greetings from Wonder Learning India,
+
+Please find attached to this email the ZIP file containing your customized watermarked learning resources.
+
+{custom_message}
+
+We hope these materials add value to your learning initiatives and support your educational goals effectively.
+
+Should you require any modifications, additional customization, or assistance, please feel free to reply to this email—we would be happy to help.
+
+Thank you for choosing Wonder Learning India. We appreciate the opportunity to support your institution.
+
+Warm Regards,
+Wonder Learning India
+📧 Support Team
+🌐 Empowering Better Learning
+""".strip()
+
+    html_content = f"""
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Customized Resources Ready - {school.school_name}</title>
+  </head>
+  <body style="margin:0;padding:0;background:#f4f7fb;font-family:Arial,Helvetica,sans-serif;color:#16324f;">
+    <div style="max-width:680px;margin:0 auto;padding:32px 18px;">
+      <!-- Header -->
+      <div style="background:linear-gradient(135deg,#0f4c81,#1fa2a6);border-radius:24px;padding:36px 34px;color:#ffffff;box-shadow:0 24px 50px rgba(15,76,129,0.22);">
+        <div style="font-size:12px;letter-spacing:1.8px;text-transform:uppercase;opacity:0.82;margin-bottom:14px;">Resources Ready</div>
+        <h1 style="margin:0 0 12px;font-size:30px;line-height:1.2;">{school.school_name}, your customized resources are ready.</h1>
+        <p style="margin:0;font-size:16px;line-height:1.8;opacity:0.94;">
+          Your watermarked learning materials have been processed and are ready for download.
+        </p>
+      </div>
+
+      <!-- Content -->
+      <div style="background:#ffffff;margin-top:-18px;border-radius:22px;padding:30px 28px 26px;box-shadow:0 18px 40px rgba(13,38,59,0.08);">
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px;margin-bottom:24px;">
+          <div style="background:#f7fbff;border:1px solid #d8e6f3;border-radius:16px;padding:18px;">
+            <div style="font-size:12px;color:#5d7990;text-transform:uppercase;letter-spacing:1px;margin-bottom:8px;">School ID</div>
+            <div style="font-size:18px;font-weight:700;color:#16324f;">{school.school_id}</div>
+          </div>
+          <div style="background:#f0f9ff;border:1px solid #bae6fd;border-radius:16px;padding:18px;">
+            <div style="font-size:12px;color:#5d7990;text-transform:uppercase;letter-spacing:1px;margin-bottom:8px;">ZIP File</div>
+            <div style="font-size:16px;font-weight:700;color:#16324f;">{zip_filename}</div>
+          </div>
+        </div>
+
+        <!-- Custom Message -->
+        <div style="background:#fff8ef;border:1px solid #f3ddbf;border-radius:18px;padding:20px 22px;margin-bottom:24px;">
+          <div style="font-size:18px;font-weight:700;color:#7c4d0f;margin-bottom:10px;">Message from Admin</div>
+          <div style="font-size:15px;line-height:1.9;color:#6a4a1f;">
+            {custom_message.replace(chr(10), '<br>')}
+          </div>
+        </div>
+
+        <!-- Action Button -->
+        <div style="text-align:center;margin:26px 0 20px;">
+          <div style="display:inline-block;padding:14px 28px;border-radius:999px;background:#28a745;color:#ffffff;text-decoration:none;font-size:15px;font-weight:700;">
+            📦 Resources Attached to This Email
+          </div>
+        </div>
+
+        <!-- Support Info -->
+        <div style="font-size:14px;line-height:1.8;color:#5d7990;">
+          Need help? Reply to this email or contact our support team.
+        </div>
+      </div>
+
+      <!-- Footer -->
+      <div style="text-align:center;font-size:12px;color:#7a90a5;padding-top:18px;">
+        <p style="margin:0 0 8px;">Sent by Wonder Learning India</p>
+        <p style="margin:0;">🌐 Empowering Better Learning</p>
+      </div>
+    </div>
+  </body>
+</html>
+""".strip()
+
+    return {
+        "subject": subject,
+        "text_content": text_content,
+        "html_content": html_content,
+    }
+
+def build_school_welcome_email(school: School) -> Dict[str, str]:
+    login_url = (config.frontend_url or "").rstrip("/")
+    if config.environment == "production" and (not login_url or "localhost" in login_url):
+        login_url = f"https://{config.domain}".rstrip("/")
+    if not login_url:
+        login_url = "https://koshquest.in/login"
+    elif not login_url.endswith("/login"):
+        login_url = f"{login_url}/login"
+
+    subject = f"Welcome to Koshquest Digital Library, {school.school_name}"
+    text_content = f"""
+Hello {school.school_name},
+
+Welcome to Koshquest Digital Library.
+
+Your school account is now active and ready to use. You can sign in to explore curated resources, download branded materials, upload school content for approval, track usage, and stay connected with the admin team.
+
+School ID: {school.school_id}
+Registered Email: {school.email}
+
+Login here: {login_url}
+
+If you ever need help, please use the chat or support ticket options inside your dashboard.
+
+Warm regards,
+Wonder Learning India
+""".strip()
+
+    html_content = f"""
+<!DOCTYPE html>
+<html lang="en">
+  <body style="margin:0;padding:0;background:#f4f7fb;font-family:Arial,Helvetica,sans-serif;color:#16324f;">
+    <div style="max-width:680px;margin:0 auto;padding:32px 18px;">
+      <div style="background:linear-gradient(135deg,#0f4c81,#1fa2a6);border-radius:24px;padding:36px 34px;color:#ffffff;box-shadow:0 24px 50px rgba(15,76,129,0.22);">
+        <div style="font-size:12px;letter-spacing:1.8px;text-transform:uppercase;opacity:0.82;margin-bottom:14px;">Welcome Aboard</div>
+        <h1 style="margin:0 0 12px;font-size:30px;line-height:1.2;">{school.school_name}, your digital library is ready.</h1>
+        <p style="margin:0;font-size:16px;line-height:1.8;opacity:0.94;">
+          We are delighted to welcome your school to Koshquest Digital Library. Your team can now access learning resources, download school-ready materials, upload content for review, and stay connected with admin support from one dashboard.
+        </p>
+      </div>
+
+      <div style="background:#ffffff;margin-top:-18px;border-radius:22px;padding:30px 28px 26px;box-shadow:0 18px 40px rgba(13,38,59,0.08);">
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px;margin-bottom:24px;">
+          <div style="background:#f7fbff;border:1px solid #d8e6f3;border-radius:16px;padding:18px;">
+            <div style="font-size:12px;color:#5d7990;text-transform:uppercase;letter-spacing:1px;margin-bottom:8px;">School ID</div>
+            <div style="font-size:18px;font-weight:700;color:#16324f;">{school.school_id}</div>
+          </div>
+          <div style="background:#f7fbff;border:1px solid #d8e6f3;border-radius:16px;padding:18px;">
+            <div style="font-size:12px;color:#5d7990;text-transform:uppercase;letter-spacing:1px;margin-bottom:8px;">Registered Email</div>
+            <div style="font-size:16px;font-weight:700;color:#16324f;">{school.email}</div>
+          </div>
+        </div>
+
+        <div style="background:#fff8ef;border:1px solid #f3ddbf;border-radius:18px;padding:20px 22px;margin-bottom:24px;">
+          <div style="font-size:18px;font-weight:700;color:#7c4d0f;margin-bottom:10px;">What you can do next</div>
+          <div style="font-size:15px;line-height:1.9;color:#6a4a1f;">
+            Explore resources by category, download branded assets, upload your own materials for approval, and track announcements, chat responses, and support ticket updates from the dashboard home.
+          </div>
+        </div>
+
+        <div style="text-align:center;margin:26px 0 20px;">
+          <a href="{login_url}" style="display:inline-block;padding:14px 28px;border-radius:999px;background:#16324f;color:#ffffff;text-decoration:none;font-size:15px;font-weight:700;">
+            Open School Dashboard
+          </a>
+        </div>
+
+        <div style="font-size:14px;line-height:1.8;color:#5d7990;">
+          If you ever need help, please use the in-app chat or raise a support ticket from your dashboard.
+        </div>
+      </div>
+
+      <div style="text-align:center;font-size:12px;color:#7a90a5;padding-top:18px;">
+        Sent by Wonder Learning India via Koshquest Digital Library
+      </div>
+    </div>
+  </body>
+</html>
+""".strip()
+
+    return {
+        "subject": subject,
+        "text_content": text_content,
+        "html_content": html_content,
+    }
+
+def send_school_welcome_email_if_needed(db: Session, school: School):
+    if not school or school.welcome_email_sent_at or not school.email:
+        return
+
+    try:
+        email_settings = get_batch_email_settings()
+        welcome_email = build_school_welcome_email(school)
+        send_smtp_email(
+            email_settings=email_settings,
+            to_email=school.email,
+            to_name=school.school_name,
+            subject=welcome_email["subject"],
+            text_content=welcome_email["text_content"],
+            html_content=welcome_email["html_content"],
+        )
+        school.welcome_email_sent_at = datetime.utcnow()
+        db.commit()
+    except Exception as exc:
+        print(f"Welcome email send failed for {school.school_id}: {exc}")
 
 def build_school_batch_zip_bytes(job_path: Path, folder_entry: Dict[str, Any]) -> tuple[bytes, str]:
     folder_path = ensure_batch_job_within_root((job_path / folder_entry["folder_name"]).resolve())
@@ -2294,8 +2786,16 @@ async def send_admin_batch_watermark_emails(
             try:
                 zip_bytes, zip_filename = build_school_batch_zip_bytes(job_path, folder_entry)
 
+                # Build HTML email template
+                email_template = build_batch_watermark_email(
+                    school, 
+                    zip_filename, 
+                    email_item.subject, 
+                    email_item.message
+                )
+
                 email_message = EmailMessage()
-                email_message["Subject"] = email_item.subject
+                email_message["Subject"] = email_template["subject"]
                 email_message["From"] = (
                     formataddr((email_settings["from_name"], email_settings["from_email"]))
                     if email_settings["from_name"]
@@ -2303,7 +2803,11 @@ async def send_admin_batch_watermark_emails(
                 )
                 email_message["To"] = school.email
                 email_message["Reply-To"] = email_settings["from_email"]
-                email_message.set_content(email_item.message)
+                
+                # Add both text and HTML content
+                email_message.set_content(email_template["text_content"])
+                email_message.add_alternative(email_template["html_content"], subtype='html')
+                
                 email_message.add_attachment(
                     zip_bytes,
                     maintype="application",
@@ -2409,6 +2913,11 @@ async def school_login(login_data: LoginRequest, db: Session = Depends(get_db)):
         }
     )
     db.commit()
+
+    try:
+        send_school_welcome_email_if_needed(db, school)
+    except Exception as exc:
+        print(f"Non-blocking welcome email error for {school.school_id}: {exc}")
     
     # FIX: Properly format logo path
     logo_path = None
@@ -2442,11 +2951,14 @@ async def school_login(login_data: LoginRequest, db: Session = Depends(get_db)):
 @api_router.post("/forgot-password")
 async def forgot_password(request: ForgotPasswordRequest, db: Session = Depends(get_db)):
     """Forgot password endpoint - generates reset token"""
+    if request.user_type != "admin":
+        raise HTTPException(
+            status_code=400,
+            detail="School password reset now uses mobile OTP verification."
+        )
+
     # Check if user exists
-    if request.user_type == "admin":
-        user = db.query(Admin).filter(Admin.email == request.email).first()
-    else:
-        user = db.query(School).filter(School.email == request.email).first()
+    user = db.query(Admin).filter(Admin.email == request.email).first()
     
     if not user:
         # Don't reveal if user exists or not for security
@@ -2471,6 +2983,255 @@ async def forgot_password(request: ForgotPasswordRequest, db: Session = Depends(
     return {
         "message": "If the email exists, a password reset link has been sent",
         "demo_token": reset_token  # Only for demo, remove in production
+    }
+
+@api_router.post("/school/forgot-password/request-otp")
+async def request_school_password_reset_otp(
+    request: SchoolForgotPasswordOtpRequest,
+    db: Session = Depends(get_db)
+):
+    """Send a mobile OTP only when the mobile number matches a registered school."""
+    normalized_mobile = normalize_indian_mobile_number(request.mobile_number)
+    if not normalized_mobile:
+        raise HTTPException(status_code=400, detail="Enter a valid school mobile number")
+
+    school = find_school_by_mobile_number(db, normalized_mobile)
+    if not school:
+        raise HTTPException(status_code=404, detail="This mobile number is not registered with any school")
+
+    now = datetime.utcnow()
+    latest_request = db.query(SchoolPasswordResetOTP).filter(
+        SchoolPasswordResetOTP.school_id == school.school_id,
+        SchoolPasswordResetOTP.purpose == "password_reset"
+    ).order_by(SchoolPasswordResetOTP.created_at.desc()).first()
+
+    if latest_request and latest_request.used_at is None:
+        elapsed_seconds = int((now - latest_request.created_at).total_seconds())
+        if elapsed_seconds < 60:
+            raise HTTPException(
+                status_code=429,
+                detail=f"Please wait {60 - elapsed_seconds} seconds before requesting a new OTP"
+            )
+
+    active_requests = db.query(SchoolPasswordResetOTP).filter(
+        SchoolPasswordResetOTP.school_id == school.school_id,
+        SchoolPasswordResetOTP.purpose == "password_reset",
+        SchoolPasswordResetOTP.used_at.is_(None)
+    ).all()
+    for active_request in active_requests:
+        active_request.used_at = now
+
+    otp_code = generate_numeric_otp(6)
+    otp_request = SchoolPasswordResetOTP(
+        request_id=generate_secure_token(),
+        school_id=school.school_id,
+        school_name=school.school_name,
+        mobile_number=normalized_mobile,
+        otp_code=otp_code,
+        purpose="password_reset",
+        expires_at=now + timedelta(minutes=10),
+    )
+    db.add(otp_request)
+
+    # Try to send OTP with SMS fallback to email
+    otp_result = send_otp_with_fallback(normalized_mobile, school.email, otp_code, school.school_name)
+    
+    if not otp_result["success"]:
+        db.rollback()
+        raise HTTPException(status_code=502, detail=otp_result["message"])
+    
+    db.commit()
+
+    # Customize message based on delivery method
+    if otp_result["method"] == "email":
+        message = f"OTP sent successfully to {school.email} (SMS unavailable)"
+        masked_info = f"Email: {school.email[:3]}***@{school.email.split('@')[1]}"
+    else:
+        message = f"OTP sent successfully to {mask_mobile_number(normalized_mobile)}"
+        masked_info = mask_mobile_number(normalized_mobile)
+
+    return {
+        "message": message,
+        "request_id": otp_request.request_id,
+        "school_name": school.school_name,
+        "masked_mobile_number": masked_info,
+        "delivery_method": otp_result["method"],
+        "expires_in_seconds": 600,
+        "resend_in_seconds": 60
+    }
+
+@api_router.post("/school/forgot-password/verify-otp")
+async def verify_school_password_reset_otp(
+    request: SchoolForgotPasswordOtpVerifyRequest,
+    db: Session = Depends(get_db)
+):
+    """Verify the OTP and issue a short-lived reset token."""
+    normalized_mobile = normalize_indian_mobile_number(request.mobile_number)
+    if not normalized_mobile:
+        raise HTTPException(status_code=400, detail="Enter a valid school mobile number")
+
+    otp_request = db.query(SchoolPasswordResetOTP).filter(
+        SchoolPasswordResetOTP.request_id == request.request_id,
+        SchoolPasswordResetOTP.purpose == "password_reset"
+    ).first()
+
+    if not otp_request:
+        raise HTTPException(status_code=404, detail="Password reset request not found. Please request a new OTP.")
+
+    if otp_request.mobile_number != normalized_mobile:
+        raise HTTPException(status_code=400, detail="Mobile number does not match this OTP request")
+
+    if otp_request.used_at is not None:
+        raise HTTPException(status_code=400, detail="This OTP request is no longer active. Please request a new OTP.")
+
+    now = datetime.utcnow()
+    if otp_request.verified_at and otp_request.reset_token and otp_request.reset_token_expires_at and otp_request.reset_token_expires_at > now:
+        return {
+            "message": "OTP already verified",
+            "reset_token": otp_request.reset_token,
+            "school_name": otp_request.school_name
+        }
+
+    if now > otp_request.expires_at:
+        otp_request.used_at = now
+        db.commit()
+        raise HTTPException(status_code=400, detail="OTP has expired. Please request a new OTP.")
+
+    if otp_request.attempt_count >= 5:
+        otp_request.used_at = now
+        db.commit()
+        raise HTTPException(status_code=400, detail="Too many invalid OTP attempts. Please request a new OTP.")
+
+    if request.otp.strip() != otp_request.otp_code:
+        otp_request.attempt_count += 1
+        if otp_request.attempt_count >= 5:
+            otp_request.used_at = now
+        db.commit()
+        remaining_attempts = max(0, 5 - otp_request.attempt_count)
+        detail = "Invalid OTP"
+        if remaining_attempts > 0:
+            detail = f"Invalid OTP. {remaining_attempts} attempt(s) remaining."
+        else:
+            detail = "Invalid OTP. Please request a new OTP."
+        raise HTTPException(status_code=400, detail=detail)
+
+    otp_request.verified_at = now
+    otp_request.reset_token = generate_secure_token()
+    otp_request.reset_token_expires_at = now + timedelta(minutes=15)
+    db.commit()
+
+    return {
+        "message": "OTP verified successfully",
+        "reset_token": otp_request.reset_token,
+        "school_name": otp_request.school_name
+    }
+
+@api_router.post("/school/forgot-password/reset-password")
+async def reset_school_password_with_otp(
+    request: SchoolForgotPasswordResetRequest,
+    db: Session = Depends(get_db)
+):
+    """Reset school password after OTP verification and send success SMS."""
+    password_error = validate_school_password(request.new_password, request.confirm_password)
+    if password_error:
+        raise HTTPException(status_code=400, detail=password_error)
+
+    otp_request = db.query(SchoolPasswordResetOTP).filter(
+        SchoolPasswordResetOTP.reset_token == request.reset_token,
+        SchoolPasswordResetOTP.purpose == "password_reset"
+    ).first()
+
+    if not otp_request or otp_request.used_at is not None or not otp_request.verified_at:
+        raise HTTPException(status_code=400, detail="Reset session has expired. Please request a new OTP.")
+
+    now = datetime.utcnow()
+    if not otp_request.reset_token_expires_at or now > otp_request.reset_token_expires_at:
+        otp_request.used_at = now
+        db.commit()
+        raise HTTPException(status_code=400, detail="Reset session has expired. Please request a new OTP.")
+
+    school = db.query(School).filter(School.school_id == otp_request.school_id).first()
+    if not school:
+        raise HTTPException(status_code=404, detail="School account not found")
+
+    school.password_hash = get_password_hash(request.new_password)
+    otp_request.used_at = now
+
+    other_requests = db.query(SchoolPasswordResetOTP).filter(
+        SchoolPasswordResetOTP.school_id == school.school_id,
+        SchoolPasswordResetOTP.purpose == "password_reset",
+        SchoolPasswordResetOTP.used_at.is_(None)
+    ).all()
+    for item in other_requests:
+        item.used_at = now
+
+    record_activity(
+        db,
+        school.school_id,
+        school.school_name,
+        "password_reset",
+        {
+            "message": "School password reset via OTP verification",
+            "mobile_number": mask_mobile_number(otp_request.mobile_number)
+        }
+    )
+    db.commit()
+
+    # Send password reset success notification via email instead of SMS
+    email_sent = True
+    email_message = "Password reset success email sent"
+    try:
+        success_message = f"""
+        <html>
+        <body style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+            <div style="background-color: #f8f9fa; padding: 20px; border-radius: 10px;">
+                <h2 style="color: #333; text-align: center;">Password Reset Successful</h2>
+                <p>Dear {school.school_name},</p>
+                <p>Your Koshquest password has been reset successfully.</p>
+                <p>If you did not perform this action, please contact the administrator immediately.</p>
+                <div style="background-color: #28a745; color: white; padding: 10px; 
+                            text-align: center; border-radius: 5px; margin: 20px 0;">
+                    ✅ Password Reset Completed
+                </div>
+                <hr style="border: 1px solid #ddd; margin: 20px 0;">
+                <p style="color: #666; font-size: 12px; text-align: center;">
+                    This is an automated message from Koshquest Digital Library.
+                </p>
+            </div>
+        </body>
+        </html>
+        """
+        
+        # Create and send email
+        msg = EmailMessage()
+        msg['Subject'] = f"Koshquest Password Reset Successful - {school.school_name}"
+        msg['From'] = f"{os.environ.get('DEFAULT_FROM_NAME', 'Koshquest')} <{os.environ.get('DEFAULT_FROM_EMAIL', 'noreply@koshquest.in')}>"
+        msg['To'] = school.email
+        
+        msg.add_alternative(success_message, subtype='html')
+        
+        # Send email using existing email configuration
+        email_host = os.environ.get("EMAIL_HOST")
+        email_port = int(os.environ.get("EMAIL_PORT", "587"))
+        email_user = os.environ.get("EMAIL_USER")
+        email_password = os.environ.get("EMAIL_PASSWORD")
+        
+        with smtplib.SMTP(email_host, email_port) as server:
+            server.starttls()
+            server.login(email_user, email_password)
+            server.send_message(msg)
+        
+        print(f"Password reset success email sent to {school.email}")
+        
+    except Exception as exc:
+        email_sent = False
+        email_message = "Password updated, but success email could not be delivered"
+        print(f"Password reset success email failed for {school.school_id}: {exc}")
+
+    return {
+        "message": "Password reset successfully",
+        "email_sent": email_sent,
+        "email_message": email_message
     }
 
 # School Management Routes (Admin only)

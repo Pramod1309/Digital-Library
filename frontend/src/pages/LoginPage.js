@@ -1,7 +1,20 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import api from '../api/axiosConfig';
 import '../styles/LoginPage.css';
+
+const createInitialForgotPasswordState = () => ({
+  step: 'identify',
+  mobileNumber: '',
+  otp: '',
+  requestId: '',
+  resetToken: '',
+  schoolName: '',
+  maskedMobileNumber: '',
+  newPassword: '',
+  confirmPassword: '',
+  resendSeconds: 0,
+});
 
 const LoginPage = ({ setUser }) => {
   const navigate = useNavigate();
@@ -9,12 +22,37 @@ const LoginPage = ({ setUser }) => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
+  const [successMessage, setSuccessMessage] = useState('');
   const [loading, setLoading] = useState(false);
   const [showForgotPassword, setShowForgotPassword] = useState(false);
+  const [forgotPasswordState, setForgotPasswordState] = useState(createInitialForgotPasswordState());
+
+  useEffect(() => {
+    if (!showForgotPassword || forgotPasswordState.resendSeconds <= 0) {
+      return undefined;
+    }
+
+    const timer = window.setInterval(() => {
+      setForgotPasswordState((prev) => ({
+        ...prev,
+        resendSeconds: prev.resendSeconds > 0 ? prev.resendSeconds - 1 : 0,
+      }));
+    }, 1000);
+
+    return () => window.clearInterval(timer);
+  }, [showForgotPassword, forgotPasswordState.resendSeconds]);
+
+  const resetForgotPasswordFlow = (overrides = {}) => {
+    setForgotPasswordState({
+      ...createInitialForgotPasswordState(),
+      ...overrides,
+    });
+  };
 
   const handleLogin = async (e) => {
     e.preventDefault();
     setError('');
+    setSuccessMessage('');
     setLoading(true);
 
     try {
@@ -43,24 +81,130 @@ const LoginPage = ({ setUser }) => {
     }
   };
 
+  const handleAdminForgotPassword = async () => {
+    const response = await api.post('/forgot-password', {
+      email,
+      user_type: 'admin'
+    });
+
+    setSuccessMessage(response.data.message);
+    setShowForgotPassword(false);
+  };
+
+  const handleSchoolForgotPasswordOtpRequest = async () => {
+    const response = await api.post('/school/forgot-password/request-otp', {
+      mobile_number: forgotPasswordState.mobileNumber
+    });
+
+    setForgotPasswordState((prev) => ({
+      ...prev,
+      step: 'otp',
+      requestId: response.data.request_id,
+      schoolName: response.data.school_name,
+      maskedMobileNumber: response.data.masked_mobile_number,
+      resendSeconds: response.data.resend_in_seconds || 60,
+      otp: '',
+    }));
+    setSuccessMessage(response.data.message);
+  };
+
+  const handleSchoolForgotPasswordOtpVerify = async () => {
+    const response = await api.post('/school/forgot-password/verify-otp', {
+      request_id: forgotPasswordState.requestId,
+      mobile_number: forgotPasswordState.mobileNumber,
+      otp: forgotPasswordState.otp
+    });
+
+    setForgotPasswordState((prev) => ({
+      ...prev,
+      step: 'password',
+      resetToken: response.data.reset_token,
+      schoolName: response.data.school_name || prev.schoolName,
+    }));
+    setSuccessMessage(response.data.message);
+  };
+
+  const handleSchoolPasswordReset = async () => {
+    const response = await api.post('/school/forgot-password/reset-password', {
+      reset_token: forgotPasswordState.resetToken,
+      new_password: forgotPasswordState.newPassword,
+      confirm_password: forgotPasswordState.confirmPassword
+    });
+
+    resetForgotPasswordFlow();
+    setShowForgotPassword(false);
+    setPassword('');
+    setSuccessMessage(
+      response.data.sms_sent
+        ? 'Password reset successfully. A confirmation SMS has been sent to your registered mobile number.'
+        : `${response.data.message}. ${response.data.sms_message || ''}`.trim()
+    );
+  };
+
   const handleForgotPassword = async (e) => {
     e.preventDefault();
     setError('');
+    setSuccessMessage('');
     setLoading(true);
 
     try {
-      const response = await api.post('/forgot-password', {
-        email,
-        user_type: activeTab
-      });
-      alert(response.data.message + '\n\nDemo Token: ' + response.data.demo_token);
-      setShowForgotPassword(false);
+      if (activeTab === 'admin') {
+        await handleAdminForgotPassword();
+      } else if (forgotPasswordState.step === 'identify') {
+        await handleSchoolForgotPasswordOtpRequest();
+      } else if (forgotPasswordState.step === 'otp') {
+        await handleSchoolForgotPasswordOtpVerify();
+      } else {
+        await handleSchoolPasswordReset();
+      }
     } catch (err) {
-      setError('Failed to send reset link. Please try again.');
+      setError(err.response?.data?.detail || 'Unable to complete password reset request right now.');
     } finally {
       setLoading(false);
     }
   };
+
+  const handleResendSchoolOtp = async () => {
+    setError('');
+    setSuccessMessage('');
+    setLoading(true);
+
+    try {
+      await handleSchoolForgotPasswordOtpRequest();
+    } catch (err) {
+      setError(err.response?.data?.detail || 'Unable to resend OTP right now.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const openForgotPassword = () => {
+    setError('');
+    setSuccessMessage('');
+    resetForgotPasswordFlow();
+    setShowForgotPassword(true);
+  };
+
+  const backToLogin = () => {
+    setError('');
+    setSuccessMessage('');
+    resetForgotPasswordFlow();
+    setShowForgotPassword(false);
+  };
+
+  const forgotStepTitle = activeTab === 'school'
+    ? (forgotPasswordState.step === 'password' ? 'Set New Password' : 'Reset School Password')
+    : 'Reset Password';
+
+  const forgotSubtitle = activeTab === 'school'
+    ? (
+      forgotPasswordState.step === 'identify'
+        ? 'Enter the registered school mobile number to receive an OTP.'
+        : forgotPasswordState.step === 'otp'
+          ? 'Enter the OTP sent to your registered mobile number.'
+          : 'Create and confirm the new password for this school account.'
+    )
+    : 'Enter your admin email to receive a password reset link.';
 
   return (
     <div className="login-container" data-testid="login-page">
@@ -115,6 +259,7 @@ const LoginPage = ({ setUser }) => {
                   onClick={() => {
                     setActiveTab('school');
                     setError('');
+                    setSuccessMessage('');
                     setEmail('');
                     setPassword('');
                   }}
@@ -127,6 +272,7 @@ const LoginPage = ({ setUser }) => {
                   onClick={() => {
                     setActiveTab('admin');
                     setError('');
+                    setSuccessMessage('');
                     setEmail('');
                     setPassword('');
                   }}
@@ -137,6 +283,7 @@ const LoginPage = ({ setUser }) => {
 
               <form onSubmit={handleLogin} data-testid={`${activeTab}-login-form`}>
                 {error && <div className="error-message" data-testid="error-message">{error}</div>}
+                {successMessage && <div className="success-message">{successMessage}</div>}
                 
                 <div className="form-group">
                   <label htmlFor="email" data-testid="email-label">Email Address</label>
@@ -177,7 +324,7 @@ const LoginPage = ({ setUser }) => {
                   type="button"
                   className="forgot-password-link"
                   data-testid="forgot-password-link"
-                  onClick={() => setShowForgotPassword(true)}
+                  onClick={openForgotPassword}
                 >
                   Forgot Password?
                 </button>
@@ -185,24 +332,112 @@ const LoginPage = ({ setUser }) => {
             </>
           ) : (
             <>
-              <h2 className="login-title" data-testid="forgot-password-title">Reset Password</h2>
-              <p className="forgot-subtitle">Enter your email to receive a password reset link</p>
+              <h2 className="login-title" data-testid="forgot-password-title">{forgotStepTitle}</h2>
+              <p className="forgot-subtitle">{forgotSubtitle}</p>
               
               <form onSubmit={handleForgotPassword} data-testid="forgot-password-form">
                 {error && <div className="error-message" data-testid="error-message">{error}</div>}
+                {successMessage && <div className="success-message">{successMessage}</div>}
                 
-                <div className="form-group">
-                  <label htmlFor="email">Email Address</label>
-                  <input
-                    type="email"
-                    id="email"
-                    data-testid="forgot-password-email-input"
-                    value={email}
-                    onChange={(e) => setEmail(e.target.value)}
-                    required
-                    placeholder="Enter your email"
-                  />
-                </div>
+                {activeTab === 'admin' ? (
+                  <div className="form-group">
+                    <label htmlFor="email">Email Address</label>
+                    <input
+                      type="email"
+                      id="email"
+                      data-testid="forgot-password-email-input"
+                      value={email}
+                      onChange={(e) => setEmail(e.target.value)}
+                      required
+                      placeholder="Enter your email"
+                    />
+                  </div>
+                ) : (
+                  <>
+                    {forgotPasswordState.step === 'identify' && (
+                      <div className="form-group">
+                        <label htmlFor="mobileNumber">Registered Mobile Number</label>
+                        <input
+                          type="tel"
+                          id="mobileNumber"
+                          data-testid="forgot-password-mobile-input"
+                          value={forgotPasswordState.mobileNumber}
+                          onChange={(e) => setForgotPasswordState((prev) => ({
+                            ...prev,
+                            mobileNumber: e.target.value
+                          }))}
+                          required
+                          placeholder="Enter registered mobile number"
+                        />
+                      </div>
+                    )}
+
+                    {forgotPasswordState.step === 'otp' && (
+                      <>
+                        <div className="forgot-helper-card">
+                          <strong>{forgotPasswordState.schoolName || 'Registered School'}</strong>
+                          <span>OTP sent to {forgotPasswordState.maskedMobileNumber}</span>
+                        </div>
+
+                        <div className="form-group">
+                          <label htmlFor="otp">OTP Verification Code</label>
+                          <input
+                            type="text"
+                            id="otp"
+                            inputMode="numeric"
+                            maxLength={6}
+                            value={forgotPasswordState.otp}
+                            onChange={(e) => setForgotPasswordState((prev) => ({
+                              ...prev,
+                              otp: e.target.value.replace(/\D/g, '')
+                            }))}
+                            required
+                            placeholder="Enter 6-digit OTP"
+                          />
+                        </div>
+                      </>
+                    )}
+
+                    {forgotPasswordState.step === 'password' && (
+                      <>
+                        <div className="forgot-helper-card">
+                          <strong>{forgotPasswordState.schoolName || 'School account verified'}</strong>
+                          <span>Create the new password for this school login.</span>
+                        </div>
+
+                        <div className="form-group">
+                          <label htmlFor="newPassword">New Password</label>
+                          <input
+                            type="password"
+                            id="newPassword"
+                            value={forgotPasswordState.newPassword}
+                            onChange={(e) => setForgotPasswordState((prev) => ({
+                              ...prev,
+                              newPassword: e.target.value
+                            }))}
+                            required
+                            placeholder="Enter new password"
+                          />
+                        </div>
+
+                        <div className="form-group">
+                          <label htmlFor="confirmPassword">Confirm New Password</label>
+                          <input
+                            type="password"
+                            id="confirmPassword"
+                            value={forgotPasswordState.confirmPassword}
+                            onChange={(e) => setForgotPasswordState((prev) => ({
+                              ...prev,
+                              confirmPassword: e.target.value
+                            }))}
+                            required
+                            placeholder="Confirm new password"
+                          />
+                        </div>
+                      </>
+                    )}
+                  </>
+                )}
 
                 <button 
                   type="submit" 
@@ -210,17 +445,35 @@ const LoginPage = ({ setUser }) => {
                   data-testid="forgot-password-submit-btn" 
                   disabled={loading}
                 >
-                  {loading ? 'Sending...' : 'Send Reset Link'}
+                  {loading
+                    ? 'Please wait...'
+                    : activeTab === 'admin'
+                      ? 'Send Reset Link'
+                      : forgotPasswordState.step === 'identify'
+                        ? 'Send OTP'
+                        : forgotPasswordState.step === 'otp'
+                          ? 'Verify OTP'
+                          : 'Reset Password'}
                 </button>
+
+                {activeTab === 'school' && forgotPasswordState.step === 'otp' && (
+                  <button
+                    type="button"
+                    className="secondary-action-btn"
+                    disabled={loading || forgotPasswordState.resendSeconds > 0}
+                    onClick={handleResendSchoolOtp}
+                  >
+                    {forgotPasswordState.resendSeconds > 0
+                      ? `Resend OTP in ${forgotPasswordState.resendSeconds}s`
+                      : 'Resend OTP'}
+                  </button>
+                )}
 
                 <button
                   type="button"
                   className="forgot-password-link"
                   data-testid="back-to-login-btn"
-                  onClick={() => {
-                    setShowForgotPassword(false);
-                    setError('');
-                  }}
+                  onClick={backToLogin}
                 >
                   Back to Login
                 </button>
