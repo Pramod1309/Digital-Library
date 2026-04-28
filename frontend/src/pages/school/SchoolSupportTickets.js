@@ -1,16 +1,19 @@
 import React, { useState, useEffect } from 'react';
 import { Card, Table, Button, Modal, Form, Input, Select, Tag, message } from 'antd';
 import { PlusOutlined, FileTextOutlined } from '@ant-design/icons';
+import { useSearchParams } from 'react-router-dom';
 import api from '../../api/axiosConfig';
 
 const { TextArea } = Input;
 const { Option } = Select;
 
 const SchoolSupportTickets = ({ user }) => {
+  const [searchParams] = useSearchParams();
   const [tickets, setTickets] = useState([]);
   const [loading, setLoading] = useState(false);
   const [isModalVisible, setIsModalVisible] = useState(false);
   const [form] = Form.useForm();
+  const requestedTicketId = searchParams.get('ticket_id');
 
   useEffect(() => {
     fetchTickets();
@@ -140,6 +143,11 @@ const SchoolSupportTickets = ({ user }) => {
           rowKey="id"
           loading={loading}
           pagination={{ pageSize: 10 }}
+          onRow={(record) => ({
+            style: requestedTicketId && record.ticket_id === requestedTicketId
+              ? { background: '#fffbe6' }
+              : {}
+          })}
         />
       </Card>
 

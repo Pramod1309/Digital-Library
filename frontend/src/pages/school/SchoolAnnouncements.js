@@ -15,6 +15,13 @@ const SchoolAnnouncements = ({ user }) => {
     try {
       const response = await api.get(`/school/announcements?school_id=${user.school_id}`);
       setAnnouncements(response.data);
+
+      if (response.data?.length) {
+        await api.post('/school/announcements/mark-read', {
+          school_id: user.school_id,
+          announcement_ids: response.data.map((item) => item.id)
+        });
+      }
     } catch (error) {
       console.error('Error fetching announcements:', error);
     } finally {

@@ -130,6 +130,18 @@ class Announcement(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
+class AnnouncementRead(Base):
+    __tablename__ = "announcement_reads"
+
+    id = Column(Integer, primary_key=True, index=True)
+    announcement_id = Column(Integer, nullable=False, index=True)
+    school_id = Column(String(100), nullable=False, index=True)
+    read_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint('announcement_id', 'school_id', name='unique_announcement_school_read'),
+    )
+
 # Support Ticket Model
 class SupportTicket(Base):
     __tablename__ = "support_tickets"
@@ -147,6 +159,8 @@ class SupportTicket(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     resolved_at = Column(DateTime, nullable=True)
+    admin_updated_at = Column(DateTime, nullable=True)
+    school_last_viewed_at = Column(DateTime, nullable=True)
 
 # Chat Message Model
 class ChatMessage(Base):

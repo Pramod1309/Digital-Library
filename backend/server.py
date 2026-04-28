@@ -38,7 +38,7 @@ from collections import Counter, defaultdict
 # Import database
 from database import (
     get_db, Admin, School, PasswordResetToken, ActivityLog, Resource, 
-    Announcement, SupportTicket, ChatMessage, ResourceDownload, 
+    Announcement, AnnouncementRead, SupportTicket, ChatMessage, ResourceDownload, 
     KnowledgeArticle, SchoolLogoPosition, SchoolWatermarkText, engine, Base, AdminResourceWatermark,
     AdminBatchWatermarkTemplate, SchoolSearchLog
 )
@@ -302,6 +302,14 @@ class SchoolSearchEventRequest(BaseModel):
     category: Optional[str] = None
     sub_category: Optional[str] = None
     filters: Optional[Dict[str, Any]] = None
+
+class SchoolLogoutRequest(BaseModel):
+    school_id: str
+    school_name: str
+
+class AnnouncementReadRequest(BaseModel):
+    school_id: str
+    announcement_ids: Optional[List[int]] = None
 
 class AdminBatchWatermarkDownloadRequest(BaseModel):
     job_id: str
@@ -713,6 +721,82 @@ def build_activity_description(activity_type: str, details: Optional[Dict[str, A
         return "Sent a message to the admin."
 
     return details.get("message") or details.get("description") or "Activity recorded."
+
+def announcement_targets_school(announcement: Announcement, school_id: str) -> bool:
+    if not announcement.target_schools:
+        return True
+
+    targets = [item.strip() for item in str(announcement.target_schools).split(",") if item.strip()]
+    return school_id in targets
+
+def get_visible_school_announcements(db: Session, school_id: str) -> List[Announcement]:
+    announcements = db.query(Announcement).filter(
+        Announcement.is_active == True
+    ).order_by(Announcement.created_at.desc()).all()
+
+    return [announcement for announcement in announcements if announcement_targets_school(announcement, school_id)]
+
+def get_unread_announcement_entries(db: Session, school_id: str) -> List[Announcement]:
+    announcements = get_visible_school_announcements(db, school_id)
+    if not announcements:
+        return []
+
+    announcement_ids = [announcement.id for announcement in announcements]
+    read_ids = {
+        entry.announcement_id
+        for entry in db.query(AnnouncementRead).filter(
+            AnnouncementRead.school_id == school_id,
+            AnnouncementRead.announcement_id.in_(announcement_ids)
+        ).all()
+    }
+    return [announcement for announcement in announcements if announcement.id not in read_ids]
+
+def get_unread_school_ticket_updates(db: Session, school_id: str) -> List[SupportTicket]:
+    tickets = db.query(SupportTicket).filter(
+        SupportTicket.school_id == school_id,
+        SupportTicket.admin_updated_at.isnot(None)
+    ).order_by(SupportTicket.admin_updated_at.desc()).all()
+
+    unread_tickets = []
+    for ticket in tickets:
+        if ticket.school_last_viewed_at is None or (
+            ticket.admin_updated_at and ticket.admin_updated_at > ticket.school_last_viewed_at
+        ):
+            unread_tickets.append(ticket)
+
+    return unread_tickets
+
+def get_visible_school_resources_query(db: Session, school_id: str):
+    return db.query(Resource).filter(
+        (
+            (Resource.uploaded_by_type == 'admin') & (Resource.approval_status == 'approved')
+        ) |
+        (
+            (Resource.uploaded_by_id == school_id) &
+            (
+                (Resource.approval_status == 'approved') |
+                (Resource.uploaded_by_type == 'school')
+            )
+        )
+    )
+
+def count_external_school_downloads(
+    db: Session,
+    school_id: str,
+    cutoff: datetime
+) -> int:
+    activity_logs = db.query(ActivityLog).filter(
+        ActivityLog.school_id == school_id,
+        ActivityLog.activity_type == "resource_download",
+        ActivityLog.timestamp >= cutoff
+    ).all()
+
+    count = 0
+    for activity in activity_logs:
+        details = parse_activity_details(activity.details) or {}
+        if details.get("is_external_link"):
+            count += 1
+    return count
 
 # Helper functions for watermarking
 def get_full_file_path(file_path: str) -> str:
@@ -2672,12 +2756,19 @@ async def register_school_via_qr(
     return new_school
 
 @api_router.post("/school/logout")
-async def school_logout(school_id: str, school_name: str, db: Session = Depends(get_db)):
+async def school_logout(
+    payload: SchoolLogoutRequest,
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
     """School logout endpoint - log activity"""
+    if current_user.get("user_type") != "school" or current_user.get("school_id") != payload.school_id:
+        raise HTTPException(status_code=403, detail="School mismatch for logout")
+
     record_activity(
         db,
-        school_id,
-        school_name,
+        payload.school_id,
+        payload.school_name,
         "logout",
         {"message": "School logged out"}
     )
@@ -2772,7 +2863,9 @@ async def get_all_activities(db: Session = Depends(get_db)):
         "school_name": activity.school_name,
         "activity_type": activity.activity_type,
         "timestamp": activity.timestamp.isoformat(),
-        "details": activity.details
+        "details": activity.details,
+        "title": build_activity_title(activity.activity_type, parse_activity_details(activity.details)),
+        "description": build_activity_description(activity.activity_type, parse_activity_details(activity.details))
     } for activity in activities]
 
 # ==================== RESOURCE MANAGEMENT ROUTES ====================
@@ -3685,6 +3778,10 @@ async def update_announcement(
     existing.priority = announcement.priority
     existing.target_schools = announcement.target_schools
     existing.updated_at = datetime.utcnow()
+
+    db.query(AnnouncementRead).filter(
+        AnnouncementRead.announcement_id == announcement_id
+    ).delete()
     
     db.commit()
     db.refresh(existing)
@@ -3699,6 +3796,9 @@ async def delete_announcement(announcement_id: int, db: Session = Depends(get_db
     if not announcement:
         raise HTTPException(status_code=404, detail="Announcement not found")
     
+    db.query(AnnouncementRead).filter(
+        AnnouncementRead.announcement_id == announcement_id
+    ).delete()
     db.delete(announcement)
     db.commit()
     
@@ -3707,13 +3807,46 @@ async def delete_announcement(announcement_id: int, db: Session = Depends(get_db
 @api_router.get("/school/announcements", response_model=List[AnnouncementResponse])
 async def get_school_announcements(school_id: str, db: Session = Depends(get_db)):
     """Get announcements for school"""
-    announcements = db.query(Announcement).filter(
-        Announcement.is_active == True,
-        (Announcement.target_schools == None) | 
-        (Announcement.target_schools.like(f"%{school_id}%"))
-    ).order_by(Announcement.created_at.desc()).all()
-    
-    return announcements
+    return get_visible_school_announcements(db, school_id)
+
+@api_router.post("/school/announcements/mark-read")
+async def mark_school_announcements_read(
+    request: AnnouncementReadRequest,
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Mark selected or visible announcements as read for a school."""
+    if current_user.get("user_type") != "school" or current_user.get("school_id") != request.school_id:
+        raise HTTPException(status_code=403, detail="School mismatch for announcement read state")
+
+    visible_announcements = get_visible_school_announcements(db, request.school_id)
+    visible_ids = {announcement.id for announcement in visible_announcements}
+    target_ids = set(request.announcement_ids or list(visible_ids))
+    target_ids = target_ids.intersection(visible_ids)
+
+    if not target_ids:
+        return {"message": "No announcements to mark as read", "updated": 0}
+
+    existing_reads = {
+        entry.announcement_id
+        for entry in db.query(AnnouncementRead).filter(
+            AnnouncementRead.school_id == request.school_id,
+            AnnouncementRead.announcement_id.in_(target_ids)
+        ).all()
+    }
+
+    created_count = 0
+    for announcement_id in target_ids:
+        if announcement_id in existing_reads:
+            continue
+        db.add(AnnouncementRead(
+            announcement_id=announcement_id,
+            school_id=request.school_id
+        ))
+        created_count += 1
+
+    db.commit()
+    return {"message": "Announcements marked as read", "updated": created_count}
 
 # ==================== SUPPORT TICKET ROUTES ====================
 
@@ -3764,7 +3897,19 @@ async def get_school_tickets(school_id: str, db: Session = Depends(get_db)):
     tickets = db.query(SupportTicket).filter(
         SupportTicket.school_id == school_id
     ).order_by(SupportTicket.created_at.desc()).all()
-    
+
+    now = datetime.utcnow()
+    updated = False
+    for ticket in tickets:
+        if ticket.admin_updated_at and (
+            ticket.school_last_viewed_at is None or ticket.admin_updated_at > ticket.school_last_viewed_at
+        ):
+            ticket.school_last_viewed_at = now
+            updated = True
+
+    if updated:
+        db.commit()
+
     return tickets
 
 @api_router.get("/admin/support/tickets", response_model=List[SupportTicketResponse])
@@ -3797,6 +3942,9 @@ async def update_ticket(
     
     if admin_response:
         ticket.admin_response = admin_response
+
+    if status is not None or admin_response is not None:
+        ticket.admin_updated_at = datetime.utcnow()
     
     ticket.updated_at = datetime.utcnow()
     db.commit()
@@ -6372,30 +6520,372 @@ async def get_download_tracking_analytics(
 async def get_school_usage(school_id: str, db: Session = Depends(get_db)):
     """Get usage statistics for school"""
     # Downloads this month
-    from datetime import datetime, timedelta
     start_of_month = datetime.utcnow().replace(day=1, hour=0, minute=0, second=0, microsecond=0)
     
     downloads_this_month = db.query(ResourceDownload).filter(
         ResourceDownload.school_id == school_id,
         ResourceDownload.downloaded_at >= start_of_month
     ).count()
+    downloads_this_month += count_external_school_downloads(db, school_id, start_of_month)
     
     # Total uploads by school
-    uploads_by_school = db.query(Resource).filter(
-        Resource.uploaded_by_id == school_id
-    ).count()
-    
+    school_uploads = db.query(Resource).filter(
+        Resource.uploaded_by_id == school_id,
+        Resource.uploaded_by_type == 'school'
+    ).all()
+    uploads_by_school = len(school_uploads)
+
+    pending_uploads = len([resource for resource in school_uploads if resource.approval_status == 'pending'])
+    approved_uploads = len([resource for resource in school_uploads if resource.approval_status == 'approved'])
+    rejected_uploads = len([resource for resource in school_uploads if resource.approval_status == 'rejected'])
+
     # Storage used
     from sqlalchemy import func
     storage_used = db.query(func.sum(Resource.file_size)).filter(
-        Resource.uploaded_by_id == school_id
+        Resource.uploaded_by_id == school_id,
+        Resource.uploaded_by_type == 'school'
     ).scalar() or 0
+
+    unread_announcements = len(get_unread_announcement_entries(db, school_id))
+    unread_chat_messages = db.query(ChatMessage).filter(
+        ChatMessage.school_id == school_id,
+        ChatMessage.sender_type == 'admin',
+        ChatMessage.is_read == False
+    ).count()
+    unread_ticket_updates = len(get_unread_school_ticket_updates(db, school_id))
     
     return {
         "downloads_this_month": downloads_this_month,
         "resources_uploaded": uploads_by_school,
+        "pending_uploads": pending_uploads,
+        "approved_uploads": approved_uploads,
+        "rejected_uploads": rejected_uploads,
         "storage_used_bytes": storage_used,
-        "storage_used_mb": round(storage_used / (1024 * 1024), 2)
+        "storage_used_mb": round(storage_used / (1024 * 1024), 2),
+        "unread_announcements": unread_announcements,
+        "unread_chat_messages": unread_chat_messages,
+        "unread_ticket_updates": unread_ticket_updates
+    }
+
+@api_router.get("/school/dashboard/overview")
+async def get_school_dashboard_overview(
+    school_id: str,
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """School dashboard home overview with KPIs, notifications, and popular resources."""
+    if current_user.get("user_type") != "school" or current_user.get("school_id") != school_id:
+        raise HTTPException(status_code=403, detail="School mismatch for dashboard overview")
+
+    start_of_month = datetime.utcnow().replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    downloads_this_month = db.query(ResourceDownload).filter(
+        ResourceDownload.school_id == school_id,
+        ResourceDownload.downloaded_at >= start_of_month
+    ).count()
+    downloads_this_month += count_external_school_downloads(db, school_id, start_of_month)
+
+    school_uploads = db.query(Resource).filter(
+        Resource.uploaded_by_id == school_id,
+        Resource.uploaded_by_type == 'school'
+    ).order_by(Resource.created_at.desc()).all()
+
+    resources_uploaded = len(school_uploads)
+    pending_uploads = len([resource for resource in school_uploads if resource.approval_status == 'pending'])
+
+    unread_announcements = get_unread_announcement_entries(db, school_id)
+    visible_announcements = get_visible_school_announcements(db, school_id)
+    unread_announcement_ids = {announcement.id for announcement in unread_announcements}
+    ordered_announcements = unread_announcements + [
+        announcement for announcement in visible_announcements if announcement.id not in unread_announcement_ids
+    ]
+
+    unread_admin_messages = db.query(ChatMessage).filter(
+        ChatMessage.school_id == school_id,
+        ChatMessage.sender_type == 'admin',
+        ChatMessage.is_read == False
+    ).order_by(ChatMessage.created_at.desc()).all()
+
+    unread_ticket_updates = get_unread_school_ticket_updates(db, school_id)
+
+    popular_resources = get_visible_school_resources_query(db, school_id).filter(
+        Resource.approval_status == 'approved'
+    ).order_by(Resource.download_count.desc(), Resource.created_at.desc()).limit(5).all()
+
+    recent_activity_logs = db.query(ActivityLog).filter(
+        ActivityLog.school_id == school_id
+    ).order_by(ActivityLog.timestamp.desc()).limit(8).all()
+
+    notification_total = len(unread_announcements) + len(unread_admin_messages) + len(unread_ticket_updates)
+
+    return {
+        "summary": {
+            "downloads_this_month": downloads_this_month,
+            "resources_uploaded": resources_uploaded,
+            "pending_uploads": pending_uploads,
+            "unread_notifications": notification_total,
+            "unread_announcements": len(unread_announcements),
+            "unread_chat_messages": len(unread_admin_messages),
+            "unread_ticket_updates": len(unread_ticket_updates)
+        },
+        "popular_resources": [
+            {
+                "resource_id": resource.resource_id,
+                "name": resource.name,
+                "category": resource.category,
+                "download_count": resource.download_count
+            }
+            for resource in popular_resources
+        ],
+        "announcement_notifications": [
+            {
+                "id": announcement.id,
+                "title": announcement.title,
+                "content": announcement.content,
+                "priority": announcement.priority,
+                "created_at": iso_or_none(announcement.created_at),
+                "is_unread": announcement.id in unread_announcement_ids
+            }
+            for announcement in ordered_announcements[:4]
+        ],
+        "chat_notifications": [
+            {
+                "id": message_item.id,
+                "message": message_item.message,
+                "created_at": iso_or_none(message_item.created_at)
+            }
+            for message_item in unread_admin_messages[:4]
+        ],
+        "ticket_notifications": [
+            {
+                "ticket_id": ticket.ticket_id,
+                "subject": ticket.subject,
+                "status": ticket.status,
+                "priority": ticket.priority,
+                "admin_response": ticket.admin_response,
+                "created_at": iso_or_none(ticket.created_at),
+                "admin_updated_at": iso_or_none(ticket.admin_updated_at)
+            }
+            for ticket in unread_ticket_updates[:4]
+        ],
+        "recent_activity": [
+            {
+                "id": activity.id,
+                "title": build_activity_title(activity.activity_type, parse_activity_details(activity.details)),
+                "description": build_activity_description(activity.activity_type, parse_activity_details(activity.details)),
+                "timestamp": iso_or_none(activity.timestamp)
+            }
+            for activity in recent_activity_logs
+        ]
+    }
+
+@api_router.get("/school/analytics/report")
+async def get_school_analytics_report(
+    school_id: str,
+    days: int = 30,
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Detailed usage report for the school dashboard analytics section."""
+    if current_user.get("user_type") != "school" or current_user.get("school_id") != school_id:
+        raise HTTPException(status_code=403, detail="School mismatch for usage report")
+
+    normalized_days = normalize_analytics_days(days)
+    cutoff = datetime.utcnow() - timedelta(days=normalized_days - 1)
+    start_of_month = datetime.utcnow().replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+
+    upload_rows = db.query(Resource).filter(
+        Resource.uploaded_by_id == school_id,
+        Resource.uploaded_by_type == 'school'
+    ).order_by(Resource.created_at.desc()).all()
+
+    download_logs = db.query(ResourceDownload).filter(
+        ResourceDownload.school_id == school_id,
+        ResourceDownload.downloaded_at >= cutoff
+    ).order_by(ResourceDownload.downloaded_at.desc()).all()
+    external_downloads = db.query(ActivityLog).filter(
+        ActivityLog.school_id == school_id,
+        ActivityLog.activity_type == 'resource_download',
+        ActivityLog.timestamp >= cutoff
+    ).order_by(ActivityLog.timestamp.desc()).all()
+    external_downloads = [
+        (log, parse_activity_details(log.details) or {})
+        for log in external_downloads
+        if (parse_activity_details(log.details) or {}).get("is_external_link")
+    ]
+
+    search_logs = db.query(SchoolSearchLog).filter(
+        SchoolSearchLog.school_id == school_id,
+        SchoolSearchLog.created_at >= cutoff
+    ).order_by(SchoolSearchLog.created_at.desc()).all()
+
+    preview_logs = db.query(ActivityLog).filter(
+        ActivityLog.school_id == school_id,
+        ActivityLog.activity_type == 'resource_preview',
+        ActivityLog.timestamp >= cutoff
+    ).order_by(ActivityLog.timestamp.desc()).all()
+
+    upload_activity_logs = db.query(ActivityLog).filter(
+        ActivityLog.school_id == school_id,
+        ActivityLog.activity_type == 'resource_upload',
+        ActivityLog.timestamp >= cutoff
+    ).order_by(ActivityLog.timestamp.desc()).all()
+
+    activity_logs = db.query(ActivityLog).filter(
+        ActivityLog.school_id == school_id,
+        ActivityLog.timestamp >= cutoff
+    ).order_by(ActivityLog.timestamp.desc()).all()
+
+    resource_ids = {
+        item.resource_id for item in download_logs
+    }.union({
+        item[1].get("resource_id") for item in external_downloads if item[1].get("resource_id")
+    }).union({
+        (parse_activity_details(item.details) or {}).get("resource_id") for item in preview_logs
+        if (parse_activity_details(item.details) or {}).get("resource_id")
+    }).union({
+        resource.resource_id for resource in upload_rows
+    })
+    resource_ids = {item for item in resource_ids if item}
+    resource_map = {}
+    if resource_ids:
+        resource_map = {
+            resource.resource_id: resource
+            for resource in db.query(Resource).filter(Resource.resource_id.in_(list(resource_ids))).all()
+        }
+
+    buckets = build_daily_buckets(normalized_days)
+    category_summary: Dict[str, Dict[str, Any]] = {}
+    resource_usage: Dict[str, Dict[str, Any]] = {}
+
+    def ensure_category(category_name: str):
+        category_summary.setdefault(category_name, {
+            "category": category_name,
+            "downloads": 0,
+            "previews": 0,
+            "searches": 0
+        })
+
+    for download in download_logs:
+        resource = resource_map.get(download.resource_id)
+        category_name = resource.category if resource else "unknown"
+        ensure_category(category_name)
+        category_summary[category_name]["downloads"] += 1
+        bump_daily_bucket(buckets, download.downloaded_at, "downloads")
+
+        if resource:
+            resource_usage.setdefault(resource.resource_id, {
+                "resource_id": resource.resource_id,
+                "name": resource.name,
+                "category": resource.category,
+                "downloads": 0,
+                "previews": 0
+            })
+            resource_usage[resource.resource_id]["downloads"] += 1
+
+    for log, details in external_downloads:
+        resource = resource_map.get(details.get("resource_id"))
+        category_name = resource.category if resource else "multimedia"
+        ensure_category(category_name)
+        category_summary[category_name]["downloads"] += 1
+        bump_daily_bucket(buckets, log.timestamp, "downloads")
+
+        resource_name = details.get("resource_name") or (resource.name if resource else "External Resource")
+        resource_id = details.get("resource_id") or f"external-{log.id}"
+        resource_usage.setdefault(resource_id, {
+            "resource_id": resource_id,
+            "name": resource_name,
+            "category": category_name,
+            "downloads": 0,
+            "previews": 0
+        })
+        resource_usage[resource_id]["downloads"] += 1
+
+    for preview in preview_logs:
+        details = parse_activity_details(preview.details) or {}
+        resource = resource_map.get(details.get("resource_id"))
+        category_name = resource.category if resource else details.get("category") or "unknown"
+        ensure_category(category_name)
+        category_summary[category_name]["previews"] += 1
+        bump_daily_bucket(buckets, preview.timestamp, "previews")
+
+        resource_id = details.get("resource_id")
+        if resource_id and resource:
+            resource_usage.setdefault(resource_id, {
+                "resource_id": resource.resource_id,
+                "name": resource.name,
+                "category": resource.category,
+                "downloads": 0,
+                "previews": 0
+            })
+            resource_usage[resource_id]["previews"] += 1
+
+    for search in search_logs:
+        category_name = search.category or "all"
+        ensure_category(category_name)
+        category_summary[category_name]["searches"] += 1
+        bump_daily_bucket(buckets, search.created_at, "searches")
+        if (search.results_count or 0) == 0:
+            bump_daily_bucket(buckets, search.created_at, "zero_results")
+
+    for upload_activity in upload_activity_logs:
+        bump_daily_bucket(buckets, upload_activity.timestamp, "uploads")
+
+    upload_status_breakdown = {
+        "approved": len([resource for resource in upload_rows if resource.approval_status == 'approved']),
+        "pending": len([resource for resource in upload_rows if resource.approval_status == 'pending']),
+        "rejected": len([resource for resource in upload_rows if resource.approval_status == 'rejected'])
+    }
+
+    unread_announcements = len(get_unread_announcement_entries(db, school_id))
+    unread_chat_messages = db.query(ChatMessage).filter(
+        ChatMessage.school_id == school_id,
+        ChatMessage.sender_type == 'admin',
+        ChatMessage.is_read == False
+    ).count()
+    unread_ticket_updates = len(get_unread_school_ticket_updates(db, school_id))
+
+    return {
+        "days": normalized_days,
+        "summary": {
+            "downloads_this_month": db.query(ResourceDownload).filter(
+                ResourceDownload.school_id == school_id,
+                ResourceDownload.downloaded_at >= start_of_month
+            ).count() + count_external_school_downloads(db, school_id, start_of_month),
+            "resources_uploaded": len(upload_rows),
+            "pending_uploads": upload_status_breakdown["pending"],
+            "approved_uploads": upload_status_breakdown["approved"],
+            "rejected_uploads": upload_status_breakdown["rejected"],
+            "searches": len(search_logs),
+            "previews": len(preview_logs),
+            "unread_announcements": unread_announcements,
+            "unread_chat_messages": unread_chat_messages,
+            "unread_ticket_updates": unread_ticket_updates
+        },
+        "activity_trend": list(buckets.values()),
+        "category_summary": sorted(category_summary.values(), key=lambda item: item["downloads"], reverse=True),
+        "top_resources": sorted(resource_usage.values(), key=lambda item: (item["downloads"], item["previews"]), reverse=True)[:8],
+        "upload_status_breakdown": upload_status_breakdown,
+        "upload_resources": [
+            {
+                "resource_id": resource.resource_id,
+                "name": resource.name,
+                "category": resource.category,
+                "approval_status": resource.approval_status,
+                "download_count": resource.download_count,
+                "file_size_mb": round((resource.file_size or 0) / (1024 * 1024), 2),
+                "created_at": iso_or_none(resource.created_at)
+            }
+            for resource in upload_rows[:20]
+        ],
+        "recent_activity": [
+            {
+                "id": activity.id,
+                "title": build_activity_title(activity.activity_type, parse_activity_details(activity.details)),
+                "description": build_activity_description(activity.activity_type, parse_activity_details(activity.details)),
+                "timestamp": iso_or_none(activity.timestamp)
+            }
+            for activity in activity_logs[:12]
+        ]
     }
 
 # School info endpoint

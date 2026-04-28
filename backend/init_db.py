@@ -145,6 +145,22 @@ def migrate_database():
                     print(f"  Note: {e}")
                     print("  Column rotation might already exist or SQLite limitation encountered")
 
+        if 'support_tickets' in table_names:
+            ticket_columns = [col['name'] for col in inspector.get_columns('support_tickets')]
+            ticket_column_defs = [
+                ("admin_updated_at", "DATETIME"),
+                ("school_last_viewed_at", "DATETIME")
+            ]
+            for col_name, col_def in ticket_column_defs:
+                if col_name not in ticket_columns:
+                    try:
+                        db.execute(text(f"ALTER TABLE support_tickets ADD COLUMN {col_name} {col_def}"))
+                        db.commit()
+                        print(f"Added {col_name} column to support_tickets")
+                    except Exception as e:
+                        print(f"  Note: {e}")
+                        print(f"  Column {col_name} might already exist or SQLite limitation encountered")
+
         print("Database migration completed successfully!")
 
     except Exception as e:
