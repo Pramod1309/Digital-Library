@@ -12,10 +12,9 @@ import {
   Typography
 } from 'antd';
 import {
+  Area,
+  AreaChart,
   CartesianGrid,
-  Legend,
-  Line,
-  LineChart,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -32,7 +31,7 @@ import {
 
 const { Title, Text } = Typography;
 
-const ResourceAnalytics = () => {
+const DownloadTracking = () => {
   const [days, setDays] = useState(30);
   const [category, setCategory] = useState('all');
   const [selectedSchool, setSelectedSchool] = useState('all');
@@ -46,7 +45,7 @@ const ResourceAnalytics = () => {
         const response = await api.get('/admin/schools');
         setSchools(response.data || []);
       } catch (error) {
-        console.error('Failed to load schools for resource analytics:', error);
+        console.error('Failed to load schools for download tracking:', error);
       }
     };
 
@@ -57,7 +56,7 @@ const ResourceAnalytics = () => {
     const fetchAnalytics = async () => {
       setLoading(true);
       try {
-        const response = await api.get('/admin/analytics/resource-insights', {
+        const response = await api.get('/admin/analytics/download-tracking', {
           params: {
             days,
             category,
@@ -66,7 +65,7 @@ const ResourceAnalytics = () => {
         });
         setAnalytics(response.data);
       } catch (error) {
-        console.error('Failed to load resource analytics:', error);
+        console.error('Failed to load download tracking analytics:', error);
         setAnalytics(null);
       } finally {
         setLoading(false);
@@ -84,17 +83,11 @@ const ResourceAnalytics = () => {
     }))
   ];
 
-  const categoryColumns = [
+  const schoolColumns = [
     {
-      title: 'Category',
-      dataIndex: 'category',
-      key: 'category'
-    },
-    {
-      title: 'Resources',
-      dataIndex: 'resource_count',
-      key: 'resource_count',
-      render: formatNumber
+      title: 'School',
+      dataIndex: 'school_name',
+      key: 'school_name'
     },
     {
       title: 'Downloads',
@@ -103,24 +96,24 @@ const ResourceAnalytics = () => {
       render: formatNumber
     },
     {
-      title: 'Previews',
-      dataIndex: 'previews',
-      key: 'previews',
+      title: 'Unique Resources',
+      dataIndex: 'unique_resources',
+      key: 'unique_resources',
       render: formatNumber
     },
     {
-      title: 'School Uploads',
-      dataIndex: 'school_uploads',
-      key: 'school_uploads',
-      render: formatNumber
+      title: 'Last Download',
+      dataIndex: 'last_downloaded_at',
+      key: 'last_downloaded_at',
+      render: formatDateTime
     }
   ];
 
-  const topResourceColumns = [
+  const resourceColumns = [
     {
       title: 'Resource',
-      dataIndex: 'name',
-      key: 'name'
+      dataIndex: 'resource_name',
+      key: 'resource_name'
     },
     {
       title: 'Category',
@@ -131,12 +124,6 @@ const ResourceAnalytics = () => {
       title: 'Downloads',
       dataIndex: 'downloads',
       key: 'downloads',
-      render: formatNumber
-    },
-    {
-      title: 'Previews',
-      dataIndex: 'previews',
-      key: 'previews',
       render: formatNumber
     },
     {
@@ -153,6 +140,30 @@ const ResourceAnalytics = () => {
     }
   ];
 
+  const recentColumns = [
+    {
+      title: 'School',
+      dataIndex: 'school_name',
+      key: 'school_name'
+    },
+    {
+      title: 'Resource',
+      dataIndex: 'resource_name',
+      key: 'resource_name'
+    },
+    {
+      title: 'Category',
+      dataIndex: 'category',
+      key: 'category'
+    },
+    {
+      title: 'Downloaded At',
+      dataIndex: 'downloaded_at',
+      key: 'downloaded_at',
+      render: formatDateTime
+    }
+  ];
+
   if (loading) {
     return (
       <div style={{ textAlign: 'center', padding: '80px 0' }}>
@@ -162,7 +173,7 @@ const ResourceAnalytics = () => {
   }
 
   if (!analytics) {
-    return <Empty description="Unable to load resource analytics" />;
+    return <Empty description="Unable to load download tracking analytics" />;
   }
 
   const summary = analytics.summary || {};
@@ -171,9 +182,9 @@ const ResourceAnalytics = () => {
     <Space direction="vertical" size={24} style={{ width: '100%' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', gap: 16, flexWrap: 'wrap' }}>
         <div>
-          <Title level={2} style={{ marginBottom: 4 }}>Resource Analytics</Title>
+          <Title level={2} style={{ marginBottom: 4 }}>Download Tracking</Title>
           <Text type="secondary">
-            Measure which resources schools preview, download, and contribute the most across categories.
+            Follow every school download across time, resources, and categories to understand actual content consumption.
           </Text>
         </div>
         <Space wrap>
@@ -192,66 +203,65 @@ const ResourceAnalytics = () => {
 
       <Row gutter={[16, 16]}>
         <Col xs={24} sm={12} lg={6}>
-          <Card><Statistic title="Resources in Scope" value={summary.total_resources || 0} formatter={formatNumber} /></Card>
+          <Card><Statistic title="Total Downloads" value={summary.total_downloads || 0} formatter={formatNumber} /></Card>
         </Col>
         <Col xs={24} sm={12} lg={6}>
-          <Card><Statistic title="Downloads" value={summary.downloads_in_range || 0} formatter={formatNumber} /></Card>
+          <Card><Statistic title="Downloading Schools" value={summary.unique_schools || 0} formatter={formatNumber} /></Card>
         </Col>
         <Col xs={24} sm={12} lg={6}>
-          <Card><Statistic title="Previews" value={summary.previews_in_range || 0} formatter={formatNumber} /></Card>
+          <Card><Statistic title="Downloaded Resources" value={summary.unique_resources || 0} formatter={formatNumber} /></Card>
         </Col>
         <Col xs={24} sm={12} lg={6}>
-          <Card><Statistic title="School Uploads" value={summary.school_uploads_in_range || 0} formatter={formatNumber} /></Card>
+          <Card><Statistic title="Avg Downloads / School" value={summary.avg_downloads_per_school || 0} /></Card>
         </Col>
       </Row>
 
-      <Row gutter={[16, 16]}>
-        <Col xs={24} lg={16}>
-          <Card title="Resource Engagement Trend">
-            <ResponsiveContainer width="100%" height={320}>
-              <LineChart data={analytics.daily_trend || []}>
-                <CartesianGrid strokeDasharray="3 3" />
-                <XAxis dataKey="label" />
-                <YAxis />
-                <Tooltip />
-                <Legend />
-                <Line type="monotone" dataKey="downloads" stroke={CHART_COLORS.primary} strokeWidth={2} />
-                <Line type="monotone" dataKey="previews" stroke={CHART_COLORS.success} strokeWidth={2} />
-                <Line type="monotone" dataKey="uploads" stroke={CHART_COLORS.orange} strokeWidth={2} />
-              </LineChart>
-            </ResponsiveContainer>
-          </Card>
-        </Col>
-        <Col xs={24} lg={8}>
-          <Card title="Inventory Health">
-            <Space direction="vertical" size={18} style={{ width: '100%' }}>
-              <Statistic title="Pending Approvals" value={summary.pending_approvals || 0} formatter={formatNumber} />
-              <Statistic title="Downloading Schools" value={summary.unique_downloading_schools || 0} formatter={formatNumber} />
-            </Space>
-          </Card>
-        </Col>
-      </Row>
-
-      <Card title="Category Performance">
-        <Table
-          dataSource={analytics.category_summary || []}
-          columns={categoryColumns}
-          rowKey="category"
-          pagination={false}
-        />
+      <Card title="Daily Download Volume">
+        <ResponsiveContainer width="100%" height={320}>
+          <AreaChart data={analytics.daily_trend || []}>
+            <CartesianGrid strokeDasharray="3 3" />
+            <XAxis dataKey="label" />
+            <YAxis />
+            <Tooltip />
+            <Area type="monotone" dataKey="downloads" stroke={CHART_COLORS.primary} fill={CHART_COLORS.primary} fillOpacity={0.18} />
+          </AreaChart>
+        </ResponsiveContainer>
       </Card>
 
-      <Card title="Top Performing Resources">
+      <Row gutter={[16, 16]}>
+        <Col xs={24} lg={10}>
+          <Card title="Top Downloading Schools">
+            <Table
+              dataSource={analytics.school_breakdown || []}
+              columns={schoolColumns}
+              rowKey="school_id"
+              pagination={{ pageSize: 7 }}
+            />
+          </Card>
+        </Col>
+        <Col xs={24} lg={14}>
+          <Card title="Top Downloaded Resources">
+            <Table
+              dataSource={analytics.resource_breakdown || []}
+              columns={resourceColumns}
+              rowKey="resource_id"
+              pagination={{ pageSize: 7 }}
+              scroll={{ x: 860 }}
+            />
+          </Card>
+        </Col>
+      </Row>
+
+      <Card title="Recent Download Events">
         <Table
-          dataSource={analytics.top_resources || []}
-          columns={topResourceColumns}
-          rowKey="resource_id"
+          dataSource={analytics.recent_downloads || []}
+          columns={recentColumns}
+          rowKey="id"
           pagination={{ pageSize: 8 }}
-          scroll={{ x: 980 }}
         />
       </Card>
     </Space>
   );
 };
 
-export default ResourceAnalytics;
+export default DownloadTracking;

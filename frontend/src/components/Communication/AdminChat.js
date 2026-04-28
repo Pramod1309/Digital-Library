@@ -1,17 +1,20 @@
 import React, { useState, useEffect } from 'react';
 import { Card, List, Select, Input, Button, Avatar, message, Spin, Empty } from 'antd';
 import { SendOutlined, UserOutlined, CommentOutlined } from '@ant-design/icons';
+import { useSearchParams } from 'react-router-dom';
 import api from '../../api/axiosConfig';
 
 const { Option } = Select;
 
 const AdminChat = () => {
+  const [searchParams, setSearchParams] = useSearchParams();
   const [schools, setSchools] = useState([]);
   const [selectedSchool, setSelectedSchool] = useState(null);
   const [messages, setMessages] = useState([]);
   const [newMessage, setNewMessage] = useState('');
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
+  const requestedSchoolId = searchParams.get('school_id');
 
   useEffect(() => {
     fetchSchools();
@@ -25,13 +28,29 @@ const AdminChat = () => {
     }
   }, [selectedSchool]);
 
+  useEffect(() => {
+    if (!schools.length) {
+      return;
+    }
+
+    if (requestedSchoolId && schools.some((school) => school.school_id === requestedSchoolId)) {
+      if (selectedSchool !== requestedSchoolId) {
+        setSelectedSchool(requestedSchoolId);
+      }
+      return;
+    }
+
+    if (!selectedSchool) {
+      const firstSchoolId = schools[0].school_id;
+      setSelectedSchool(firstSchoolId);
+      setSearchParams({ school_id: firstSchoolId }, { replace: true });
+    }
+  }, [requestedSchoolId, schools, selectedSchool, setSearchParams]);
+
   const fetchSchools = async () => {
     try {
       const response = await api.get('/admin/schools');
       setSchools(response.data);
-      if (response.data.length > 0) {
-        setSelectedSchool(response.data[0].school_id);
-      }
     } catch (error) {
       console.error('Error fetching schools:', error);
       message.error('Failed to load schools');
@@ -92,6 +111,11 @@ const AdminChat = () => {
     }
   };
 
+  const handleSchoolChange = (value) => {
+    setSelectedSchool(value);
+    setSearchParams({ school_id: value }, { replace: true });
+  };
+
   return (
     <div>
       <Card 
@@ -103,7 +127,7 @@ const AdminChat = () => {
             </span>
             <Select
               value={selectedSchool}
-              onChange={setSelectedSchool}
+              onChange={handleSchoolChange}
               style={{ width: 300 }}
               placeholder="Select a school"
             >

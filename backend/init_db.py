@@ -24,10 +24,12 @@ load_dotenv(ROOT_DIR.parent / '.env')
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
+
 def create_database():
     """Create database if it doesn't exist - SQLite auto-creates"""
     print("Using SQLite database - auto-created on first connection")
     return True
+
 
 def create_tables():
     """Create all tables"""
@@ -39,12 +41,13 @@ def create_tables():
         print(f"Error creating tables: {e}")
         return False
 
+
 def migrate_database():
     """Migrate existing database to add new columns and tables"""
     db = SessionLocal()
     try:
-        # Check if contact_number column exists in schools table
         from sqlalchemy import inspect, text
+
         inspector = inspect(engine)
         table_names = inspector.get_table_names()
         columns = [col['name'] for col in inspector.get_columns('schools')] if 'schools' in table_names else []
@@ -57,7 +60,6 @@ def migrate_database():
             if col_name not in columns:
                 print(f"Migrating database to add {col_name} field to schools table...")
                 try:
-                    # For SQLite, we use ALTER TABLE
                     db.execute(text(f"ALTER TABLE schools ADD COLUMN {col_name} {col_def}"))
                     db.commit()
                     print(f"Added {col_name} column to schools table")
@@ -65,13 +67,11 @@ def migrate_database():
                     print(f"  Note: {e}")
                     print("  Column might already exist or SQLite limitation encountered")
 
-        # Check if school_watermark_texts table exists
         if 'school_watermark_texts' not in table_names:
             print("Creating school_watermark_texts table...")
             SchoolWatermarkText.__table__.create(bind=engine)
             print("Created school_watermark_texts table")
         else:
-            # Add missing columns to school_watermark_texts
             text_columns = [col['name'] for col in inspector.get_columns('school_watermark_texts')]
             text_column_defs = [
                 ("name_rotation", "INTEGER DEFAULT 0"),
@@ -105,7 +105,6 @@ def migrate_database():
                         print(f"  Note: {e}")
                         print(f"  Column {col_name} might already exist or SQLite limitation encountered")
 
-        # Add missing columns to resources table
         if 'resources' not in table_names:
             print("Creating resources table...")
             Resource.__table__.create(bind=engine)
@@ -135,7 +134,6 @@ def migrate_database():
                         print(f"  Note: {e}")
                         print(f"  Column {col_name} might already exist or SQLite limitation encountered")
 
-        # Add missing columns to school_logo_positions
         if 'school_logo_positions' in table_names:
             logo_columns = [col['name'] for col in inspector.get_columns('school_logo_positions')]
             if 'rotation' not in logo_columns:
@@ -155,11 +153,11 @@ def migrate_database():
     finally:
         db.close()
 
+
 def seed_admin():
     """Seed the admin users"""
     db = SessionLocal()
     try:
-        # Admin credentials to seed
         admin_credentials = [
             {
                 "email": "pramodjadhav1876@gmail.com",
@@ -178,43 +176,41 @@ def seed_admin():
                 "password": "Darshana@2026"
             }
         ]
-        
+
         for admin_creds in admin_credentials:
-            # Check if admin already exists
             existing_admin = db.query(Admin).filter(Admin.email == admin_creds["email"]).first()
-            
+
             if not existing_admin:
                 admin_password_hash = pwd_context.hash(admin_creds["password"])
-                
                 admin = Admin(
                     email=admin_creds["email"],
                     password_plain=admin_creds["password"],
                     password_hash=admin_password_hash
                 )
-                
                 db.add(admin)
-                print(f"✓ Admin user {admin_creds['email']} seeded successfully")
+                print(f"[ok] Admin user {admin_creds['email']} seeded successfully")
             else:
-                print(f"✓ Admin user {admin_creds['email']} already exists")
-        
+                print(f"[ok] Admin user {admin_creds['email']} already exists")
+
         db.commit()
-        print("✓ All admin users processed successfully")
-        
+        print("[ok] All admin users processed successfully")
+
     except Exception as e:
         print(f"Error seeding admin: {e}")
         db.rollback()
     finally:
         db.close()
 
+
 def init_database():
     """Main initialization function"""
     print("=" * 50)
     print("Starting database initialization...")
     print("=" * 50)
-    
+
     if create_database():
         if create_tables():
-            migrate_database()  # Run migrations
+            migrate_database()
             seed_admin()
             print("=" * 50)
             print("Database initialization completed successfully!")
@@ -223,6 +219,7 @@ def init_database():
             print("Failed to create tables")
     else:
         print("Failed to create database")
+
 
 if __name__ == "__main__":
     init_database()

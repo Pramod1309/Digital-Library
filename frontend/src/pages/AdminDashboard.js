@@ -17,6 +17,8 @@ import SchoolUploads from '../components/Resources/SchoolUploads';
 // Analytics
 import SchoolActivity from '../components/Analytics/SchoolActivity';
 import ResourceAnalytics from '../components/Analytics/ResourceAnalytics';
+import SearchAnalytics from '../components/Analytics/SearchAnalytics';
+import DownloadTracking from '../components/Analytics/DownloadTracking';
 
 // Communication
 import Announcements from '../components/Communication/Announcements';
@@ -585,8 +587,8 @@ const AdminDashboard = ({ user, setUser }) => {
             <Route path="/analytics" element={<div style={{ padding: '24px' }}><Outlet /></div>}>
               <Route path="school-activity" element={<SchoolActivity />} />
               <Route path="resource-analytics" element={<ResourceAnalytics />} />
-              <Route path="search-analytics" element={<div>Search Analytics - Coming Soon</div>} />
-              <Route path="download-tracking" element={<div>Download Tracking - Coming Soon</div>} />
+              <Route path="search-analytics" element={<SearchAnalytics />} />
+              <Route path="download-tracking" element={<DownloadTracking />} />
               <Route index element={<Navigate to="school-activity" replace />} />
             </Route>
             

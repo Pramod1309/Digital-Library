@@ -16,6 +16,7 @@ import {
 } from '@ant-design/icons';
 import api from '../../api/axiosConfig';
 import config from '../../config';
+import { trackSchoolActivity, trackSchoolSearch } from '../../utils/schoolAnalytics';
 
 const BACKEND_URL = config.apiBaseUrl;
 const API = `${BACKEND_URL}/api`;
@@ -880,6 +881,7 @@ const SchoolResourceCategory = ({ user }) => {
   const imageContainerRef = useRef(null);
   const pdfPageRefs = useRef([]);
   const dragStateRef = useRef({ type: null, element: null, container: null });
+  const lastSearchSignatureRef = useRef('');
   
   // Set logo URL immediately from user prop
   useEffect(() => {
@@ -1486,6 +1488,12 @@ const SchoolResourceCategory = ({ user }) => {
   setPreviewResource(record);
   setPreviewLoading(true);
   setIsPreviewModalVisible(true);
+  void trackSchoolActivity(user, 'resource_preview', {
+    resource_id: record.resource_id,
+    resource_name: record.name,
+    category: record.category,
+    file_type: record.file_type
+  });
 
   // CRITICAL FIX: Set logo URL correctly using getStaticFileUrl
   let logoPath = null;
@@ -1590,6 +1598,15 @@ const SchoolResourceCategory = ({ user }) => {
   const handleDownload = async (record, format = 'image') => {
     try {
       if (isVideoLinkResource(record)) {
+        void trackSchoolActivity(user, 'resource_download', {
+          resource_id: record.resource_id,
+          resource_name: record.name,
+          category: record.category,
+          format: 'external_link',
+          branded: false,
+          is_external_link: true
+        });
+
         const openLink = document.createElement('a');
         openLink.href = record.file_path;
         openLink.target = '_blank';
@@ -1998,6 +2015,55 @@ const SchoolResourceCategory = ({ user }) => {
 
     return matchesSearch && matchesClass && matchesSubject && matchesSubCategory && matchesStatus;
   });
+
+  useEffect(() => {
+    const query = searchText.trim();
+    if (loading || query.length < 2) {
+      lastSearchSignatureRef.current = '';
+      return undefined;
+    }
+
+    const signature = [
+      query.toLowerCase(),
+      categoryFilter,
+      subCategoryFilter,
+      selectedClass,
+      subjectFilter,
+      selectedStatus,
+      filteredResources.length
+    ].join('|');
+
+    if (lastSearchSignatureRef.current === signature) {
+      return undefined;
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      lastSearchSignatureRef.current = signature;
+      void trackSchoolSearch(user, {
+        query,
+        resultsCount: filteredResources.length,
+        category: categoryFilter,
+        subCategory: subCategoryFilter === 'all' ? null : subCategoryFilter,
+        filters: {
+          class_level: selectedClass,
+          subject: subjectFilter,
+          status: selectedStatus
+        }
+      });
+    }, 650);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [
+    categoryFilter,
+    filteredResources.length,
+    loading,
+    searchText,
+    selectedClass,
+    selectedStatus,
+    subCategoryFilter,
+    subjectFilter,
+    user
+  ]);
 
   const getStatusTag = (resource) => {
     if (resource.is_own_upload) {

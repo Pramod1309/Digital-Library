@@ -1,7 +1,7 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import { Layout, Button, theme } from 'antd';
 import { MenuUnfoldOutlined, MenuFoldOutlined, LogoutOutlined } from '@ant-design/icons';
-import { Routes, Route, Navigate, useNavigate } from 'react-router-dom';
+import { Routes, Route, Navigate, useNavigate, useLocation } from 'react-router-dom';
 import api from '../api/axiosConfig';
 import SchoolSidebar from '../components/SchoolSidebar';
 import SchoolHome from './school/SchoolHome';
@@ -16,12 +16,15 @@ import SchoolSupport from './school/SchoolSupport';
 import SchoolSupportTickets from './school/SchoolSupportTickets';
 import UsageReports from './school/UsageReports';
 import SchoolSettings from './school/SchoolSettings';
+import { trackSchoolActivity } from '../utils/schoolAnalytics';
 import '../styles/SchoolDashboard.css';
 
 const { Content, Header } = Layout;
 
 const SchoolDashboard = ({ user, setUser }) => {
   const navigate = useNavigate();
+  const location = useLocation();
+  const lastTrackedPageRef = useRef('');
   
   // Check for active session on mount
   React.useEffect(() => {
@@ -35,6 +38,91 @@ const SchoolDashboard = ({ user, setUser }) => {
   const {
     token: { colorBgContainer, borderRadiusLG },
   } = theme.useToken();
+
+  const getPageTrackingDetails = (pathname) => {
+    if (!pathname?.startsWith('/school')) {
+      return null;
+    }
+
+    const normalizedPath = pathname.replace(/\/+$/, '') || '/school';
+    const details = {
+      path: normalizedPath,
+      page_key: 'dashboard_home',
+      page_label: 'Dashboard Home'
+    };
+
+    if (normalizedPath === '/school' || normalizedPath === '/school/dashboard') {
+      return details;
+    }
+
+    if (normalizedPath === '/school/resources') {
+      return { ...details, page_key: 'resources_all', page_label: 'All Resources' };
+    }
+
+    if (normalizedPath === '/school/resources/my-uploads') {
+      return { ...details, page_key: 'resources_my_uploads', page_label: 'My Uploads' };
+    }
+
+    if (normalizedPath.startsWith('/school/resources/')) {
+      const parts = normalizedPath.split('/').filter(Boolean);
+      const category = parts[2] || 'resources';
+      const subCategory = parts[3] || null;
+      return {
+        ...details,
+        page_key: `resources_${category}${subCategory ? `_${subCategory}` : ''}`,
+        page_label: subCategory
+          ? `${category.replace(/-/g, ' ')} / ${subCategory.replace(/-/g, ' ')}`
+          : `${category.replace(/-/g, ' ')} resources`,
+        category,
+        sub_category: subCategory
+      };
+    }
+
+    if (normalizedPath === '/school/communication/announcements') {
+      return { ...details, page_key: 'announcements', page_label: 'Announcements' };
+    }
+
+    if (normalizedPath === '/school/communication/chat') {
+      return { ...details, page_key: 'chat', page_label: 'Chat with Admin' };
+    }
+
+    if (normalizedPath === '/school/support/tickets') {
+      return { ...details, page_key: 'support_tickets', page_label: 'Support Tickets' };
+    }
+
+    if (normalizedPath === '/school/reports') {
+      return { ...details, page_key: 'usage_reports', page_label: 'Usage Reports' };
+    }
+
+    if (normalizedPath === '/school/settings') {
+      return { ...details, page_key: 'settings', page_label: 'Settings' };
+    }
+
+    return {
+      ...details,
+      page_key: normalizedPath.replace(/\W+/g, '_'),
+      page_label: normalizedPath.replace('/school/', '').replace(/-/g, ' ')
+    };
+  };
+
+  React.useEffect(() => {
+    if (!user?.school_id) {
+      return;
+    }
+
+    const pageDetails = getPageTrackingDetails(location.pathname);
+    if (!pageDetails) {
+      return;
+    }
+
+    const signature = `${pageDetails.page_key}:${pageDetails.path}`;
+    if (lastTrackedPageRef.current === signature) {
+      return;
+    }
+
+    lastTrackedPageRef.current = signature;
+    void trackSchoolActivity(user, 'page_visit', pageDetails);
+  }, [location.pathname, user]);
 
   const handleLogout = async () => {
     try {

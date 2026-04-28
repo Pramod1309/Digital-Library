@@ -1,17 +1,21 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Card, Table, Button, Modal, Form, Input, Select, Tag, message } from 'antd';
 import { FileTextOutlined, MessageOutlined, DeleteOutlined } from '@ant-design/icons';
+import { useSearchParams } from 'react-router-dom';
 import api from '../../api/axiosConfig';
 
 const { TextArea } = Input;
 const { Option } = Select;
 
 const SupportTickets = () => {
+  const [searchParams, setSearchParams] = useSearchParams();
   const [tickets, setTickets] = useState([]);
   const [loading, setLoading] = useState(false);
   const [isModalVisible, setIsModalVisible] = useState(false);
   const [selectedTicket, setSelectedTicket] = useState(null);
   const [form] = Form.useForm();
+  const openedFromQueryRef = useRef('');
+  const requestedTicketId = searchParams.get('ticket_id');
 
   useEffect(() => {
     fetchTickets();
@@ -19,6 +23,22 @@ const SupportTickets = () => {
     const interval = setInterval(fetchTickets, 3000);
     return () => clearInterval(interval);
   }, []);
+
+  useEffect(() => {
+    if (!requestedTicketId || !tickets.length) {
+      return;
+    }
+
+    if (openedFromQueryRef.current === requestedTicketId) {
+      return;
+    }
+
+    const matchingTicket = tickets.find((ticket) => ticket.ticket_id === requestedTicketId);
+    if (matchingTicket) {
+      openedFromQueryRef.current = requestedTicketId;
+      handleRespond(matchingTicket, false);
+    }
+  }, [requestedTicketId, tickets]);
 
   const fetchTickets = async () => {
     setLoading(true);
@@ -33,13 +53,18 @@ const SupportTickets = () => {
     }
   };
 
-  const handleRespond = (ticket) => {
+  const handleRespond = (ticket, syncQuery = true) => {
     setSelectedTicket(ticket);
     form.setFieldsValue({
       status: ticket.status,
       admin_response: ticket.admin_response || ''
     });
     setIsModalVisible(true);
+
+    if (syncQuery) {
+      openedFromQueryRef.current = ticket.ticket_id;
+      setSearchParams({ ticket_id: ticket.ticket_id }, { replace: true });
+    }
   };
 
   const handleSubmit = async (values) => {
@@ -67,6 +92,8 @@ const SupportTickets = () => {
       setIsModalVisible(false);
       form.resetFields();
       setSelectedTicket(null);
+      openedFromQueryRef.current = '';
+      setSearchParams({}, { replace: true });
       fetchTickets();
     } catch (error) {
       console.error('Error updating ticket:', error);
@@ -194,6 +221,11 @@ const SupportTickets = () => {
           rowKey="id"
           loading={loading}
           pagination={{ pageSize: 10 }}
+          onRow={(record) => ({
+            style: requestedTicketId && record.ticket_id === requestedTicketId
+              ? { background: '#fffbe6' }
+              : {}
+          })}
           expandable={{
             expandedRowRender: (record) => (
               <div style={{ padding: '16px', background: '#f5f5f5', borderRadius: '8px' }}>
@@ -218,6 +250,8 @@ const SupportTickets = () => {
           setIsModalVisible(false);
           form.resetFields();
           setSelectedTicket(null);
+          openedFromQueryRef.current = '';
+          setSearchParams({}, { replace: true });
         }}
         footer={null}
         width={600}

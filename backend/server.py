@@ -32,6 +32,7 @@ import qrcode
 import base64
 from email.message import EmailMessage
 from email.utils import formataddr
+from collections import Counter, defaultdict
 
 
 # Import database
@@ -39,7 +40,7 @@ from database import (
     get_db, Admin, School, PasswordResetToken, ActivityLog, Resource, 
     Announcement, SupportTicket, ChatMessage, ResourceDownload, 
     KnowledgeArticle, SchoolLogoPosition, SchoolWatermarkText, engine, Base, AdminResourceWatermark,
-    AdminBatchWatermarkTemplate
+    AdminBatchWatermarkTemplate, SchoolSearchLog
 )
 from init_db import init_database
 
@@ -286,6 +287,21 @@ class AdminBatchWatermarkGenerateRequest(BaseModel):
     school_ids: List[str]
     resource_ids: List[str]
     templates: Dict[str, Dict[str, Any]] = {}
+
+class SchoolAnalyticsEventRequest(BaseModel):
+    school_id: str
+    school_name: str
+    activity_type: str
+    details: Optional[Dict[str, Any]] = None
+
+class SchoolSearchEventRequest(BaseModel):
+    school_id: str
+    school_name: str
+    query: str
+    results_count: int = 0
+    category: Optional[str] = None
+    sub_category: Optional[str] = None
+    filters: Optional[Dict[str, Any]] = None
 
 class AdminBatchWatermarkDownloadRequest(BaseModel):
     job_id: str
@@ -575,6 +591,128 @@ async def get_current_admin(current_user: dict = Depends(get_current_user)):
             detail="Not enough permissions"
         )
     return current_user
+
+def serialize_activity_details(details: Optional[Union[Dict[str, Any], List[Any], str]]) -> Optional[str]:
+    if details is None:
+        return None
+    if isinstance(details, str):
+        return details
+    try:
+        return json.dumps(details)
+    except Exception:
+        return str(details)
+
+def parse_activity_details(details: Optional[str]) -> Optional[Dict[str, Any]]:
+    if not details:
+        return None
+
+    try:
+        parsed = json.loads(details)
+        if isinstance(parsed, dict):
+            return parsed
+        return {"value": parsed}
+    except Exception:
+        return {"message": details}
+
+def record_activity(
+    db: Session,
+    school_id: str,
+    school_name: str,
+    activity_type: str,
+    details: Optional[Union[Dict[str, Any], List[Any], str]] = None
+) -> ActivityLog:
+    activity = ActivityLog(
+        school_id=school_id,
+        school_name=school_name,
+        activity_type=activity_type,
+        details=serialize_activity_details(details)
+    )
+    db.add(activity)
+    return activity
+
+def humanize_route_name(path: str) -> str:
+    if not path:
+        return "Unknown"
+
+    normalized = path.rstrip("/") or "/"
+    route_map = {
+        "/school": "Dashboard Home",
+        "/school/dashboard": "Dashboard Home",
+        "/school/resources": "All Resources",
+        "/school/resources/my-uploads": "My Uploads",
+        "/school/communication/announcements": "Announcements",
+        "/school/communication/chat": "Chat with Admin",
+        "/school/support/tickets": "Support Tickets",
+        "/school/reports": "Usage Reports",
+        "/school/settings": "Settings"
+    }
+
+    if normalized in route_map:
+        return route_map[normalized]
+
+    if normalized.startswith("/school/resources/"):
+        parts = normalized.split("/")
+        category = parts[3] if len(parts) > 3 else "resources"
+        sub_category = parts[4] if len(parts) > 4 else None
+        label = f"{category.replace('-', ' ').title()} Resources"
+        if sub_category:
+            label = f"{label} / {sub_category.replace('-', ' ').title()}"
+        return label
+
+    return normalized.replace("/school/", "").replace("-", " ").title()
+
+def build_activity_title(activity_type: str, details: Optional[Dict[str, Any]] = None) -> str:
+    details = details or {}
+
+    if activity_type == "login":
+        return "Logged in"
+    if activity_type == "logout":
+        return "Logged out"
+    if activity_type == "page_visit":
+        return f"Opened {details.get('page_label') or humanize_route_name(details.get('path') or '')}"
+    if activity_type == "resource_search":
+        query = details.get("query") or "search"
+        return f'Searched "{query}"'
+    if activity_type == "resource_preview":
+        return f"Previewed {details.get('resource_name') or 'resource'}"
+    if activity_type == "resource_download":
+        return f"Downloaded {details.get('resource_name') or 'resource'}"
+    if activity_type == "resource_upload":
+        return f"Uploaded {details.get('resource_name') or 'resource'}"
+    if activity_type == "support_ticket_created":
+        return f"Created ticket {details.get('ticket_id') or ''}".strip()
+    if activity_type == "chat_message_sent":
+        return "Sent a chat message"
+
+    return activity_type.replace("_", " ").title()
+
+def build_activity_description(activity_type: str, details: Optional[Dict[str, Any]] = None) -> str:
+    details = details or {}
+
+    if activity_type == "login":
+        return "School logged in successfully."
+    if activity_type == "logout":
+        return "School logged out."
+    if activity_type == "page_visit":
+        path = details.get("path") or ""
+        return f"Visited {details.get('page_label') or humanize_route_name(path)}."
+    if activity_type == "resource_search":
+        query = details.get("query") or ""
+        results = details.get("results_count", 0)
+        return f'Search query "{query}" returned {results} result(s).'
+    if activity_type == "resource_preview":
+        return f"Previewed {details.get('resource_name') or 'a resource'}."
+    if activity_type == "resource_download":
+        branded = "branded " if details.get("branded") else ""
+        return f"Downloaded {branded}{details.get('resource_name') or 'a resource'}."
+    if activity_type == "resource_upload":
+        return f"Uploaded {details.get('resource_name') or 'a resource'} for approval."
+    if activity_type == "support_ticket_created":
+        return f"Created a {details.get('priority') or 'normal'} priority {details.get('category') or ''} support ticket.".replace("  ", " ").strip()
+    if activity_type == "chat_message_sent":
+        return "Sent a message to the admin."
+
+    return details.get("message") or details.get("description") or "Activity recorded."
 
 # Helper functions for watermarking
 def get_full_file_path(file_path: str) -> str:
@@ -2176,13 +2314,16 @@ async def school_login(login_data: LoginRequest, db: Session = Depends(get_db)):
         )
     
     # Log login activity
-    activity = ActivityLog(
-        school_id=school.school_id,
-        school_name=school.school_name,
-        activity_type="login",
-        details=f"School logged in successfully"
+    record_activity(
+        db,
+        school.school_id,
+        school.school_name,
+        "login",
+        {
+            "message": "School logged in successfully",
+            "email": school.email
+        }
     )
-    db.add(activity)
     db.commit()
     
     # FIX: Properly format logo path
@@ -2533,13 +2674,13 @@ async def register_school_via_qr(
 @api_router.post("/school/logout")
 async def school_logout(school_id: str, school_name: str, db: Session = Depends(get_db)):
     """School logout endpoint - log activity"""
-    activity = ActivityLog(
-        school_id=school_id,
-        school_name=school_name,
-        activity_type="logout",
-        details=f"School logged out"
+    record_activity(
+        db,
+        school_id,
+        school_name,
+        "logout",
+        {"message": "School logged out"}
     )
-    db.add(activity)
     db.commit()
     return {"message": "Logged out successfully"}
 
@@ -2552,15 +2693,74 @@ async def log_school_activity(
     db: Session = Depends(get_db)
 ):
     """Log school activity"""
-    activity = ActivityLog(
-        school_id=school_id,
-        school_name=school_name,
-        activity_type=activity_type,
-        details=details
-    )
-    db.add(activity)
+    record_activity(db, school_id, school_name, activity_type, details)
     db.commit()
     return {"message": "Activity logged"}
+
+@api_router.post("/school/analytics/track")
+async def track_school_analytics_event(
+    request: SchoolAnalyticsEventRequest,
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Structured analytics event ingestion for school-side activity."""
+    if current_user.get("user_type") != "school":
+        raise HTTPException(status_code=403, detail="Only schools can send analytics events")
+    if current_user.get("school_id") != request.school_id:
+        raise HTTPException(status_code=403, detail="School mismatch for analytics event")
+
+    record_activity(
+        db,
+        request.school_id,
+        request.school_name,
+        request.activity_type,
+        request.details
+    )
+    db.commit()
+    return {"message": "Analytics event tracked"}
+
+@api_router.post("/school/analytics/search")
+async def track_school_search_event(
+    request: SchoolSearchEventRequest,
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Store searchable query analytics for school-side resource usage."""
+    if current_user.get("user_type") != "school":
+        raise HTTPException(status_code=403, detail="Only schools can send search analytics")
+    if current_user.get("school_id") != request.school_id:
+        raise HTTPException(status_code=403, detail="School mismatch for search analytics")
+
+    normalized_query = (request.query or "").strip().lower()
+    if len(normalized_query) < 2:
+        return {"message": "Search query too short to track"}
+
+    search_log = SchoolSearchLog(
+        school_id=request.school_id,
+        school_name=request.school_name,
+        query=request.query.strip(),
+        normalized_query=normalized_query,
+        results_count=max(0, request.results_count or 0),
+        category=request.category,
+        sub_category=request.sub_category,
+        filters_json=serialize_activity_details(request.filters)
+    )
+    db.add(search_log)
+    record_activity(
+        db,
+        request.school_id,
+        request.school_name,
+        "resource_search",
+        {
+            "query": request.query.strip(),
+            "results_count": max(0, request.results_count or 0),
+            "category": request.category,
+            "sub_category": request.sub_category,
+            "filters": request.filters or {}
+        }
+    )
+    db.commit()
+    return {"message": "Search analytics tracked"}
 
 @api_router.get("/admin/activities")
 async def get_all_activities(db: Session = Depends(get_db)):
@@ -3110,6 +3310,19 @@ async def school_upload_resource(
     )
     
     db.add(new_resource)
+    record_activity(
+        db,
+        school_id,
+        school_name,
+        "resource_upload",
+        {
+            "resource_id": resource_id,
+            "resource_name": name,
+            "category": category,
+            "file_type": file.content_type or f"application/{file_extension}",
+            "file_size": file_size
+        }
+    )
     db.commit()
     db.refresh(new_resource)
     
@@ -3178,6 +3391,19 @@ async def download_resource(
                 school_name=school_name
             )
             db.add(download_log)
+            record_activity(
+                db,
+                school_id,
+                school_name,
+                "resource_download",
+                {
+                    "resource_id": resource.resource_id,
+                    "resource_name": resource.name,
+                    "category": resource.category,
+                    "format": format or "original",
+                    "branded": False
+                }
+            )
             
             # Increment download count
             resource.download_count += 1
@@ -3515,6 +3741,18 @@ async def create_support_ticket(
     )
     
     db.add(new_ticket)
+    record_activity(
+        db,
+        school_id,
+        school_name,
+        "support_ticket_created",
+        {
+            "ticket_id": ticket_id,
+            "subject": subject,
+            "category": category,
+            "priority": priority
+        }
+    )
     db.commit()
     db.refresh(new_ticket)
     
@@ -3610,6 +3848,17 @@ async def send_chat_message(
     )
     
     db.add(new_message)
+    if sender_type == "school":
+        record_activity(
+            db,
+            school_id,
+            school_name,
+            "chat_message_sent",
+            {
+                "message_length": len(message or ""),
+                "preview": (message or "")[:120]
+            }
+        )
     db.commit()
     db.refresh(new_message)
     
@@ -4812,6 +5061,8 @@ async def download_resource_with_logo(
                 if watermarked_file:
                     print(f"Watermarked file path exists but file not found: {watermarked_file}")
         
+        requested_format = (format or "").strip().lower()
+
         # Log download
         if school_id and school_name:
             download_log = ResourceDownload(
@@ -4820,11 +5071,22 @@ async def download_resource_with_logo(
                 school_name=school_name
             )
             db.add(download_log)
+            record_activity(
+                db,
+                school_id,
+                school_name,
+                "resource_download",
+                {
+                    "resource_id": resource.resource_id,
+                    "resource_name": resource.name,
+                    "category": resource.category,
+                    "format": requested_format or "original",
+                    "branded": True
+                }
+            )
             resource.download_count += 1
             db.commit()
             print(f"Download logged for school: {school_name}")
-
-        requested_format = (format or "").strip().lower()
 
         # If PDF format is requested and the output is an image, convert to PDF bytes
         if requested_format == "pdf":
@@ -5066,6 +5328,368 @@ async def debug_school_watermark_positions(
 
 # ==================== ANALYTICS ROUTES ====================
 
+def normalize_analytics_days(days: int) -> int:
+    try:
+        return max(7, min(int(days or 30), 365))
+    except Exception:
+        return 30
+
+def iso_or_none(value: Optional[datetime]) -> Optional[str]:
+    return value.isoformat() if value else None
+
+def build_daily_buckets(days: int) -> Dict[str, Dict[str, Any]]:
+    start_date = (datetime.utcnow() - timedelta(days=days - 1)).date()
+    buckets: Dict[str, Dict[str, Any]] = {}
+
+    for offset in range(days):
+        current_date = start_date + timedelta(days=offset)
+        bucket_key = current_date.isoformat()
+        buckets[bucket_key] = {
+            "date": bucket_key,
+            "label": current_date.strftime("%d %b"),
+            "logins": 0,
+            "page_views": 0,
+            "previews": 0,
+            "searches": 0,
+            "downloads": 0,
+            "uploads": 0,
+            "tickets": 0,
+            "messages": 0,
+            "zero_results": 0
+        }
+
+    return buckets
+
+def bump_daily_bucket(buckets: Dict[str, Dict[str, Any]], timestamp: Optional[datetime], key: str) -> None:
+    if not timestamp:
+        return
+
+    bucket = buckets.get(timestamp.date().isoformat())
+    if bucket is not None:
+        bucket[key] = bucket.get(key, 0) + 1
+
+def set_last_activity(row: Dict[str, Any], timestamp: Optional[datetime], label: str) -> None:
+    if not timestamp:
+        return
+    if row.get("last_active_at") is None or timestamp > row["last_active_at"]:
+        row["last_active_at"] = timestamp
+        row["last_activity_label"] = label
+
+@api_router.get("/admin/analytics/school-activity")
+async def get_school_activity_analytics(
+    days: int = 30,
+    school_id: Optional[str] = None,
+    current_admin: dict = Depends(get_current_admin),
+    db: Session = Depends(get_db)
+):
+    """Full-stack school activity analytics for the admin dashboard."""
+    normalized_days = normalize_analytics_days(days)
+    cutoff = datetime.utcnow() - timedelta(days=normalized_days - 1)
+
+    school_query = db.query(School)
+    if school_id and school_id != "all":
+        school_query = school_query.filter(School.school_id == school_id)
+
+    selected_schools = school_query.order_by(School.school_name.asc()).all()
+    if school_id and school_id != "all" and not selected_schools:
+        raise HTTPException(status_code=404, detail="School not found")
+
+    school_ids = [school.school_id for school in selected_schools]
+    empty_response = {
+        "days": normalized_days,
+        "summary": {
+            "active_schools": 0,
+            "total_logins": 0,
+            "total_logouts": 0,
+            "total_page_views": 0,
+            "total_searches": 0,
+            "total_previews": 0,
+            "total_downloads": 0,
+            "total_uploads": 0,
+            "total_tickets": 0,
+            "total_messages": 0
+        },
+        "activity_breakdown": [],
+        "daily_activity": list(build_daily_buckets(normalized_days).values()),
+        "school_breakdown": [],
+        "recent_activity": []
+    }
+
+    if not school_ids:
+        return empty_response
+
+    activity_logs = db.query(ActivityLog).filter(
+        ActivityLog.timestamp >= cutoff,
+        ActivityLog.school_id.in_(school_ids)
+    ).order_by(ActivityLog.timestamp.desc()).all()
+
+    search_logs = db.query(SchoolSearchLog).filter(
+        SchoolSearchLog.created_at >= cutoff,
+        SchoolSearchLog.school_id.in_(school_ids)
+    ).order_by(SchoolSearchLog.created_at.desc()).all()
+
+    download_logs = db.query(ResourceDownload).filter(
+        ResourceDownload.downloaded_at >= cutoff,
+        ResourceDownload.school_id.in_(school_ids)
+    ).order_by(ResourceDownload.downloaded_at.desc()).all()
+
+    upload_logs = db.query(Resource).filter(
+        Resource.uploaded_by_type == "school",
+        Resource.created_at >= cutoff,
+        Resource.uploaded_by_id.in_(school_ids)
+    ).order_by(Resource.created_at.desc()).all()
+
+    ticket_logs = db.query(SupportTicket).filter(
+        SupportTicket.created_at >= cutoff,
+        SupportTicket.school_id.in_(school_ids)
+    ).order_by(SupportTicket.created_at.desc()).all()
+
+    chat_logs = db.query(ChatMessage).filter(
+        ChatMessage.created_at >= cutoff,
+        ChatMessage.sender_type == "school",
+        ChatMessage.school_id.in_(school_ids)
+    ).order_by(ChatMessage.created_at.desc()).all()
+
+    downloaded_resource_ids = sorted({item.resource_id for item in download_logs})
+    resource_map = {}
+    if downloaded_resource_ids:
+        resource_map = {
+            resource.resource_id: resource
+            for resource in db.query(Resource).filter(Resource.resource_id.in_(downloaded_resource_ids)).all()
+        }
+
+    buckets = build_daily_buckets(normalized_days)
+    school_rows: Dict[str, Dict[str, Any]] = {}
+    active_days_map: Dict[str, set] = {}
+
+    for school in selected_schools:
+        school_rows[school.school_id] = {
+            "school_id": school.school_id,
+            "school_name": school.school_name,
+            "email": school.email,
+            "contact_number": school.contact_number,
+            "logins": 0,
+            "logouts": 0,
+            "page_views": 0,
+            "searches": 0,
+            "previews": 0,
+            "downloads": 0,
+            "uploads": 0,
+            "tickets": 0,
+            "messages": 0,
+            "total_actions": 0,
+            "activity_score": 0,
+            "last_active_at": None,
+            "last_activity_label": "No recent activity"
+        }
+        active_days_map[school.school_id] = set()
+
+    recent_activity: List[Dict[str, Any]] = []
+
+    for activity in activity_logs:
+        row = school_rows.get(activity.school_id)
+        if not row:
+            continue
+
+        details = parse_activity_details(activity.details)
+        if activity.activity_type == "login":
+            row["logins"] += 1
+            bump_daily_bucket(buckets, activity.timestamp, "logins")
+        elif activity.activity_type == "logout":
+            row["logouts"] += 1
+        elif activity.activity_type == "page_visit":
+            row["page_views"] += 1
+            bump_daily_bucket(buckets, activity.timestamp, "page_views")
+        elif activity.activity_type == "resource_preview":
+            row["previews"] += 1
+            bump_daily_bucket(buckets, activity.timestamp, "previews")
+        elif activity.activity_type == "resource_download" and details and details.get("is_external_link"):
+            row["downloads"] += 1
+            bump_daily_bucket(buckets, activity.timestamp, "downloads")
+        else:
+            continue
+
+        active_days_map[activity.school_id].add(activity.timestamp.date().isoformat())
+        set_last_activity(row, activity.timestamp, build_activity_title(activity.activity_type, details))
+
+        recent_activity.append({
+            "id": f"activity-{activity.id}",
+            "school_id": activity.school_id,
+            "school_name": activity.school_name,
+            "type": activity.activity_type,
+            "title": build_activity_title(activity.activity_type, details),
+            "description": build_activity_description(activity.activity_type, details),
+            "timestamp": iso_or_none(activity.timestamp)
+        })
+
+    for search in search_logs:
+        row = school_rows.get(search.school_id)
+        if not row:
+            continue
+
+        row["searches"] += 1
+        active_days_map[search.school_id].add(search.created_at.date().isoformat())
+        set_last_activity(row, search.created_at, f'Searched "{search.query}"')
+        bump_daily_bucket(buckets, search.created_at, "searches")
+        if (search.results_count or 0) == 0:
+            bump_daily_bucket(buckets, search.created_at, "zero_results")
+
+        recent_activity.append({
+            "id": f"search-{search.id}",
+            "school_id": search.school_id,
+            "school_name": search.school_name,
+            "type": "resource_search",
+            "title": f'Searched "{search.query}"',
+            "description": f'Returned {search.results_count or 0} result(s) in {search.category or "all categories"}.',
+            "timestamp": iso_or_none(search.created_at)
+        })
+
+    for download in download_logs:
+        row = school_rows.get(download.school_id)
+        if not row:
+            continue
+
+        resource = resource_map.get(download.resource_id)
+        row["downloads"] += 1
+        active_days_map[download.school_id].add(download.downloaded_at.date().isoformat())
+        set_last_activity(row, download.downloaded_at, f"Downloaded {resource.name if resource else 'resource'}")
+        bump_daily_bucket(buckets, download.downloaded_at, "downloads")
+
+        recent_activity.append({
+            "id": f"download-{download.id}",
+            "school_id": download.school_id,
+            "school_name": download.school_name,
+            "type": "resource_download",
+            "title": f"Downloaded {resource.name if resource else download.resource_id}",
+            "description": f"Downloaded {resource.category if resource else 'resource'} content.",
+            "timestamp": iso_or_none(download.downloaded_at)
+        })
+
+    for upload in upload_logs:
+        row = school_rows.get(upload.uploaded_by_id)
+        if not row:
+            continue
+
+        row["uploads"] += 1
+        active_days_map[upload.uploaded_by_id].add(upload.created_at.date().isoformat())
+        set_last_activity(row, upload.created_at, f"Uploaded {upload.name}")
+        bump_daily_bucket(buckets, upload.created_at, "uploads")
+
+        recent_activity.append({
+            "id": f"upload-{upload.id}",
+            "school_id": upload.uploaded_by_id,
+            "school_name": upload.uploaded_by_name or row["school_name"],
+            "type": "resource_upload",
+            "title": f"Uploaded {upload.name}",
+            "description": f"{upload.category.title()} resource uploaded with {upload.approval_status} status.",
+            "timestamp": iso_or_none(upload.created_at)
+        })
+
+    for ticket in ticket_logs:
+        row = school_rows.get(ticket.school_id)
+        if not row:
+            continue
+
+        row["tickets"] += 1
+        active_days_map[ticket.school_id].add(ticket.created_at.date().isoformat())
+        set_last_activity(row, ticket.created_at, f"Created ticket {ticket.ticket_id}")
+        bump_daily_bucket(buckets, ticket.created_at, "tickets")
+
+        recent_activity.append({
+            "id": f"ticket-{ticket.id}",
+            "school_id": ticket.school_id,
+            "school_name": ticket.school_name,
+            "type": "support_ticket_created",
+            "title": f"Created ticket {ticket.ticket_id}",
+            "description": f"{ticket.priority.title()} priority ticket in {ticket.category}.",
+            "timestamp": iso_or_none(ticket.created_at)
+        })
+
+    for chat in chat_logs:
+        row = school_rows.get(chat.school_id)
+        if not row:
+            continue
+
+        row["messages"] += 1
+        active_days_map[chat.school_id].add(chat.created_at.date().isoformat())
+        set_last_activity(row, chat.created_at, "Sent a chat message")
+        bump_daily_bucket(buckets, chat.created_at, "messages")
+
+        recent_activity.append({
+            "id": f"chat-{chat.id}",
+            "school_id": chat.school_id,
+            "school_name": chat.school_name,
+            "type": "chat_message_sent",
+            "title": "Sent a chat message",
+            "description": (chat.message or "").strip()[:180] or "Message sent to admin.",
+            "timestamp": iso_or_none(chat.created_at)
+        })
+
+    school_breakdown = []
+    for row in school_rows.values():
+        row["active_days"] = len(active_days_map[row["school_id"]])
+        row["total_actions"] = (
+            row["logins"] + row["page_views"] + row["searches"] + row["previews"] +
+            row["downloads"] + row["uploads"] + row["tickets"] + row["messages"]
+        )
+        row["activity_score"] = (
+            row["logins"] * 3 +
+            row["page_views"] +
+            row["searches"] * 2 +
+            row["previews"] * 2 +
+            row["downloads"] * 4 +
+            row["uploads"] * 5 +
+            row["tickets"] * 4 +
+            row["messages"] * 2
+        )
+        row["last_active_at"] = iso_or_none(row["last_active_at"])
+        school_breakdown.append(row)
+
+    school_breakdown.sort(
+        key=lambda item: (
+            item["activity_score"],
+            item["total_actions"],
+            item["last_active_at"] or ""
+        ),
+        reverse=True
+    )
+
+    summary = {
+        "active_schools": len([row for row in school_breakdown if row["total_actions"] > 0]),
+        "total_logins": sum(row["logins"] for row in school_breakdown),
+        "total_logouts": sum(row["logouts"] for row in school_breakdown),
+        "total_page_views": sum(row["page_views"] for row in school_breakdown),
+        "total_searches": sum(row["searches"] for row in school_breakdown),
+        "total_previews": sum(row["previews"] for row in school_breakdown),
+        "total_downloads": sum(row["downloads"] for row in school_breakdown),
+        "total_uploads": sum(row["uploads"] for row in school_breakdown),
+        "total_tickets": sum(row["tickets"] for row in school_breakdown),
+        "total_messages": sum(row["messages"] for row in school_breakdown)
+    }
+
+    activity_breakdown = [
+        {"key": "logins", "label": "Logins", "count": summary["total_logins"]},
+        {"key": "logouts", "label": "Logouts", "count": summary["total_logouts"]},
+        {"key": "page_views", "label": "Page Views", "count": summary["total_page_views"]},
+        {"key": "searches", "label": "Searches", "count": summary["total_searches"]},
+        {"key": "previews", "label": "Previews", "count": summary["total_previews"]},
+        {"key": "downloads", "label": "Downloads", "count": summary["total_downloads"]},
+        {"key": "uploads", "label": "Uploads", "count": summary["total_uploads"]},
+        {"key": "tickets", "label": "Tickets", "count": summary["total_tickets"]},
+        {"key": "messages", "label": "Messages", "count": summary["total_messages"]}
+    ]
+
+    recent_activity.sort(key=lambda item: item["timestamp"] or "", reverse=True)
+
+    return {
+        "days": normalized_days,
+        "summary": summary,
+        "activity_breakdown": activity_breakdown,
+        "daily_activity": list(buckets.values()),
+        "school_breakdown": school_breakdown,
+        "recent_activity": recent_activity[:40]
+    }
+
 @api_router.get("/admin/analytics/resources")
 async def get_resource_analytics(db: Session = Depends(get_db)):
     """Get resource analytics - Admin"""
@@ -5089,6 +5713,659 @@ async def get_resource_analytics(db: Session = Depends(get_db)):
             {"name": r.name, "category": r.category, "downloads": r.download_count}
             for r in top_resources
         ]
+    }
+
+@api_router.get("/admin/dashboard/overview")
+async def get_admin_dashboard_overview(
+    current_admin: dict = Depends(get_current_admin),
+    db: Session = Depends(get_db)
+):
+    """Actionable admin home overview with KPIs, notifications, and recent activity."""
+    now = datetime.utcnow()
+    start_of_month = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    start_of_day = now.replace(hour=0, minute=0, second=0, microsecond=0)
+
+    total_schools = db.query(School).count()
+    total_resources = db.query(Resource).count()
+    downloads_this_month = db.query(ResourceDownload).filter(
+        ResourceDownload.downloaded_at >= start_of_month
+    ).count()
+
+    external_monthly_downloads = 0
+    external_download_logs = db.query(ActivityLog).filter(
+        ActivityLog.timestamp >= start_of_month,
+        ActivityLog.activity_type == "resource_download"
+    ).all()
+    for log in external_download_logs:
+        details = parse_activity_details(log.details) or {}
+        if details.get("is_external_link"):
+            external_monthly_downloads += 1
+
+    pending_school_requests = db.query(Resource).filter(
+        Resource.uploaded_by_type == "school",
+        Resource.approval_status == "pending"
+    ).count()
+
+    unread_school_messages = db.query(ChatMessage).filter(
+        ChatMessage.sender_type == "school",
+        ChatMessage.is_read == False
+    ).order_by(ChatMessage.created_at.desc()).all()
+
+    chat_notifications: Dict[str, Dict[str, Any]] = {}
+    for item in unread_school_messages:
+        if item.school_id not in chat_notifications:
+            chat_notifications[item.school_id] = {
+                "school_id": item.school_id,
+                "school_name": item.school_name,
+                "unread_count": 0,
+                "last_message": item.message,
+                "last_message_at": item.created_at
+            }
+        chat_notifications[item.school_id]["unread_count"] += 1
+        if item.created_at > chat_notifications[item.school_id]["last_message_at"]:
+            chat_notifications[item.school_id]["last_message_at"] = item.created_at
+            chat_notifications[item.school_id]["last_message"] = item.message
+
+    open_tickets = db.query(SupportTicket).filter(
+        SupportTicket.status.in_(["open", "in_progress"])
+    ).order_by(SupportTicket.created_at.desc()).all()
+
+    priority_rank = {"high": 0, "normal": 1, "low": 2}
+    ticket_notifications = sorted(
+        [
+            {
+                "ticket_id": ticket.ticket_id,
+                "school_id": ticket.school_id,
+                "school_name": ticket.school_name,
+                "subject": ticket.subject,
+                "category": ticket.category,
+                "priority": ticket.priority,
+                "status": ticket.status,
+                "created_at": iso_or_none(ticket.created_at)
+            }
+            for ticket in open_tickets
+        ],
+        key=lambda item: (
+            priority_rank.get(item["priority"], 9),
+            item["created_at"] or ""
+        )
+    )
+
+    recent_logs = db.query(ActivityLog).order_by(ActivityLog.timestamp.desc()).limit(20).all()
+    recent_activity = []
+    for activity in recent_logs:
+        details = parse_activity_details(activity.details)
+        recent_activity.append({
+            "id": activity.id,
+            "school_id": activity.school_id,
+            "school_name": activity.school_name,
+            "activity_type": activity.activity_type,
+            "title": build_activity_title(activity.activity_type, details),
+            "description": build_activity_description(activity.activity_type, details),
+            "timestamp": iso_or_none(activity.timestamp)
+        })
+
+    active_schools_today = len({
+        activity.school_id
+        for activity in db.query(ActivityLog).filter(ActivityLog.timestamp >= start_of_day).all()
+        if activity.school_id
+    })
+
+    return {
+        "summary": {
+            "total_schools": total_schools,
+            "total_resources": total_resources,
+            "downloads_this_month": downloads_this_month + external_monthly_downloads,
+            "pending_school_requests": pending_school_requests,
+            "unread_chat_queries": len(unread_school_messages),
+            "schools_waiting_in_chat": len(chat_notifications),
+            "open_ticket_queries": len(open_tickets),
+            "active_schools_today": active_schools_today
+        },
+        "recent_activity": recent_activity,
+        "chat_notifications": [
+            {
+                **item,
+                "last_message_at": iso_or_none(item["last_message_at"])
+            }
+            for item in sorted(
+                chat_notifications.values(),
+                key=lambda value: value["last_message_at"],
+                reverse=True
+            )[:6]
+        ],
+        "ticket_notifications": ticket_notifications[:6]
+    }
+
+@api_router.get("/admin/analytics/resource-insights")
+async def get_resource_insights_analytics(
+    days: int = 30,
+    category: Optional[str] = None,
+    school_id: Optional[str] = None,
+    current_admin: dict = Depends(get_current_admin),
+    db: Session = Depends(get_db)
+):
+    """Resource performance analytics across previews, downloads, and school uploads."""
+    normalized_days = normalize_analytics_days(days)
+    cutoff = datetime.utcnow() - timedelta(days=normalized_days - 1)
+    category_filter = None if not category or category == "all" else category
+    school_filter = None if not school_id or school_id == "all" else school_id
+
+    resource_query = db.query(Resource)
+    if category_filter:
+        resource_query = resource_query.filter(Resource.category == category_filter)
+    resources = resource_query.all()
+    resource_map = {resource.resource_id: resource for resource in resources}
+    resource_ids = set(resource_map.keys())
+
+    download_query = db.query(ResourceDownload).filter(ResourceDownload.downloaded_at >= cutoff)
+    if school_filter:
+        download_query = download_query.filter(ResourceDownload.school_id == school_filter)
+    download_logs = [item for item in download_query.order_by(ResourceDownload.downloaded_at.desc()).all() if item.resource_id in resource_ids]
+
+    external_download_query = db.query(ActivityLog).filter(
+        ActivityLog.timestamp >= cutoff,
+        ActivityLog.activity_type == "resource_download"
+    )
+    if school_filter:
+        external_download_query = external_download_query.filter(ActivityLog.school_id == school_filter)
+    external_download_logs = []
+    for item in external_download_query.order_by(ActivityLog.timestamp.desc()).all():
+        details = parse_activity_details(item.details) or {}
+        if not details.get("is_external_link"):
+            continue
+        if details.get("resource_id") not in resource_ids:
+            continue
+        external_download_logs.append((item, details))
+
+    preview_query = db.query(ActivityLog).filter(
+        ActivityLog.timestamp >= cutoff,
+        ActivityLog.activity_type == "resource_preview"
+    )
+    if school_filter:
+        preview_query = preview_query.filter(ActivityLog.school_id == school_filter)
+    preview_logs = []
+    for item in preview_query.order_by(ActivityLog.timestamp.desc()).all():
+        details = parse_activity_details(item.details) or {}
+        resource_id = details.get("resource_id")
+        resource = resource_map.get(resource_id)
+        if category_filter and not resource:
+            continue
+        preview_logs.append((item, details, resource))
+
+    school_upload_query = db.query(Resource).filter(
+        Resource.uploaded_by_type == "school",
+        Resource.created_at >= cutoff
+    )
+    if category_filter:
+        school_upload_query = school_upload_query.filter(Resource.category == category_filter)
+    if school_filter:
+        school_upload_query = school_upload_query.filter(Resource.uploaded_by_id == school_filter)
+    school_uploads = school_upload_query.order_by(Resource.created_at.desc()).all()
+
+    pending_approvals = len([resource for resource in resources if resource.approval_status == "pending"])
+    buckets = build_daily_buckets(normalized_days)
+    category_summary: Dict[str, Dict[str, Any]] = {}
+    resource_performance: Dict[str, Dict[str, Any]] = {}
+
+    for resource in resources:
+        category_summary.setdefault(resource.category, {
+            "category": resource.category,
+            "resource_count": 0,
+            "downloads": 0,
+            "previews": 0,
+            "school_uploads": 0
+        })
+        category_summary[resource.category]["resource_count"] += 1
+        resource_performance[resource.resource_id] = {
+            "resource_id": resource.resource_id,
+            "name": resource.name,
+            "category": resource.category,
+            "class_level": resource.class_level or "N/A",
+            "subject": resource.subject or "N/A",
+            "downloads": 0,
+            "previews": 0,
+            "unique_schools": set(),
+            "last_downloaded_at": None
+        }
+
+    for download in download_logs:
+        resource = resource_map.get(download.resource_id)
+        if not resource:
+            continue
+
+        category_summary[resource.category]["downloads"] += 1
+        resource_performance[download.resource_id]["downloads"] += 1
+        resource_performance[download.resource_id]["unique_schools"].add(download.school_id)
+        existing_last = resource_performance[download.resource_id]["last_downloaded_at"]
+        if existing_last is None or download.downloaded_at > existing_last:
+            resource_performance[download.resource_id]["last_downloaded_at"] = download.downloaded_at
+        bump_daily_bucket(buckets, download.downloaded_at, "downloads")
+
+    for activity, details in external_download_logs:
+        resource = resource_map.get(details.get("resource_id"))
+        if not resource:
+            continue
+
+        category_summary[resource.category]["downloads"] += 1
+        resource_performance[resource.resource_id]["downloads"] += 1
+        resource_performance[resource.resource_id]["unique_schools"].add(activity.school_id)
+        existing_last = resource_performance[resource.resource_id]["last_downloaded_at"]
+        if existing_last is None or activity.timestamp > existing_last:
+            resource_performance[resource.resource_id]["last_downloaded_at"] = activity.timestamp
+        bump_daily_bucket(buckets, activity.timestamp, "downloads")
+
+    for preview_log, details, resource in preview_logs:
+        if not resource:
+            continue
+
+        category_summary[resource.category]["previews"] += 1
+        resource_performance[resource.resource_id]["previews"] += 1
+        bump_daily_bucket(buckets, preview_log.timestamp, "previews")
+
+    for upload in school_uploads:
+        category_summary.setdefault(upload.category, {
+            "category": upload.category,
+            "resource_count": 0,
+            "downloads": 0,
+            "previews": 0,
+            "school_uploads": 0
+        })
+        category_summary[upload.category]["school_uploads"] += 1
+        bump_daily_bucket(buckets, upload.created_at, "uploads")
+
+    top_resources = []
+    for item in resource_performance.values():
+        top_resources.append({
+            **item,
+            "unique_schools": len(item["unique_schools"]),
+            "last_downloaded_at": iso_or_none(item["last_downloaded_at"])
+        })
+
+    top_resources.sort(
+        key=lambda item: (
+            item["downloads"],
+            item["previews"],
+            item["unique_schools"],
+            item["name"]
+        ),
+        reverse=True
+    )
+
+    summary = {
+        "total_resources": len(resources),
+        "pending_approvals": pending_approvals,
+        "downloads_in_range": len(download_logs) + len(external_download_logs),
+        "previews_in_range": len(preview_logs),
+        "school_uploads_in_range": len(school_uploads),
+        "unique_downloading_schools": len(
+            {item.school_id for item in download_logs}.union({item[0].school_id for item in external_download_logs})
+        )
+    }
+
+    return {
+        "days": normalized_days,
+        "summary": summary,
+        "daily_trend": list(buckets.values()),
+        "category_summary": sorted(category_summary.values(), key=lambda item: item["downloads"], reverse=True),
+        "top_resources": top_resources[:25]
+    }
+
+@api_router.get("/admin/analytics/search-insights")
+async def get_search_insights_analytics(
+    days: int = 30,
+    school_id: Optional[str] = None,
+    category: Optional[str] = None,
+    current_admin: dict = Depends(get_current_admin),
+    db: Session = Depends(get_db)
+):
+    """Search behavior analytics across school resource usage."""
+    normalized_days = normalize_analytics_days(days)
+    cutoff = datetime.utcnow() - timedelta(days=normalized_days - 1)
+    category_filter = None if not category or category == "all" else category
+    school_filter = None if not school_id or school_id == "all" else school_id
+
+    query = db.query(SchoolSearchLog).filter(SchoolSearchLog.created_at >= cutoff)
+    if school_filter:
+        query = query.filter(SchoolSearchLog.school_id == school_filter)
+    if category_filter:
+        query = query.filter(SchoolSearchLog.category == category_filter)
+
+    search_logs = query.order_by(SchoolSearchLog.created_at.desc()).all()
+    buckets = build_daily_buckets(normalized_days)
+
+    query_summary: Dict[str, Dict[str, Any]] = {}
+    school_summary: Dict[str, Dict[str, Any]] = {}
+    category_summary: Dict[str, Dict[str, Any]] = {}
+
+    for search in search_logs:
+        key = search.normalized_query or search.query.strip().lower()
+        query_summary.setdefault(key, {
+            "query": search.query,
+            "searches": 0,
+            "unique_schools": set(),
+            "zero_results": 0,
+            "results_total": 0,
+            "last_searched_at": None
+        })
+        school_summary.setdefault(search.school_id, {
+            "school_id": search.school_id,
+            "school_name": search.school_name,
+            "searches": 0,
+            "zero_results": 0,
+            "results_total": 0,
+            "last_searched_at": None,
+            "top_queries": Counter()
+        })
+        category_key = search.category or "uncategorized"
+        category_summary.setdefault(category_key, {
+            "category": category_key,
+            "searches": 0,
+            "zero_results": 0
+        })
+
+        query_summary[key]["query"] = search.query
+        query_summary[key]["searches"] += 1
+        query_summary[key]["unique_schools"].add(search.school_id)
+        query_summary[key]["results_total"] += search.results_count or 0
+        if query_summary[key]["last_searched_at"] is None or search.created_at > query_summary[key]["last_searched_at"]:
+            query_summary[key]["last_searched_at"] = search.created_at
+
+        school_summary[search.school_id]["searches"] += 1
+        school_summary[search.school_id]["results_total"] += search.results_count or 0
+        school_summary[search.school_id]["top_queries"][search.query] += 1
+        if school_summary[search.school_id]["last_searched_at"] is None or search.created_at > school_summary[search.school_id]["last_searched_at"]:
+            school_summary[search.school_id]["last_searched_at"] = search.created_at
+
+        category_summary[category_key]["searches"] += 1
+        bump_daily_bucket(buckets, search.created_at, "searches")
+        if (search.results_count or 0) == 0:
+            query_summary[key]["zero_results"] += 1
+            school_summary[search.school_id]["zero_results"] += 1
+            category_summary[category_key]["zero_results"] += 1
+            bump_daily_bucket(buckets, search.created_at, "zero_results")
+
+    top_queries = []
+    zero_result_queries = []
+    for entry in query_summary.values():
+        payload = {
+            "query": entry["query"],
+            "searches": entry["searches"],
+            "unique_schools": len(entry["unique_schools"]),
+            "avg_results": round(entry["results_total"] / entry["searches"], 2) if entry["searches"] else 0,
+            "zero_results": entry["zero_results"],
+            "last_searched_at": iso_or_none(entry["last_searched_at"])
+        }
+        top_queries.append(payload)
+        if entry["zero_results"] > 0:
+            zero_result_queries.append(payload)
+
+    top_queries.sort(key=lambda item: (item["searches"], item["unique_schools"]), reverse=True)
+    zero_result_queries.sort(key=lambda item: (item["zero_results"], item["searches"]), reverse=True)
+
+    school_breakdown = []
+    for entry in school_summary.values():
+        top_query = entry["top_queries"].most_common(1)[0][0] if entry["top_queries"] else "N/A"
+        school_breakdown.append({
+            "school_id": entry["school_id"],
+            "school_name": entry["school_name"],
+            "searches": entry["searches"],
+            "zero_results": entry["zero_results"],
+            "avg_results": round(entry["results_total"] / entry["searches"], 2) if entry["searches"] else 0,
+            "top_query": top_query,
+            "last_searched_at": iso_or_none(entry["last_searched_at"])
+        })
+
+    school_breakdown.sort(key=lambda item: (item["searches"], item["zero_results"]), reverse=True)
+
+    summary = {
+        "total_searches": len(search_logs),
+        "unique_searching_schools": len({item.school_id for item in search_logs}),
+        "zero_result_searches": len([item for item in search_logs if (item.results_count or 0) == 0]),
+        "avg_results_per_search": round(
+            sum((item.results_count or 0) for item in search_logs) / len(search_logs),
+            2
+        ) if search_logs else 0
+    }
+
+    return {
+        "days": normalized_days,
+        "summary": summary,
+        "daily_trend": list(buckets.values()),
+        "category_breakdown": sorted(category_summary.values(), key=lambda item: item["searches"], reverse=True),
+        "top_queries": top_queries[:20],
+        "zero_result_queries": zero_result_queries[:20],
+        "school_breakdown": school_breakdown,
+        "recent_searches": [
+            {
+                "id": item.id,
+                "school_id": item.school_id,
+                "school_name": item.school_name,
+                "query": item.query,
+                "results_count": item.results_count,
+                "category": item.category or "all",
+                "sub_category": item.sub_category or "all",
+                "created_at": iso_or_none(item.created_at)
+            }
+            for item in search_logs[:40]
+        ]
+    }
+
+@api_router.get("/admin/analytics/download-tracking")
+async def get_download_tracking_analytics(
+    days: int = 30,
+    school_id: Optional[str] = None,
+    category: Optional[str] = None,
+    current_admin: dict = Depends(get_current_admin),
+    db: Session = Depends(get_db)
+):
+    """Detailed download analytics by school, resource, and recency."""
+    normalized_days = normalize_analytics_days(days)
+    cutoff = datetime.utcnow() - timedelta(days=normalized_days - 1)
+    school_filter = None if not school_id or school_id == "all" else school_id
+    category_filter = None if not category or category == "all" else category
+
+    download_query = db.query(ResourceDownload).filter(ResourceDownload.downloaded_at >= cutoff)
+    if school_filter:
+        download_query = download_query.filter(ResourceDownload.school_id == school_filter)
+    download_logs = download_query.order_by(ResourceDownload.downloaded_at.desc()).all()
+
+    external_download_query = db.query(ActivityLog).filter(
+        ActivityLog.timestamp >= cutoff,
+        ActivityLog.activity_type == "resource_download"
+    )
+    if school_filter:
+        external_download_query = external_download_query.filter(ActivityLog.school_id == school_filter)
+    external_download_logs = []
+    for item in external_download_query.order_by(ActivityLog.timestamp.desc()).all():
+        details = parse_activity_details(item.details) or {}
+        if details.get("is_external_link"):
+            external_download_logs.append((item, details))
+
+    resource_ids = sorted(
+        {item.resource_id for item in download_logs}.union({item[1].get("resource_id") for item in external_download_logs if item[1].get("resource_id")})
+    )
+    resource_map = {}
+    if resource_ids:
+        resource_query = db.query(Resource).filter(Resource.resource_id.in_(resource_ids))
+        if category_filter:
+            resource_query = resource_query.filter(Resource.category == category_filter)
+        resource_map = {
+            resource.resource_id: resource
+            for resource in resource_query.all()
+        }
+
+    filtered_downloads = [item for item in download_logs if item.resource_id in resource_map]
+    filtered_external_downloads = [item for item in external_download_logs if item[1].get("resource_id") in resource_map]
+    buckets = build_daily_buckets(normalized_days)
+    school_summary: Dict[str, Dict[str, Any]] = {}
+    resource_summary: Dict[str, Dict[str, Any]] = {}
+    category_summary: Dict[str, Dict[str, Any]] = {}
+
+    for download in filtered_downloads:
+        resource = resource_map.get(download.resource_id)
+        if not resource:
+            continue
+
+        school_summary.setdefault(download.school_id, {
+            "school_id": download.school_id,
+            "school_name": download.school_name,
+            "downloads": 0,
+            "unique_resources": set(),
+            "last_downloaded_at": None
+        })
+        resource_summary.setdefault(download.resource_id, {
+            "resource_id": download.resource_id,
+            "resource_name": resource.name,
+            "category": resource.category,
+            "downloads": 0,
+            "unique_schools": set(),
+            "last_downloaded_at": None
+        })
+        category_summary.setdefault(resource.category, {
+            "category": resource.category,
+            "downloads": 0,
+            "unique_resources": set(),
+            "unique_schools": set()
+        })
+
+        school_summary[download.school_id]["downloads"] += 1
+        school_summary[download.school_id]["unique_resources"].add(download.resource_id)
+        if school_summary[download.school_id]["last_downloaded_at"] is None or download.downloaded_at > school_summary[download.school_id]["last_downloaded_at"]:
+            school_summary[download.school_id]["last_downloaded_at"] = download.downloaded_at
+
+        resource_summary[download.resource_id]["downloads"] += 1
+        resource_summary[download.resource_id]["unique_schools"].add(download.school_id)
+        if resource_summary[download.resource_id]["last_downloaded_at"] is None or download.downloaded_at > resource_summary[download.resource_id]["last_downloaded_at"]:
+            resource_summary[download.resource_id]["last_downloaded_at"] = download.downloaded_at
+
+        category_summary[resource.category]["downloads"] += 1
+        category_summary[resource.category]["unique_resources"].add(download.resource_id)
+        category_summary[resource.category]["unique_schools"].add(download.school_id)
+        bump_daily_bucket(buckets, download.downloaded_at, "downloads")
+
+    for activity, details in filtered_external_downloads:
+        resource_id = details.get("resource_id")
+        resource = resource_map.get(resource_id)
+        if not resource:
+            continue
+
+        school_summary.setdefault(activity.school_id, {
+            "school_id": activity.school_id,
+            "school_name": activity.school_name,
+            "downloads": 0,
+            "unique_resources": set(),
+            "last_downloaded_at": None
+        })
+        resource_summary.setdefault(resource_id, {
+            "resource_id": resource_id,
+            "resource_name": resource.name,
+            "category": resource.category,
+            "downloads": 0,
+            "unique_schools": set(),
+            "last_downloaded_at": None
+        })
+        category_summary.setdefault(resource.category, {
+            "category": resource.category,
+            "downloads": 0,
+            "unique_resources": set(),
+            "unique_schools": set()
+        })
+
+        school_summary[activity.school_id]["downloads"] += 1
+        school_summary[activity.school_id]["unique_resources"].add(resource_id)
+        if school_summary[activity.school_id]["last_downloaded_at"] is None or activity.timestamp > school_summary[activity.school_id]["last_downloaded_at"]:
+            school_summary[activity.school_id]["last_downloaded_at"] = activity.timestamp
+
+        resource_summary[resource_id]["downloads"] += 1
+        resource_summary[resource_id]["unique_schools"].add(activity.school_id)
+        if resource_summary[resource_id]["last_downloaded_at"] is None or activity.timestamp > resource_summary[resource_id]["last_downloaded_at"]:
+            resource_summary[resource_id]["last_downloaded_at"] = activity.timestamp
+
+        category_summary[resource.category]["downloads"] += 1
+        category_summary[resource.category]["unique_resources"].add(resource_id)
+        category_summary[resource.category]["unique_schools"].add(activity.school_id)
+        bump_daily_bucket(buckets, activity.timestamp, "downloads")
+
+    school_breakdown = [
+        {
+            "school_id": item["school_id"],
+            "school_name": item["school_name"],
+            "downloads": item["downloads"],
+            "unique_resources": len(item["unique_resources"]),
+            "last_downloaded_at": iso_or_none(item["last_downloaded_at"])
+        }
+        for item in school_summary.values()
+    ]
+    school_breakdown.sort(key=lambda item: (item["downloads"], item["unique_resources"]), reverse=True)
+
+    resource_breakdown = [
+        {
+            "resource_id": item["resource_id"],
+            "resource_name": item["resource_name"],
+            "category": item["category"],
+            "downloads": item["downloads"],
+            "unique_schools": len(item["unique_schools"]),
+            "last_downloaded_at": iso_or_none(item["last_downloaded_at"])
+        }
+        for item in resource_summary.values()
+    ]
+    resource_breakdown.sort(key=lambda item: (item["downloads"], item["unique_schools"]), reverse=True)
+
+    category_breakdown = [
+        {
+            "category": item["category"],
+            "downloads": item["downloads"],
+            "unique_resources": len(item["unique_resources"]),
+            "unique_schools": len(item["unique_schools"])
+        }
+        for item in category_summary.values()
+    ]
+    category_breakdown.sort(key=lambda item: item["downloads"], reverse=True)
+
+    summary = {
+        "total_downloads": len(filtered_downloads) + len(filtered_external_downloads),
+        "unique_schools": len(school_summary),
+        "unique_resources": len(resource_summary),
+        "avg_downloads_per_school": round(
+            (len(filtered_downloads) + len(filtered_external_downloads)) / len(school_summary),
+            2
+        ) if school_summary else 0
+    }
+
+    recent_downloads = [
+        {
+            "id": item.id,
+            "school_id": item.school_id,
+            "school_name": item.school_name,
+            "resource_id": item.resource_id,
+            "resource_name": resource_map[item.resource_id].name if item.resource_id in resource_map else item.resource_id,
+            "category": resource_map[item.resource_id].category if item.resource_id in resource_map else "unknown",
+            "downloaded_at": iso_or_none(item.downloaded_at)
+        }
+        for item in filtered_downloads[:50]
+    ] + [
+        {
+            "id": f"external-{item[0].id}",
+            "school_id": item[0].school_id,
+            "school_name": item[0].school_name,
+            "resource_id": item[1].get("resource_id"),
+            "resource_name": resource_map[item[1].get("resource_id")].name if item[1].get("resource_id") in resource_map else item[1].get("resource_name"),
+            "category": resource_map[item[1].get("resource_id")].category if item[1].get("resource_id") in resource_map else "unknown",
+            "downloaded_at": iso_or_none(item[0].timestamp)
+        }
+        for item in filtered_external_downloads[:50]
+    ]
+    recent_downloads.sort(key=lambda item: item["downloaded_at"] or "", reverse=True)
+
+    return {
+        "days": normalized_days,
+        "summary": summary,
+        "daily_trend": list(buckets.values()),
+        "school_breakdown": school_breakdown,
+        "resource_breakdown": resource_breakdown,
+        "category_breakdown": category_breakdown,
+        "recent_downloads": recent_downloads[:50]
     }
 
 @api_router.get("/school/analytics/usage")

@@ -76,6 +76,20 @@ class ActivityLog(Base):
     timestamp = Column(DateTime, default=datetime.utcnow, nullable=False)
     details = Column(Text, nullable=True)
 
+class SchoolSearchLog(Base):
+    __tablename__ = "school_search_logs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    school_id = Column(String(100), index=True, nullable=False)
+    school_name = Column(String(255), nullable=False)
+    query = Column(String(500), nullable=False)
+    normalized_query = Column(String(500), index=True, nullable=False)
+    results_count = Column(Integer, default=0)
+    category = Column(String(100), nullable=True, index=True)
+    sub_category = Column(String(255), nullable=True)
+    filters_json = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
+
 # Resource Model
 class Resource(Base):
     __tablename__ = "resources"
