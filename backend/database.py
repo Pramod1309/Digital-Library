@@ -9,6 +9,7 @@ from sqlalchemy import UniqueConstraint
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
+load_dotenv(ROOT_DIR.parent / '.env')
 
 if os.environ.get('FLASK_ENV') == 'production':
     DATABASE_URL = f"postgresql://wldl:{os.environ.get('DB_PASSWORD')}@db:5432/wldl_prod"
@@ -219,6 +220,58 @@ class AdminResourceWatermark(Base):
     
     __table_args__ = (
         UniqueConstraint('admin_id', 'resource_id', 'school_id', name='unique_admin_resource_school_watermark'),
+    )
+
+class AdminBatchWatermarkTemplate(Base):
+    __tablename__ = "admin_batch_watermark_templates"
+
+    id = Column(Integer, primary_key=True, index=True)
+    admin_email = Column(String(255), nullable=False, index=True)
+    resource_id = Column(String(100), nullable=False, index=True)
+
+    show_logo = Column(Boolean, default=True)
+    logo_x = Column(Integer, default=50)
+    logo_y = Column(Integer, default=10)
+    logo_width = Column(Integer, default=20)
+    logo_opacity = Column(Float, default=0.7)
+    logo_rotation = Column(Integer, default=0)
+
+    name_x = Column(Integer, default=50)
+    name_y = Column(Integer, default=25)
+    name_size = Column(Integer, default=20)
+    name_opacity = Column(Float, default=0.8)
+    name_rotation = Column(Integer, default=0)
+    name_font = Column(String(100), default="Arial")
+    name_style = Column(String(50), default="normal")
+    name_color = Column(String(20), default="#000000")
+    show_name = Column(Boolean, default=True)
+
+    contact_x = Column(Integer, default=50)
+    contact_y = Column(Integer, default=90)
+    contact_size = Column(Integer, default=12)
+    contact_opacity = Column(Float, default=0.7)
+    contact_rotation = Column(Integer, default=0)
+    contact_font = Column(String(100), default="Arial")
+    contact_style = Column(String(50), default="normal")
+    contact_color = Column(String(20), default="#000000")
+    show_contact = Column(Boolean, default=True)
+
+    address_x = Column(Integer, default=50)
+    address_y = Column(Integer, default=85)
+    address_size = Column(Integer, default=10)
+    address_opacity = Column(Float, default=1.0)
+    address_rotation = Column(Integer, default=0)
+    address_font = Column(String(100), default="Arial")
+    address_style = Column(String(50), default="normal")
+    address_color = Column(String(20), default="#000000")
+    show_address = Column(Boolean, default=False)
+    address = Column(Text, nullable=True)
+
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint('admin_email', 'resource_id', name='unique_admin_batch_resource_template'),
     )
 
 # School Watermark Text Model - NEW TABLE

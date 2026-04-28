@@ -25,21 +25,27 @@ import io
 import zipfile
 import json
 import asyncio
+import re
+import smtplib
 from types import SimpleNamespace
 import qrcode
 import base64
+from email.message import EmailMessage
+from email.utils import formataddr
 
 
 # Import database
 from database import (
     get_db, Admin, School, PasswordResetToken, ActivityLog, Resource, 
     Announcement, SupportTicket, ChatMessage, ResourceDownload, 
-    KnowledgeArticle, SchoolLogoPosition, SchoolWatermarkText, engine, Base, AdminResourceWatermark
+    KnowledgeArticle, SchoolLogoPosition, SchoolWatermarkText, engine, Base, AdminResourceWatermark,
+    AdminBatchWatermarkTemplate
 )
 from init_db import init_database
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
+load_dotenv(ROOT_DIR.parent / '.env')
 
 # Initialize database on startup
 try:
@@ -70,6 +76,10 @@ UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 # Create resources upload directory
 RESOURCES_UPLOAD_DIR = ROOT_DIR / "uploads" / "resources"
 RESOURCES_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+
+# Create output directory for generated admin batch watermark bundles
+BATCH_WATERMARK_OUTPUT_DIR = ROOT_DIR / "generated" / "batch_watermark_jobs"
+BATCH_WATERMARK_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 # Create the main app
 app = FastAPI()
@@ -267,6 +277,28 @@ class SaveTemplateRequest(BaseModel):
     resource_id: str
     positions: WatermarkPosition
     is_for_all: bool = False
+
+class AdminBatchWatermarkTemplateRequest(BaseModel):
+    resource_id: str
+    template: Dict[str, Any]
+
+class AdminBatchWatermarkGenerateRequest(BaseModel):
+    school_ids: List[str]
+    resource_ids: List[str]
+    templates: Dict[str, Dict[str, Any]] = {}
+
+class AdminBatchWatermarkDownloadRequest(BaseModel):
+    job_id: str
+    school_ids: List[str] = []
+
+class AdminBatchWatermarkEmailItem(BaseModel):
+    school_id: str
+    subject: str
+    message: str
+
+class AdminBatchWatermarkEmailRequest(BaseModel):
+    job_id: str
+    emails: List[AdminBatchWatermarkEmailItem]
 
 
 # Helper functions
@@ -774,6 +806,408 @@ def create_preview_image(resource: Resource, school: School, positions: Watermar
         img_bytes.seek(0)
         
         return img_bytes.getvalue()
+
+def get_batch_watermark_default_template() -> Dict[str, Any]:
+    return {
+        "show_logo": True,
+        "logo_x": 50,
+        "logo_y": 10,
+        "logo_width": 20,
+        "logo_opacity": 0.7,
+        "logo_rotation": 0,
+        "name_x": 50,
+        "name_y": 25,
+        "name_size": 20,
+        "name_opacity": 0.8,
+        "name_rotation": 0,
+        "name_font": "Arial",
+        "name_style": "normal",
+        "name_color": "#000000",
+        "show_name": True,
+        "contact_x": 50,
+        "contact_y": 90,
+        "contact_size": 12,
+        "contact_opacity": 0.7,
+        "contact_rotation": 0,
+        "contact_font": "Arial",
+        "contact_style": "normal",
+        "contact_color": "#000000",
+        "show_contact": True,
+        "address_x": 50,
+        "address_y": 85,
+        "address_size": 10,
+        "address_opacity": 1.0,
+        "address_rotation": 0,
+        "address_font": "Arial",
+        "address_style": "normal",
+        "address_color": "#000000",
+        "show_address": False,
+        "address": ""
+    }
+
+def normalize_batch_watermark_template(raw_template: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    template = get_batch_watermark_default_template()
+    raw_template = raw_template or {}
+
+    template["show_logo"] = parse_bool(raw_template.get("show_logo"), template["show_logo"])
+    template["logo_x"] = int(round(clamp(raw_template.get("logo_x", template["logo_x"]), 0, 100)))
+    template["logo_y"] = int(round(clamp(raw_template.get("logo_y", template["logo_y"]), 0, 100)))
+    template["logo_width"] = int(round(clamp(raw_template.get("logo_width", template["logo_width"]), 5, 50)))
+    template["logo_opacity"] = round(clamp(raw_template.get("logo_opacity", template["logo_opacity"]), 0.1, 1.0), 2)
+    template["logo_rotation"] = normalize_rotation(raw_template.get("logo_rotation", template["logo_rotation"]))
+
+    template["name_x"] = int(round(clamp(raw_template.get("name_x", template["name_x"]), 0, 100)))
+    template["name_y"] = int(round(clamp(raw_template.get("name_y", template["name_y"]), 0, 100)))
+    template["name_size"] = int(round(clamp(raw_template.get("name_size", template["name_size"]), 8, 48)))
+    template["name_opacity"] = round(clamp(raw_template.get("name_opacity", template["name_opacity"]), 0.1, 1.0), 2)
+    template["name_rotation"] = normalize_rotation(raw_template.get("name_rotation", template["name_rotation"]))
+    template["name_font"] = (raw_template.get("name_font") or template["name_font"]).strip() or template["name_font"]
+    template["name_style"] = (raw_template.get("name_style") or template["name_style"]).strip() or template["name_style"]
+    template["name_color"] = normalize_hex_color(raw_template.get("name_color", template["name_color"]), default=template["name_color"])
+    template["show_name"] = parse_bool(raw_template.get("show_name"), template["show_name"])
+
+    template["contact_x"] = int(round(clamp(raw_template.get("contact_x", template["contact_x"]), 0, 100)))
+    template["contact_y"] = int(round(clamp(raw_template.get("contact_y", template["contact_y"]), 0, 100)))
+    template["contact_size"] = int(round(clamp(raw_template.get("contact_size", template["contact_size"]), 8, 24)))
+    template["contact_opacity"] = round(clamp(raw_template.get("contact_opacity", template["contact_opacity"]), 0.1, 1.0), 2)
+    template["contact_rotation"] = normalize_rotation(raw_template.get("contact_rotation", template["contact_rotation"]))
+    template["contact_font"] = (raw_template.get("contact_font") or template["contact_font"]).strip() or template["contact_font"]
+    template["contact_style"] = (raw_template.get("contact_style") or template["contact_style"]).strip() or template["contact_style"]
+    template["contact_color"] = normalize_hex_color(raw_template.get("contact_color", template["contact_color"]), default=template["contact_color"])
+    template["show_contact"] = parse_bool(raw_template.get("show_contact"), template["show_contact"])
+
+    template["address_x"] = int(round(clamp(raw_template.get("address_x", template["address_x"]), 0, 100)))
+    template["address_y"] = int(round(clamp(raw_template.get("address_y", template["address_y"]), 0, 100)))
+    template["address_size"] = int(round(clamp(raw_template.get("address_size", template["address_size"]), 6, 24)))
+    template["address_opacity"] = round(clamp(raw_template.get("address_opacity", template["address_opacity"]), 0.1, 1.0), 2)
+    template["address_rotation"] = normalize_rotation(raw_template.get("address_rotation", template["address_rotation"]))
+    template["address_font"] = (raw_template.get("address_font") or template["address_font"]).strip() or template["address_font"]
+    template["address_style"] = (raw_template.get("address_style") or template["address_style"]).strip() or template["address_style"]
+    template["address_color"] = normalize_hex_color(raw_template.get("address_color", template["address_color"]), default=template["address_color"])
+    template["show_address"] = parse_bool(raw_template.get("show_address"), template["show_address"])
+    template["address"] = (raw_template.get("address") or "").strip()
+
+    return template
+
+def admin_batch_template_to_dict(template: Optional[AdminBatchWatermarkTemplate]) -> Dict[str, Any]:
+    if not template:
+        return get_batch_watermark_default_template()
+
+    return normalize_batch_watermark_template({
+        "show_logo": template.show_logo,
+        "logo_x": template.logo_x,
+        "logo_y": template.logo_y,
+        "logo_width": template.logo_width,
+        "logo_opacity": template.logo_opacity,
+        "logo_rotation": template.logo_rotation,
+        "name_x": template.name_x,
+        "name_y": template.name_y,
+        "name_size": template.name_size,
+        "name_opacity": template.name_opacity,
+        "name_rotation": template.name_rotation,
+        "name_font": template.name_font,
+        "name_style": template.name_style,
+        "name_color": template.name_color,
+        "show_name": template.show_name,
+        "contact_x": template.contact_x,
+        "contact_y": template.contact_y,
+        "contact_size": template.contact_size,
+        "contact_opacity": template.contact_opacity,
+        "contact_rotation": template.contact_rotation,
+        "contact_font": template.contact_font,
+        "contact_style": template.contact_style,
+        "contact_color": template.contact_color,
+        "show_contact": template.show_contact,
+        "address_x": template.address_x,
+        "address_y": template.address_y,
+        "address_size": template.address_size,
+        "address_opacity": template.address_opacity,
+        "address_rotation": template.address_rotation,
+        "address_font": template.address_font,
+        "address_style": template.address_style,
+        "address_color": template.address_color,
+        "show_address": template.show_address,
+        "address": template.address or ""
+    })
+
+def upsert_admin_batch_template(
+    db: Session,
+    admin_email: str,
+    resource_id: str,
+    template_data: Dict[str, Any]
+) -> AdminBatchWatermarkTemplate:
+    normalized = normalize_batch_watermark_template(template_data)
+
+    record = db.query(AdminBatchWatermarkTemplate).filter(
+        AdminBatchWatermarkTemplate.admin_email == admin_email,
+        AdminBatchWatermarkTemplate.resource_id == resource_id
+    ).first()
+
+    if not record:
+        record = AdminBatchWatermarkTemplate(
+            admin_email=admin_email,
+            resource_id=resource_id
+        )
+        db.add(record)
+
+    record.show_logo = normalized["show_logo"]
+    record.logo_x = normalized["logo_x"]
+    record.logo_y = normalized["logo_y"]
+    record.logo_width = normalized["logo_width"]
+    record.logo_opacity = normalized["logo_opacity"]
+    record.logo_rotation = normalized["logo_rotation"]
+    record.name_x = normalized["name_x"]
+    record.name_y = normalized["name_y"]
+    record.name_size = normalized["name_size"]
+    record.name_opacity = normalized["name_opacity"]
+    record.name_rotation = normalized["name_rotation"]
+    record.name_font = normalized["name_font"]
+    record.name_style = normalized["name_style"]
+    record.name_color = normalized["name_color"]
+    record.show_name = normalized["show_name"]
+    record.contact_x = normalized["contact_x"]
+    record.contact_y = normalized["contact_y"]
+    record.contact_size = normalized["contact_size"]
+    record.contact_opacity = normalized["contact_opacity"]
+    record.contact_rotation = normalized["contact_rotation"]
+    record.contact_font = normalized["contact_font"]
+    record.contact_style = normalized["contact_style"]
+    record.contact_color = normalized["contact_color"]
+    record.show_contact = normalized["show_contact"]
+    record.address_x = normalized["address_x"]
+    record.address_y = normalized["address_y"]
+    record.address_size = normalized["address_size"]
+    record.address_opacity = normalized["address_opacity"]
+    record.address_rotation = normalized["address_rotation"]
+    record.address_font = normalized["address_font"]
+    record.address_style = normalized["address_style"]
+    record.address_color = normalized["address_color"]
+    record.show_address = normalized["show_address"]
+    record.address = normalized["address"]
+    record.updated_at = datetime.utcnow()
+
+    return record
+
+def batch_template_to_watermark_position(template: Dict[str, Any]) -> WatermarkPosition:
+    template = normalize_batch_watermark_template(template)
+    return WatermarkPosition(
+        logo_x=template["logo_x"],
+        logo_y=template["logo_y"],
+        logo_width=template["logo_width"],
+        logo_opacity=template["logo_opacity"],
+        logo_rotation=template["logo_rotation"],
+        school_name_x=template["name_x"],
+        school_name_y=template["name_y"],
+        school_name_size=template["name_size"],
+        school_name_opacity=template["name_opacity"],
+        contact_x=template["contact_x"],
+        contact_y=template["contact_y"],
+        contact_size=template["contact_size"],
+        contact_opacity=template["contact_opacity"]
+    )
+
+def batch_template_to_text_position(template: Dict[str, Any]) -> Dict[str, Any]:
+    template = normalize_batch_watermark_template(template)
+    return {
+        "name_x": template["name_x"],
+        "name_y": template["name_y"],
+        "name_size": template["name_size"],
+        "name_opacity": template["name_opacity"],
+        "name_rotation": template["name_rotation"],
+        "name_font": template["name_font"],
+        "name_style": template["name_style"],
+        "name_color": template["name_color"],
+        "show_name": template["show_name"],
+        "contact_x": template["contact_x"],
+        "contact_y": template["contact_y"],
+        "contact_size": template["contact_size"],
+        "contact_opacity": template["contact_opacity"],
+        "contact_rotation": template["contact_rotation"],
+        "contact_font": template["contact_font"],
+        "contact_style": template["contact_style"],
+        "contact_color": template["contact_color"],
+        "show_contact": template["show_contact"],
+        "address_x": template["address_x"],
+        "address_y": template["address_y"],
+        "address_size": template["address_size"],
+        "address_opacity": template["address_opacity"],
+        "address_rotation": template["address_rotation"],
+        "address_font": template["address_font"],
+        "address_style": template["address_style"],
+        "address_color": template["address_color"],
+        "show_address": template["show_address"],
+        "address": template["address"]
+    }
+
+def is_supported_batch_watermark_resource(resource: Resource) -> bool:
+    file_type = (resource.file_type or "").lower()
+    file_path = (resource.file_path or "").lower()
+    category = (resource.category or "").lower()
+
+    if category == "multimedia":
+        return False
+
+    if resource.is_video_link:
+        return False
+
+    if "audio" in file_type or "video" in file_type:
+        return False
+
+    is_pdf = ("pdf" in file_type) or file_path.endswith(".pdf")
+    is_raster_image = any(file_path.endswith(ext) for ext in (".jpg", ".jpeg", ".png", ".gif", ".bmp", ".tiff", ".webp"))
+    if not is_raster_image and "image" in file_type:
+        is_raster_image = not file_path.endswith(".svg")
+
+    return is_pdf or is_raster_image
+
+def sanitize_batch_name(value: str, fallback: str) -> str:
+    cleaned = re.sub(r'[<>:"/\\\\|?*]+', "_", (value or "").strip())
+    cleaned = re.sub(r"\s+", " ", cleaned).strip(" .")
+    return cleaned or fallback
+
+def get_batch_resource_extension(resource: Resource, source_path: str) -> str:
+    extension = os.path.splitext(source_path)[1].lower()
+    if extension:
+        return extension
+
+    file_type = (resource.file_type or "").lower()
+    if "pdf" in file_type:
+        return ".pdf"
+    if "png" in file_type:
+        return ".png"
+    if "jpeg" in file_type or "jpg" in file_type:
+        return ".jpg"
+    if "gif" in file_type:
+        return ".gif"
+    if "bmp" in file_type:
+        return ".bmp"
+    if "tiff" in file_type:
+        return ".tiff"
+    if "webp" in file_type:
+        return ".webp"
+    return ".bin"
+
+def get_batch_job_path(job_id: str) -> Path:
+    safe_job_id = re.sub(r"[^a-zA-Z0-9_-]", "", job_id or "")
+    if not safe_job_id:
+        raise HTTPException(status_code=400, detail="Invalid job id")
+    return (BATCH_WATERMARK_OUTPUT_DIR / safe_job_id).resolve()
+
+def ensure_batch_job_within_root(job_path: Path) -> Path:
+    root_path = BATCH_WATERMARK_OUTPUT_DIR.resolve()
+    if root_path not in job_path.parents and job_path != root_path:
+        raise HTTPException(status_code=400, detail="Invalid job path")
+    return job_path
+
+def cleanup_batch_job_directory(job_path: Path):
+    if job_path.exists():
+        shutil.rmtree(job_path, ignore_errors=True)
+
+def build_school_folder_name(existing_names: set, school: School) -> str:
+    base_name = sanitize_batch_name(school.school_name, school.school_id)
+    folder_name = base_name
+    if folder_name in existing_names:
+        folder_name = sanitize_batch_name(f"{school.school_name}_{school.school_id}", school.school_id)
+    existing_names.add(folder_name)
+    return folder_name
+
+def generate_batch_watermarked_output(
+    resource: Resource,
+    school: School,
+    template: Dict[str, Any],
+    output_path: Path
+) -> str:
+    source_path = get_full_file_path(resource.file_path)
+    normalized_template = normalize_batch_watermark_template(template)
+    watermark_position = batch_template_to_watermark_position(normalized_template)
+    text_position = batch_template_to_text_position(normalized_template)
+    school_info = {
+        "school_name": school.school_name,
+        "email": school.email,
+        "contact_number": school.contact_number
+    }
+
+    file_type = (resource.file_type or "").lower()
+    is_pdf = ("pdf" in file_type) or source_path.lower().endswith(".pdf")
+    logo_path = get_school_logo_path(school) if normalized_template["show_logo"] else None
+
+    if is_pdf:
+        return add_logo_and_text_to_pdf(
+            source_path,
+            logo_path,
+            watermark_position,
+            school_info,
+            text_position,
+            str(output_path)
+        )
+
+    return add_logo_and_text_to_image(
+        source_path,
+        logo_path,
+        watermark_position,
+        resource.file_type,
+        school_info,
+        text_position,
+        str(output_path)
+    )
+
+def write_batch_job_manifest(job_path: Path, payload: Dict[str, Any]):
+    manifest_path = job_path / "manifest.json"
+    with open(manifest_path, "w", encoding="utf-8") as manifest_file:
+        json.dump(payload, manifest_file, ensure_ascii=True, indent=2)
+
+def read_batch_job_manifest(job_path: Path) -> Dict[str, Any]:
+    manifest_path = job_path / "manifest.json"
+    if not manifest_path.exists():
+        raise HTTPException(status_code=404, detail="Generated batch watermark bundle not found")
+    with open(manifest_path, "r", encoding="utf-8") as manifest_file:
+        return json.load(manifest_file)
+
+def get_batch_email_settings() -> Dict[str, Any]:
+    load_dotenv(ROOT_DIR / '.env', override=True)
+    load_dotenv(ROOT_DIR.parent / '.env', override=True)
+    host = os.environ.get("EMAIL_HOST")
+    port = int(os.environ.get("EMAIL_PORT", "587"))
+    username = os.environ.get("EMAIL_USER")
+    password = os.environ.get("EMAIL_PASSWORD")
+    from_email = os.environ.get("DEFAULT_FROM_EMAIL") or username
+    from_name = os.environ.get("DEFAULT_FROM_NAME", "").strip()
+    use_tls = parse_bool(os.environ.get("EMAIL_USE_TLS"), True)
+    use_ssl = parse_bool(os.environ.get("EMAIL_USE_SSL"), False)
+
+    if not host or not username or not password or not from_email:
+        raise HTTPException(
+            status_code=400,
+            detail="Email automation is not configured. Please set EMAIL_HOST, EMAIL_PORT, EMAIL_USER, EMAIL_PASSWORD, and DEFAULT_FROM_EMAIL."
+        )
+
+    return {
+        "host": host,
+        "port": port,
+        "username": username,
+        "password": password,
+        "from_email": from_email,
+        "from_name": from_name,
+        "use_tls": use_tls,
+        "use_ssl": use_ssl
+    }
+
+def build_school_batch_zip_bytes(job_path: Path, folder_entry: Dict[str, Any]) -> tuple[bytes, str]:
+    folder_path = ensure_batch_job_within_root((job_path / folder_entry["folder_name"]).resolve())
+    if not folder_path.exists():
+        raise HTTPException(status_code=404, detail=f"Generated folder missing for school: {folder_entry['school_name']}")
+
+    zip_filename = f"{sanitize_batch_name(folder_entry['folder_name'], folder_entry['school_id'])}.zip"
+    zip_buffer = io.BytesIO()
+
+    with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
+        for file_path in folder_path.rglob("*"):
+            if file_path.is_file():
+                archive_name = str(Path(folder_entry["folder_name"]) / file_path.relative_to(folder_path))
+                zip_file.write(file_path, arcname=archive_name)
+
+    zip_buffer.seek(0)
+    return zip_buffer.getvalue(), zip_filename
 
 # ==================== BATCH WATERMARK ROUTES ====================
 
@@ -1302,6 +1736,397 @@ async def download_watermarked_resource(
     except Exception as e:
         print(f"Error downloading watermarked resource: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+@api_router.get("/admin/batch-watermark/template/{resource_id}")
+async def get_admin_batch_watermark_template(
+    resource_id: str,
+    current_admin: dict = Depends(get_current_admin),
+    db: Session = Depends(get_db)
+):
+    resource = db.query(Resource).filter(Resource.resource_id == resource_id).first()
+    if not resource:
+        raise HTTPException(status_code=404, detail="Resource not found")
+    if not is_supported_batch_watermark_resource(resource):
+        raise HTTPException(status_code=400, detail="Only PDF and image resources are supported in batch watermark")
+
+    record = db.query(AdminBatchWatermarkTemplate).filter(
+        AdminBatchWatermarkTemplate.admin_email == current_admin.get("sub"),
+        AdminBatchWatermarkTemplate.resource_id == resource_id
+    ).first()
+
+    return {
+        "resource_id": resource_id,
+        "template": admin_batch_template_to_dict(record),
+        "is_default": record is None,
+        "updated_at": record.updated_at.isoformat() if record and record.updated_at else None
+    }
+
+@api_router.post("/admin/batch-watermark/template")
+async def save_admin_batch_watermark_template(
+    request: AdminBatchWatermarkTemplateRequest,
+    current_admin: dict = Depends(get_current_admin),
+    db: Session = Depends(get_db)
+):
+    resource = db.query(Resource).filter(Resource.resource_id == request.resource_id).first()
+    if not resource:
+        raise HTTPException(status_code=404, detail="Resource not found")
+    if not is_supported_batch_watermark_resource(resource):
+        raise HTTPException(status_code=400, detail="Only PDF and image resources are supported in batch watermark")
+
+    try:
+        record = upsert_admin_batch_template(
+            db,
+            current_admin.get("sub"),
+            request.resource_id,
+            request.template
+        )
+        db.commit()
+
+        return {
+            "message": "Batch watermark layout saved successfully",
+            "resource_id": request.resource_id,
+            "template": admin_batch_template_to_dict(record),
+            "updated_at": record.updated_at.isoformat() if record.updated_at else None
+        }
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception as e:
+        db.rollback()
+        print(f"Error saving admin batch template: {e}")
+        raise HTTPException(status_code=500, detail="Failed to save batch watermark layout")
+
+@api_router.post("/admin/batch-watermark/generate")
+async def generate_admin_batch_watermark_bundle(
+    request: AdminBatchWatermarkGenerateRequest,
+    current_admin: dict = Depends(get_current_admin),
+    db: Session = Depends(get_db)
+):
+    school_ids = [school_id for school_id in request.school_ids if school_id]
+    resource_ids = [resource_id for resource_id in request.resource_ids if resource_id]
+
+    if not school_ids:
+        raise HTTPException(status_code=400, detail="Select at least one school")
+    if not resource_ids:
+        raise HTTPException(status_code=400, detail="Select at least one resource")
+
+    school_rows = db.query(School).filter(School.school_id.in_(school_ids)).all()
+    resource_rows = db.query(Resource).filter(Resource.resource_id.in_(resource_ids)).all()
+
+    school_map = {school.school_id: school for school in school_rows}
+    resource_map = {resource.resource_id: resource for resource in resource_rows}
+
+    missing_school_ids = [school_id for school_id in school_ids if school_id not in school_map]
+    if missing_school_ids:
+        raise HTTPException(status_code=404, detail=f"School not found: {', '.join(missing_school_ids)}")
+
+    missing_resource_ids = [resource_id for resource_id in resource_ids if resource_id not in resource_map]
+    if missing_resource_ids:
+        raise HTTPException(status_code=404, detail=f"Resource not found: {', '.join(missing_resource_ids)}")
+
+    ordered_schools = [school_map[school_id] for school_id in school_ids]
+    ordered_resources = [resource_map[resource_id] for resource_id in resource_ids]
+
+    unsupported_resources = [resource.name for resource in ordered_resources if not is_supported_batch_watermark_resource(resource)]
+    if unsupported_resources:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Batch watermark supports only PDF and image resources. Unsupported selection: {', '.join(unsupported_resources)}"
+        )
+
+    try:
+        # Persist the latest layouts so the admin can continue where they left off.
+        for resource in ordered_resources:
+            upsert_admin_batch_template(
+                db,
+                current_admin.get("sub"),
+                resource.resource_id,
+                request.templates.get(resource.resource_id, get_batch_watermark_default_template())
+            )
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        print(f"Error saving layouts before generation: {e}")
+        raise HTTPException(status_code=500, detail="Failed to save batch watermark layouts before generation")
+
+    job_id = f"batch_{datetime.utcnow().strftime('%Y%m%d%H%M%S')}_{uuid.uuid4().hex[:8]}"
+    job_path = ensure_batch_job_within_root(get_batch_job_path(job_id))
+    cleanup_batch_job_directory(job_path)
+    job_path.mkdir(parents=True, exist_ok=True)
+
+    manifest = {
+        "job_id": job_id,
+        "generated_by": current_admin.get("sub"),
+        "created_at": datetime.utcnow().isoformat(),
+        "school_ids": school_ids,
+        "resource_ids": resource_ids,
+        "folders": []
+    }
+
+    folder_names = set()
+
+    try:
+        for school in ordered_schools:
+            folder_name = build_school_folder_name(folder_names, school)
+            school_dir = job_path / folder_name
+            school_dir.mkdir(parents=True, exist_ok=True)
+            generated_files = []
+            used_output_names = set()
+
+            for resource in ordered_resources:
+                source_path = get_full_file_path(resource.file_path)
+                resource_ext = get_batch_resource_extension(resource, source_path)
+                resource_label = sanitize_batch_name(
+                    Path(resource.name).stem if Path(resource.name).suffix else resource.name,
+                    resource.resource_id
+                )
+                output_name = f"{resource_label}{resource_ext}"
+                if output_name in used_output_names:
+                    output_name = f"{resource_label}_{resource.resource_id[:8]}{resource_ext}"
+                used_output_names.add(output_name)
+
+                output_path = school_dir / output_name
+                result_path = generate_batch_watermarked_output(
+                    resource,
+                    school,
+                    request.templates.get(resource.resource_id, get_batch_watermark_default_template()),
+                    output_path
+                )
+
+                if not result_path or not os.path.exists(result_path):
+                    raise RuntimeError(
+                        f"Failed to generate watermarked file for school '{school.school_name}' and resource '{resource.name}'"
+                    )
+
+                generated_files.append({
+                    "resource_id": resource.resource_id,
+                    "resource_name": resource.name,
+                    "file_name": output_name
+                })
+
+            manifest["folders"].append({
+                "school_id": school.school_id,
+                "school_name": school.school_name,
+                "folder_name": folder_name,
+                "file_count": len(generated_files),
+                "files": generated_files
+            })
+
+        write_batch_job_manifest(job_path, manifest)
+
+        return {
+            "message": "Batch watermark folders generated successfully",
+            "job_id": job_id,
+            "created_at": manifest["created_at"],
+            "folder_count": len(manifest["folders"]),
+            "resource_count": len(resource_ids),
+            "folders": [
+                {
+                    "school_id": folder["school_id"],
+                    "school_name": folder["school_name"],
+                    "folder_name": folder["folder_name"],
+                    "file_count": folder["file_count"]
+                }
+                for folder in manifest["folders"]
+            ]
+        }
+    except HTTPException:
+        cleanup_batch_job_directory(job_path)
+        raise
+    except Exception as e:
+        cleanup_batch_job_directory(job_path)
+        print(f"Error generating admin batch watermark bundle: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+@api_router.post("/admin/batch-watermark/download")
+async def download_admin_batch_watermark_bundle(
+    request: AdminBatchWatermarkDownloadRequest,
+    current_admin: dict = Depends(get_current_admin)
+):
+    job_path = ensure_batch_job_within_root(get_batch_job_path(request.job_id))
+    if not job_path.exists():
+        raise HTTPException(status_code=404, detail="Generated batch watermark bundle not found")
+
+    manifest = read_batch_job_manifest(job_path)
+    if manifest.get("generated_by") != current_admin.get("sub"):
+        raise HTTPException(status_code=403, detail="You do not have access to this generated bundle")
+
+    folder_map = {
+        folder["school_id"]: folder
+        for folder in manifest.get("folders", [])
+    }
+
+    selected_school_ids = request.school_ids or list(folder_map.keys())
+    missing_folders = [school_id for school_id in selected_school_ids if school_id not in folder_map]
+    if missing_folders:
+        raise HTTPException(status_code=404, detail=f"Folder not found for school: {', '.join(missing_folders)}")
+
+    zip_base_name = (
+        folder_map[selected_school_ids[0]]["folder_name"]
+        if len(selected_school_ids) == 1
+        else f"batch_watermark_{request.job_id}"
+    )
+    zip_filename = f"{sanitize_batch_name(zip_base_name, 'batch_watermark')}.zip"
+    zip_path = job_path / zip_filename
+
+    try:
+        if zip_path.exists():
+            zip_path.unlink()
+
+        with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zip_file:
+            for school_id in selected_school_ids:
+                folder_entry = folder_map[school_id]
+                folder_path = ensure_batch_job_within_root((job_path / folder_entry["folder_name"]).resolve())
+                if not folder_path.exists():
+                    raise HTTPException(status_code=404, detail=f"Generated folder missing for school: {folder_entry['school_name']}")
+
+                for file_path in folder_path.rglob("*"):
+                    if file_path.is_file():
+                        archive_name = str(Path(folder_entry["folder_name"]) / file_path.relative_to(folder_path))
+                        zip_file.write(file_path, arcname=archive_name)
+
+        return FileResponse(
+            path=str(zip_path),
+            filename=zip_filename,
+            media_type="application/zip",
+            headers={"Access-Control-Expose-Headers": "Content-Disposition"}
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error creating batch watermark zip: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail="Failed to create ZIP download")
+
+@api_router.post("/admin/batch-watermark/send-emails")
+async def send_admin_batch_watermark_emails(
+    request: AdminBatchWatermarkEmailRequest,
+    current_admin: dict = Depends(get_current_admin),
+    db: Session = Depends(get_db)
+):
+    if not request.emails:
+        raise HTTPException(status_code=400, detail="No email drafts provided")
+
+    job_path = ensure_batch_job_within_root(get_batch_job_path(request.job_id))
+    if not job_path.exists():
+        raise HTTPException(status_code=404, detail="Generated batch watermark bundle not found")
+
+    manifest = read_batch_job_manifest(job_path)
+    if manifest.get("generated_by") != current_admin.get("sub"):
+        raise HTTPException(status_code=403, detail="You do not have access to this generated bundle")
+
+    email_settings = get_batch_email_settings()
+    folder_map = {
+        folder["school_id"]: folder
+        for folder in manifest.get("folders", [])
+    }
+
+    requested_school_ids = [item.school_id for item in request.emails]
+    missing_folders = [school_id for school_id in requested_school_ids if school_id not in folder_map]
+    if missing_folders:
+        raise HTTPException(status_code=404, detail=f"Folder not found for school: {', '.join(missing_folders)}")
+
+    try:
+        school_rows = db.query(School).filter(School.school_id.in_(requested_school_ids)).all()
+    except Exception as e:
+        print(f"Error loading schools for email sending: {e}")
+        raise HTTPException(status_code=500, detail="Failed to load school email details")
+
+    school_map = {school.school_id: school for school in school_rows}
+    missing_schools = [school_id for school_id in requested_school_ids if school_id not in school_map]
+    if missing_schools:
+        raise HTTPException(status_code=404, detail=f"School not found: {', '.join(missing_schools)}")
+
+    results = []
+    smtp_client = None
+
+    try:
+        if email_settings["use_ssl"]:
+            smtp_client = smtplib.SMTP_SSL(email_settings["host"], email_settings["port"], timeout=60)
+        else:
+            smtp_client = smtplib.SMTP(email_settings["host"], email_settings["port"], timeout=60)
+            smtp_client.ehlo()
+            if email_settings["use_tls"]:
+                smtp_client.starttls()
+                smtp_client.ehlo()
+
+        smtp_client.login(email_settings["username"], email_settings["password"])
+
+        for email_item in request.emails:
+            school = school_map[email_item.school_id]
+            folder_entry = folder_map[email_item.school_id]
+
+            if not school.email:
+                results.append({
+                    "school_id": school.school_id,
+                    "school_name": school.school_name,
+                    "email": "",
+                    "status": "failed",
+                    "message": "School does not have an email address"
+                })
+                continue
+
+            try:
+                zip_bytes, zip_filename = build_school_batch_zip_bytes(job_path, folder_entry)
+
+                email_message = EmailMessage()
+                email_message["Subject"] = email_item.subject
+                email_message["From"] = (
+                    formataddr((email_settings["from_name"], email_settings["from_email"]))
+                    if email_settings["from_name"]
+                    else email_settings["from_email"]
+                )
+                email_message["To"] = school.email
+                email_message["Reply-To"] = email_settings["from_email"]
+                email_message.set_content(email_item.message)
+                email_message.add_attachment(
+                    zip_bytes,
+                    maintype="application",
+                    subtype="zip",
+                    filename=zip_filename
+                )
+
+                smtp_client.send_message(email_message)
+                results.append({
+                    "school_id": school.school_id,
+                    "school_name": school.school_name,
+                    "email": school.email,
+                    "status": "sent",
+                    "message": f"Email sent successfully with attachment {zip_filename}"
+                })
+            except Exception as send_error:
+                print(f"Error sending batch watermark email to {school.school_name}: {send_error}")
+                results.append({
+                    "school_id": school.school_id,
+                    "school_name": school.school_name,
+                    "email": school.email,
+                    "status": "failed",
+                    "message": str(send_error)
+                })
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error preparing email automation: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to send emails: {str(e)}")
+    finally:
+        if smtp_client:
+            try:
+                smtp_client.quit()
+            except Exception:
+                pass
+
+    sent_count = len([item for item in results if item["status"] == "sent"])
+    failed_count = len(results) - sent_count
+
+    return {
+        "message": f"Email automation completed. Sent: {sent_count}, Failed: {failed_count}",
+        "sent_count": sent_count,
+        "failed_count": failed_count,
+        "results": results
+    }
 
 # Authentication Routes
 @api_router.post("/admin/login", response_model=LoginResponse)

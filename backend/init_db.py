@@ -20,6 +20,7 @@ warnings.filterwarnings("ignore", message=".*bcrypt.*")
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
+load_dotenv(ROOT_DIR.parent / '.env')
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 

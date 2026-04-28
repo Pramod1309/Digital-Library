@@ -112,6 +112,7 @@ Thumbs.db
 # Upload directories
 /backend/uploads/
 /uploads/
+/backend/generated/
 
 # Python cache and build files
 __pycache__/
