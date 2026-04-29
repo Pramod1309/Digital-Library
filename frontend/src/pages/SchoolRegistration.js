@@ -134,12 +134,15 @@ const SchoolRegistration = () => {
   return (
     <div className="registration-container">
       <div className="registration-card">
-        <div className="registration-header">
+        <div className="logo-container">
           <img 
             src="/wonder-learning-logo.png" 
             alt="Wonder Learning India Digital Library" 
             className="registration-logo"
           />
+        </div>
+        
+        <div className="registration-header">
           <h1>School Registration</h1>
           <p>Register your school to access the Wonder Learning Digital Library</p>
         </div>

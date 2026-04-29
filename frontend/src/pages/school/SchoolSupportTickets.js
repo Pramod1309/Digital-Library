@@ -1,8 +1,14 @@
 import React, { useState, useEffect } from 'react';
-import { Card, Table, Button, Modal, Form, Input, Select, Tag, message, Upload, Space, Image, Typography } from 'antd';
+import { Card, Table, Button, Modal, Form, Input, Select, Tag, message, Upload, Space, Typography } from 'antd';
 import { PlusOutlined, FileTextOutlined, FileOutlined, EyeOutlined, UploadOutlined } from '@ant-design/icons';
 import { useSearchParams } from 'react-router-dom';
 import api from '../../api/axiosConfig';
+import AttachmentPreviewModal from '../../components/shared/AttachmentPreviewModal';
+import {
+  getAttachmentName,
+  normalizeUploadFiles,
+  revokeUploadPreviews
+} from '../../utils/attachments';
 
 const { TextArea } = Input;
 const { Option } = Select;
@@ -40,7 +46,7 @@ const SchoolSupportTickets = ({ user }) => {
   };
 
   const handleFileChange = ({ fileList }) => {
-    setUploadedFiles(fileList);
+    setUploadedFiles((previousFiles) => normalizeUploadFiles(fileList, previousFiles));
   };
 
   const beforeUpload = (file) => {
@@ -58,6 +64,13 @@ const SchoolSupportTickets = ({ user }) => {
     setPreviewVisible(true);
   };
 
+  const handleCloseModal = () => {
+    setIsModalVisible(false);
+    form.resetFields();
+    revokeUploadPreviews(uploadedFiles);
+    setUploadedFiles([]);
+  };
+
   const handleSubmit = async (values) => {
     try {
       const formData = new FormData();
@@ -69,8 +82,10 @@ const SchoolSupportTickets = ({ user }) => {
       formData.append('priority', values.priority);
       
       // Append uploaded files
-      uploadedFiles.forEach((file, index) => {
-        formData.append(`files[${index}]`, file.originFileObj);
+      uploadedFiles.forEach((file) => {
+        if (file.originFileObj) {
+          formData.append('files', file.originFileObj);
+        }
       });
 
       await api.post(`/school/support/tickets`, formData, {
@@ -80,9 +95,7 @@ const SchoolSupportTickets = ({ user }) => {
       });
 
       message.success('Support ticket created successfully');
-      setIsModalVisible(false);
-      form.resetFields();
-      setUploadedFiles([]);
+      handleCloseModal();
       fetchTickets();
     } catch (error) {
       console.error('Error creating ticket:', error);
@@ -150,6 +163,32 @@ const SchoolSupportTickets = ({ user }) => {
       key: 'admin_response',
       render: (response) => response || <span style={{ color: '#999' }}>Pending</span>
     },
+    {
+      title: 'Attachments',
+      dataIndex: 'attachments',
+      key: 'attachments',
+      render: (attachments) => {
+        if (!attachments?.length) {
+          return <span style={{ color: '#999' }}>No files</span>;
+        }
+
+        return (
+          <Space direction="vertical" size="small">
+            {attachments.map((file) => (
+              <Button
+                key={file.id}
+                type="link"
+                icon={<EyeOutlined />}
+                onClick={() => handlePreview(file)}
+                style={{ padding: 0, height: 'auto' }}
+              >
+                {getAttachmentName(file)}
+              </Button>
+            ))}
+          </Space>
+        );
+      }
+    },
   ];
 
   return (
@@ -183,7 +222,7 @@ const SchoolSupportTickets = ({ user }) => {
       <Modal
         title="Create Support Ticket"
         open={isModalVisible}
-        onCancel={() => setIsModalVisible(false)}
+        onCancel={handleCloseModal}
         footer={null}
       >
         <Form
@@ -237,6 +276,7 @@ const SchoolSupportTickets = ({ user }) => {
               multiple
               fileList={uploadedFiles}
               onChange={handleFileChange}
+              onPreview={handlePreview}
               beforeUpload={beforeUpload}
               accept="image/*,.pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.txt,.mp4,.mp3,.avi,.mov"
             >
@@ -257,47 +297,11 @@ const SchoolSupportTickets = ({ user }) => {
         </Form>
       </Modal>
 
-      <Modal
-        title="File Preview"
+      <AttachmentPreviewModal
         open={previewVisible}
-        onCancel={() => setPreviewVisible(false)}
-        footer={null}
-        width={800}
-      >
-        {previewFile && (
-          <div>
-            {previewFile.type?.startsWith('image/') ? (
-              <Image 
-                src={previewFile.url || URL.createObjectURL(previewFile.originFileObj)} 
-                alt={previewFile.name}
-                style={{ width: '100%' }}
-              />
-            ) : previewFile.type?.includes('pdf') ? (
-              <iframe
-                src={previewFile.url || URL.createObjectURL(previewFile.originFileObj)}
-                style={{ width: '100%', height: '500px' }}
-                title={previewFile.name}
-              />
-            ) : (
-              <div style={{ textAlign: 'center', padding: '40px' }}>
-                <FileOutlined style={{ fontSize: '48px', marginBottom: '16px' }} />
-                <div>
-                  <Text strong>{previewFile.name}</Text>
-                  <br />
-                  <Button 
-                    type="primary" 
-                    href={previewFile.url}
-                    target="_blank"
-                    style={{ marginTop: '16px' }}
-                  >
-                    Download File
-                  </Button>
-                </div>
-              </div>
-            )}
-          </div>
-        )}
-      </Modal>
+        file={previewFile}
+        onClose={() => setPreviewVisible(false)}
+      />
     </div>
   );
 };

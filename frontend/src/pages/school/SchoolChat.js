@@ -1,8 +1,17 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Card, Input, Button, List, Avatar, message, Spin, Upload, Dropdown, Menu, Tooltip } from 'antd';
-import { SendOutlined, UserOutlined, CommentOutlined, PaperClipOutlined, CameraOutlined, AudioOutlined, SmileOutlined, PhoneOutlined, VideoCameraOutlined, InfoCircleOutlined } from '@ant-design/icons';
+import { SendOutlined, UserOutlined, CommentOutlined, PaperClipOutlined, CameraOutlined, AudioOutlined, SmileOutlined, PhoneOutlined, VideoCameraOutlined, InfoCircleOutlined, FileImageOutlined, FilePdfOutlined, FileTextOutlined, FileUnknownOutlined, PlayCircleOutlined } from '@ant-design/icons';
 import api from '../../api/axiosConfig';
 import EmojiPicker from 'emoji-picker-react';
+import AttachmentPreviewModal from '../../components/shared/AttachmentPreviewModal';
+import {
+  formatAttachmentSize,
+  getAttachmentKind,
+  getAttachmentName,
+  getAttachmentSize,
+  normalizeUploadFiles,
+  revokeUploadPreviews
+} from '../../utils/attachments';
 
 const SchoolChat = ({ user }) => {
   const [messages, setMessages] = useState([]);
@@ -12,6 +21,8 @@ const SchoolChat = ({ user }) => {
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
   const [uploadedFiles, setUploadedFiles] = useState([]);
   const [isRecording, setIsRecording] = useState(false);
+  const [previewVisible, setPreviewVisible] = useState(false);
+  const [previewFile, setPreviewFile] = useState(null);
   const messagesEndRef = useRef(null);
   const fileInputRef = useRef(null);
   const cameraInputRef = useRef(null);
@@ -57,11 +68,13 @@ const SchoolChat = ({ user }) => {
       formData.append('school_id', user.school_id);
       formData.append('school_name', user.name);
       formData.append('sender_type', 'school');
-      formData.append('message', newMessage || ' '); // Send empty string if only files
+      formData.append('message', newMessage.trim() || ' ');
       
       // Append uploaded files
-      uploadedFiles.forEach((file, index) => {
-        formData.append(`files`, file.originFileObj);
+      uploadedFiles.forEach((file) => {
+        if (file.originFileObj) {
+          formData.append('files', file.originFileObj);
+        }
       });
 
       await api.post('/chat/send', formData, {
@@ -70,6 +83,7 @@ const SchoolChat = ({ user }) => {
         },
       });
       setNewMessage('');
+      revokeUploadPreviews(uploadedFiles);
       setUploadedFiles([]);
       await fetchMessages();
     } catch (error) {
@@ -92,14 +106,109 @@ const SchoolChat = ({ user }) => {
     setShowEmojiPicker(false);
   };
 
+  const addUploadedFile = (file) => {
+    setUploadedFiles((previousFiles) => normalizeUploadFiles([...previousFiles, file], previousFiles));
+  };
+
   const handleFileUpload = (file) => {
-    setUploadedFiles(prev => [...prev, file]);
+    addUploadedFile(file);
     return false; // Prevent default upload behavior
   };
 
   const handleCameraCapture = (file) => {
-    setUploadedFiles(prev => [...prev, file]);
+    addUploadedFile(file);
     return false;
+  };
+
+  const handlePreview = (file) => {
+    setPreviewFile(file);
+    setPreviewVisible(true);
+  };
+
+  const removeUploadedFile = (uid) => {
+    setUploadedFiles((previousFiles) => {
+      const targetFile = previousFiles.find((file) => String(file.uid) === String(uid));
+      if (targetFile) {
+        revokeUploadPreviews([targetFile]);
+      }
+      return previousFiles.filter((file) => String(file.uid) !== String(uid));
+    });
+  };
+
+  const getAttachmentIcon = (file) => {
+    const kind = getAttachmentKind(file);
+    if (kind === 'image') return <FileImageOutlined style={{ fontSize: 22, color: '#1677ff' }} />;
+    if (kind === 'pdf') return <FilePdfOutlined style={{ fontSize: 22, color: '#cf1322' }} />;
+    if (kind === 'video') return <PlayCircleOutlined style={{ fontSize: 22, color: '#1677ff' }} />;
+    if (kind === 'audio') return <AudioOutlined style={{ fontSize: 22, color: '#1677ff' }} />;
+    if (kind === 'text' || kind === 'document') return <FileTextOutlined style={{ fontSize: 22, color: '#1677ff' }} />;
+    return <FileUnknownOutlined style={{ fontSize: 22, color: '#1677ff' }} />;
+  };
+
+  const renderAttachmentCard = (file, bubbleTone = '#ffffff') => {
+    const kind = getAttachmentKind(file);
+    const fileName = getAttachmentName(file);
+    const fileSize = getAttachmentSize(file);
+    const canShowThumb = kind === 'image' && file.previewUrl;
+
+    return (
+      <button
+        type="button"
+        key={file.id || file.uid || file.url || fileName}
+        onClick={() => handlePreview(file)}
+        style={{
+          width: '100%',
+          border: 'none',
+          borderRadius: '14px',
+          padding: canShowThumb ? '6px' : '10px 12px',
+          background: bubbleTone,
+          cursor: 'pointer',
+          textAlign: 'left',
+          boxShadow: 'inset 0 0 0 1px rgba(0, 0, 0, 0.06)'
+        }}
+      >
+        {canShowThumb ? (
+          <div>
+            <img
+              src={file.previewUrl}
+              alt={fileName}
+              style={{
+                width: '100%',
+                maxHeight: 220,
+                objectFit: 'cover',
+                borderRadius: '10px',
+                display: 'block'
+              }}
+            />
+            <div style={{ padding: '8px 6px 4px' }}>
+              <div style={{ fontSize: '13px', fontWeight: 600, color: '#111b21' }}>{fileName}</div>
+              <div style={{ fontSize: '12px', color: '#667781' }}>Tap to open preview</div>
+            </div>
+          </div>
+        ) : (
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+            <div>{getAttachmentIcon(file)}</div>
+            <div style={{ minWidth: 0 }}>
+              <div
+                style={{
+                  fontSize: '13px',
+                  fontWeight: 600,
+                  color: '#111b21',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap'
+                }}
+              >
+                {fileName}
+              </div>
+              <div style={{ fontSize: '12px', color: '#667781' }}>
+                {fileSize ? formatAttachmentSize(fileSize) : 'Tap to open preview'}
+              </div>
+            </div>
+          </div>
+        )}
+      </button>
+    );
   };
 
   const startRecording = () => {
@@ -242,7 +351,12 @@ const SchoolChat = ({ user }) => {
                         wordBreak: 'break-word'
                       }}
                     >
-                      <div>{msg.message}</div>
+                      {msg.attachments?.length > 0 && (
+                        <div style={{ display: 'grid', gap: '8px', marginBottom: msg.message?.trim() ? '8px' : 0 }}>
+                          {msg.attachments.map((file) => renderAttachmentCard(file, isSchool ? '#f4fff0' : '#f8fafc'))}
+                        </div>
+                      )}
+                      {msg.message?.trim() ? <div>{msg.message}</div> : null}
                       <div style={{ 
                         fontSize: '11px', 
                         color: '#667781', 
@@ -272,30 +386,33 @@ const SchoolChat = ({ user }) => {
           {/* Uploaded Files Preview */}
           {uploadedFiles.length > 0 && (
             <div style={{ marginBottom: '12px' }}>
-              {uploadedFiles.map((file, index) => (
+              {uploadedFiles.map((file) => (
                 <div
-                  key={index}
+                  key={file.uid}
                   style={{
                     display: 'inline-flex',
-                    alignItems: 'center',
-                    padding: '4px 8px',
+                    flexDirection: 'column',
+                    alignItems: 'stretch',
+                    width: '180px',
+                    padding: '8px',
                     backgroundColor: '#fff',
-                    borderRadius: '8px',
+                    borderRadius: '14px',
                     marginRight: '8px',
                     marginBottom: '8px',
                     border: '1px solid #e4e6eb'
                   }}
                 >
-                  <PaperClipOutlined style={{ marginRight: '4px' }} />
-                  <span style={{ fontSize: '12px' }}>{file.name}</span>
+                  {renderAttachmentCard(file, '#f8fafc')}
+                  <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '8px' }}>
                   <Button
                     type="text"
                     size="small"
-                    onClick={() => setUploadedFiles(prev => prev.filter((_, i) => i !== index))}
+                    onClick={() => removeUploadedFile(file.uid)}
                     style={{ padding: '0 4px' }}
                   >
                     ×
                   </Button>
+                </div>
                 </div>
               ))}
             </div>
@@ -405,6 +522,11 @@ const SchoolChat = ({ user }) => {
         accept="image/*"
         capture="environment"
         onChange={(e) => e.target.files[0] && handleCameraCapture(e.target.files[0])}
+      />
+      <AttachmentPreviewModal
+        open={previewVisible}
+        file={previewFile}
+        onClose={() => setPreviewVisible(false)}
       />
     </div>
   );

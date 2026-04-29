@@ -1,7 +1,14 @@
 import React, { useState, useEffect } from 'react';
-import { Card, Button, Form, Input, Select, Table, Modal, message, Tag, Upload, Space, Image, Typography } from 'antd';
+import { Card, Button, Form, Input, Select, Table, Modal, message, Tag, Upload, Space, Typography } from 'antd';
 import { PlusOutlined, EditOutlined, DeleteOutlined, NotificationOutlined, FileOutlined, EyeOutlined, UploadOutlined } from '@ant-design/icons';
 import api from '../../api/axiosConfig';
+import AttachmentPreviewModal from '../shared/AttachmentPreviewModal';
+import {
+  getAttachmentName,
+  getAttachmentType,
+  normalizeUploadFiles,
+  revokeUploadPreviews
+} from '../../utils/attachments';
 
 const { TextArea } = Input;
 const { Option } = Select;
@@ -58,8 +65,10 @@ const Announcements = () => {
       }
       
       // Append uploaded files
-      uploadedFiles.forEach((file, index) => {
-        formData.append(`files`, file.originFileObj);
+      uploadedFiles.forEach((file) => {
+        if (file.originFileObj) {
+          formData.append('files', file.originFileObj);
+        }
       });
 
       if (editingAnnouncement) {
@@ -78,6 +87,7 @@ const Announcements = () => {
       setIsModalVisible(false);
       form.resetFields();
       setEditingAnnouncement(null);
+      revokeUploadPreviews(uploadedFiles);
       setUploadedFiles([]);
       fetchAnnouncements();
     } catch (error) {
@@ -97,11 +107,12 @@ const Announcements = () => {
     // Set existing files if any
     if (record.attachments) {
       setUploadedFiles(record.attachments.map(file => ({
-        uid: file.id,
-        name: file.name,
+        uid: String(file.id),
+        name: getAttachmentName(file),
         status: 'done',
         url: file.url,
-        type: file.type
+        type: getAttachmentType(file),
+        file_type: getAttachmentType(file)
       })));
     }
     setIsModalVisible(true);
@@ -124,7 +135,7 @@ const Announcements = () => {
   };
 
   const handleFileChange = ({ fileList }) => {
-    setUploadedFiles(fileList);
+    setUploadedFiles((previousFiles) => normalizeUploadFiles(fileList, previousFiles));
   };
 
   const beforeUpload = (file) => {
@@ -204,7 +215,7 @@ const Announcements = () => {
             {attachments.map((file, idx) => (
               <Space key={idx}>
                 <FileOutlined />
-                <Text>{file.name}</Text>
+                <Text>{getAttachmentName(file)}</Text>
                 <Button 
                   type="link" 
                   size="small" 
@@ -272,6 +283,8 @@ const Announcements = () => {
             onClick={() => {
               setEditingAnnouncement(null);
               form.resetFields();
+              revokeUploadPreviews(uploadedFiles);
+              setUploadedFiles([]);
               setIsModalVisible(true);
             }}
           >
@@ -295,6 +308,8 @@ const Announcements = () => {
           setIsModalVisible(false);
           form.resetFields();
           setEditingAnnouncement(null);
+          revokeUploadPreviews(uploadedFiles);
+          setUploadedFiles([]);
         }}
         footer={null}
         width={600}
@@ -377,47 +392,11 @@ const Announcements = () => {
         </Form>
       </Modal>
 
-      <Modal
-        title="File Preview"
+      <AttachmentPreviewModal
         open={previewVisible}
-        onCancel={() => setPreviewVisible(false)}
-        footer={null}
-        width={800}
-      >
-        {previewFile && (
-          <div>
-            {previewFile.type?.startsWith('image/') ? (
-              <Image 
-                src={previewFile.url} 
-                alt={previewFile.name}
-                style={{ width: '100%' }}
-              />
-            ) : previewFile.type?.includes('pdf') ? (
-              <iframe
-                src={previewFile.url}
-                style={{ width: '100%', height: '500px' }}
-                title={previewFile.name}
-              />
-            ) : (
-              <div style={{ textAlign: 'center', padding: '40px' }}>
-                <FileOutlined style={{ fontSize: '48px', marginBottom: '16px' }} />
-                <div>
-                  <Text strong>{previewFile.name}</Text>
-                  <br />
-                  <Button 
-                    type="primary" 
-                    href={previewFile.url}
-                    target="_blank"
-                    style={{ marginTop: '16px' }}
-                  >
-                    Download File
-                  </Button>
-                </div>
-              </div>
-            )}
-          </div>
-        )}
-      </Modal>
+        file={previewFile}
+        onClose={() => setPreviewVisible(false)}
+      />
     </div>
   );
 };

@@ -217,6 +217,14 @@ class SupportTicketCreate(BaseModel):
     category: str
     priority: str = 'normal'
 
+class SupportTicketAttachmentResponse(BaseModel):
+    id: int
+    filename: str
+    original_name: str
+    file_type: str
+    file_size: int
+    url: str
+
 class SupportTicketResponse(BaseModel):
     id: int
     ticket_id: str
@@ -230,6 +238,7 @@ class SupportTicketResponse(BaseModel):
     admin_response: Optional[str] = None
     created_at: datetime
     updated_at: datetime
+    attachments: List[SupportTicketAttachmentResponse] = []
 
 class ChatMessageCreate(BaseModel):
     school_id: str
@@ -5077,8 +5086,8 @@ async def create_announcement(
             
             # Write file
             with open(file_path, "wb") as buffer:
-                content = await file.read()
-                buffer.write(content)
+                file_bytes = await file.read()
+                buffer.write(file_bytes)
             
             # Create attachment record
             attachment = AnnouncementAttachment(
@@ -5086,15 +5095,41 @@ async def create_announcement(
                 filename=unique_filename,
                 original_name=file.filename,
                 file_path=str(file_path),
-                file_size=len(content),
+                file_size=len(file_bytes),
                 file_type=file.content_type or 'application/octet-stream'
             )
             db.add(attachment)
         
         db.commit()
         db.refresh(new_announcement)
-    
-    return new_announcement
+
+    attachments = db.query(AnnouncementAttachment).filter(
+        AnnouncementAttachment.announcement_id == new_announcement.id
+    ).all()
+
+    attachment_responses = [
+        AnnouncementAttachmentResponse(
+            id=attachment.id,
+            filename=attachment.filename,
+            original_name=attachment.original_name,
+            file_type=attachment.file_type,
+            file_size=attachment.file_size,
+            url=f"/api/announcements/{new_announcement.id}/files/{attachment.id}"
+        )
+        for attachment in attachments
+    ]
+
+    return AnnouncementResponse(
+        id=new_announcement.id,
+        title=new_announcement.title,
+        content=new_announcement.content,
+        priority=new_announcement.priority,
+        target_schools=new_announcement.target_schools,
+        is_active=new_announcement.is_active,
+        created_at=new_announcement.created_at,
+        updated_at=new_announcement.updated_at,
+        attachments=attachment_responses
+    )
 
 @api_router.get("/admin/announcements", response_model=List[AnnouncementResponse])
 async def get_admin_announcements(db: Session = Depends(get_db)):
@@ -5132,10 +5167,14 @@ async def get_admin_announcements(db: Session = Depends(get_db)):
     
     return result
 
-@api_router.put("/admin/announcements/{announcement_id}")
+@api_router.put("/admin/announcements/{announcement_id}", response_model=AnnouncementResponse)
 async def update_announcement(
     announcement_id: int,
-    announcement: AnnouncementCreate,
+    title: str = Form(...),
+    content: str = Form(...),
+    priority: str = Form('normal'),
+    target_schools: Optional[str] = Form(None),
+    files: List[UploadFile] = File(default=[]),
     db: Session = Depends(get_db)
 ):
     """Update announcement - Admin only"""
@@ -5144,11 +5183,36 @@ async def update_announcement(
     if not existing:
         raise HTTPException(status_code=404, detail="Announcement not found")
     
-    existing.title = announcement.title
-    existing.content = announcement.content
-    existing.priority = announcement.priority
-    existing.target_schools = announcement.target_schools
+    existing.title = title
+    existing.content = content
+    existing.priority = priority
+    existing.target_schools = target_schools
     existing.updated_at = datetime.utcnow()
+
+    if files:
+        upload_dir = ROOT_DIR / "uploads" / "announcements"
+        upload_dir.mkdir(parents=True, exist_ok=True)
+
+        for file in files:
+            if not file or not file.filename:
+                continue
+
+            file_extension = file.filename.split('.')[-1] if '.' in file.filename else ''
+            unique_filename = f"announcement_{existing.id}_{uuid.uuid4().hex[:8]}.{file_extension}"
+            file_path = upload_dir / unique_filename
+
+            with open(file_path, "wb") as buffer:
+                file_bytes = await file.read()
+                buffer.write(file_bytes)
+
+            db.add(AnnouncementAttachment(
+                announcement_id=existing.id,
+                filename=unique_filename,
+                original_name=file.filename,
+                file_path=str(file_path),
+                file_size=len(file_bytes),
+                file_type=file.content_type or 'application/octet-stream'
+            ))
 
     db.query(AnnouncementRead).filter(
         AnnouncementRead.announcement_id == announcement_id
@@ -5156,8 +5220,34 @@ async def update_announcement(
     
     db.commit()
     db.refresh(existing)
-    
-    return existing
+
+    attachments = db.query(AnnouncementAttachment).filter(
+        AnnouncementAttachment.announcement_id == existing.id
+    ).all()
+
+    attachment_responses = [
+        AnnouncementAttachmentResponse(
+            id=attachment.id,
+            filename=attachment.filename,
+            original_name=attachment.original_name,
+            file_type=attachment.file_type,
+            file_size=attachment.file_size,
+            url=f"/api/announcements/{existing.id}/files/{attachment.id}"
+        )
+        for attachment in attachments
+    ]
+
+    return AnnouncementResponse(
+        id=existing.id,
+        title=existing.title,
+        content=existing.content,
+        priority=existing.priority,
+        target_schools=existing.target_schools,
+        is_active=existing.is_active,
+        created_at=existing.created_at,
+        updated_at=existing.updated_at,
+        attachments=attachment_responses
+    )
 
 @api_router.delete("/admin/announcements/{announcement_id}")
 async def delete_announcement(announcement_id: int, db: Session = Depends(get_db)):

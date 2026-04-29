@@ -1,12 +1,13 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Card, Table, Button, Modal, Form, Input, Select, Tag, message, Space, Image, Typography } from 'antd';
+import { Card, Table, Button, Modal, Form, Input, Select, Tag, message, Space } from 'antd';
 import { FileTextOutlined, MessageOutlined, DeleteOutlined, FileOutlined, EyeOutlined } from '@ant-design/icons';
 import { useSearchParams } from 'react-router-dom';
 import api from '../../api/axiosConfig';
+import AttachmentPreviewModal from '../shared/AttachmentPreviewModal';
+import { getAttachmentName } from '../../utils/attachments';
 
 const { TextArea } = Input;
 const { Option } = Select;
-const { Text } = Typography;
 
 const SupportTickets = () => {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -255,7 +256,7 @@ const SupportTickets = () => {
                           border: '1px solid #d9d9d9'
                         }}>
                           <FileOutlined style={{ color: '#1890ff' }} />
-                          <span style={{ fontSize: '14px' }}>{file.original_name}</span>
+                          <span style={{ fontSize: '14px' }}>{getAttachmentName(file)}</span>
                           <Button 
                             type="link" 
                             size="small" 
@@ -337,47 +338,11 @@ const SupportTickets = () => {
         </Form>
       </Modal>
 
-      <Modal
-        title="File Preview"
+      <AttachmentPreviewModal
         open={previewVisible}
-        onCancel={() => setPreviewVisible(false)}
-        footer={null}
-        width={800}
-      >
-        {previewFile && (
-          <div>
-            {previewFile.file_type?.startsWith('image/') ? (
-              <Image 
-                src={previewFile.url} 
-                alt={previewFile.original_name}
-                style={{ width: '100%' }}
-              />
-            ) : previewFile.file_type?.includes('pdf') ? (
-              <iframe
-                src={previewFile.url}
-                style={{ width: '100%', height: '500px' }}
-                title={previewFile.original_name}
-              />
-            ) : (
-              <div style={{ textAlign: 'center', padding: '40px' }}>
-                <FileOutlined style={{ fontSize: '48px', marginBottom: '16px' }} />
-                <div>
-                  <Text strong>{previewFile.original_name}</Text>
-                  <br />
-                  <Button 
-                    type="primary" 
-                    href={previewFile.url}
-                    target="_blank"
-                    style={{ marginTop: '16px' }}
-                  >
-                    Download File
-                  </Button>
-                </div>
-              </div>
-            )}
-          </div>
-        )}
-      </Modal>
+        file={previewFile}
+        onClose={() => setPreviewVisible(false)}
+      />
     </div>
   );
 };
