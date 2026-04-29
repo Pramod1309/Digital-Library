@@ -2,6 +2,7 @@
 import React from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import LoginPage from './pages/LoginPage';
+import WelcomeScreen from './pages/WelcomeScreen';
 import AdminDashboard from './pages/AdminDashboard';
 import SchoolDashboard from './pages/SchoolDashboard';
 import SchoolRegistration from './pages/SchoolRegistration';
@@ -26,7 +27,7 @@ function App() {
               <Navigate to="/school" />
             )
           ) : (
-            <Navigate to="/login" />
+            <WelcomeScreen />
           )} 
         />
         <Route 
