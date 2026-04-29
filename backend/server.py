@@ -27,6 +27,8 @@ import json
 import asyncio
 import re
 import smtplib
+import mimetypes
+import html
 import urllib.request as urllib_request
 import urllib.error as urllib_error
 from types import SimpleNamespace
@@ -47,6 +49,8 @@ from database import (
 from init_db import init_database
 
 ROOT_DIR = Path(__file__).parent
+FRONTEND_ROOT_DIR = ROOT_DIR.parent / "frontend"
+EMAIL_LOGO_CID = "wonder-learning-india-logo"
 load_dotenv(ROOT_DIR / '.env')
 load_dotenv(ROOT_DIR.parent / '.env')
 
@@ -1566,10 +1570,13 @@ def get_brevo_sms_settings() -> Dict[str, Any]:
 def build_smtp_client(email_settings: Dict[str, Any]):
     if email_settings["use_ssl"]:
         smtp_client = smtplib.SMTP_SSL(email_settings["host"], email_settings["port"], timeout=60)
+        smtp_client.ehlo()
     else:
         smtp_client = smtplib.SMTP(email_settings["host"], email_settings["port"], timeout=60)
+        smtp_client.ehlo()
         if email_settings["use_tls"]:
             smtp_client.starttls()
+            smtp_client.ehlo()
 
     smtp_client.login(email_settings["username"], email_settings["password"])
     return smtp_client
@@ -1580,7 +1587,9 @@ def send_smtp_email(
     subject: str,
     text_content: str,
     html_content: Optional[str] = None,
-    to_name: Optional[str] = None
+    to_name: Optional[str] = None,
+    attachments: Optional[List[Dict[str, Any]]] = None,
+    inline_assets: Optional[List[Dict[str, Any]]] = None
 ):
     smtp_client = build_smtp_client(email_settings)
     try:
@@ -1596,6 +1605,41 @@ def send_smtp_email(
         email_message.set_content(text_content)
         if html_content:
             email_message.add_alternative(html_content, subtype="html")
+            html_part = email_message.get_payload()[-1]
+            for asset in inline_assets or []:
+                asset_path = asset.get("path")
+                asset_data = asset.get("data")
+                if asset_data is None and asset_path:
+                    with open(asset_path, "rb") as asset_file:
+                        asset_data = asset_file.read()
+                if asset_data is None:
+                    continue
+                mime_type = asset.get("mime_type") or mimetypes.guess_type(str(asset_path or asset.get("filename") or ""))[0] or "application/octet-stream"
+                maintype, subtype = mime_type.split("/", 1)
+                html_part.add_related(
+                    asset_data,
+                    maintype=maintype,
+                    subtype=subtype,
+                    cid=f"<{asset['cid']}>",
+                    filename=asset.get("filename"),
+                    disposition="inline"
+                )
+        for attachment in attachments or []:
+            attachment_path = attachment.get("path")
+            attachment_data = attachment.get("data")
+            if attachment_data is None and attachment_path:
+                with open(attachment_path, "rb") as attachment_file:
+                    attachment_data = attachment_file.read()
+            if attachment_data is None:
+                continue
+            mime_type = attachment.get("mime_type") or mimetypes.guess_type(str(attachment_path or attachment.get("filename") or ""))[0] or "application/octet-stream"
+            maintype, subtype = mime_type.split("/", 1)
+            email_message.add_attachment(
+                attachment_data,
+                maintype=maintype,
+                subtype=subtype,
+                filename=attachment.get("filename")
+            )
         smtp_client.send_message(email_message)
     finally:
         try:
@@ -1603,58 +1647,167 @@ def send_smtp_email(
         except Exception:
             pass
 
-def send_email_otp(email: str, otp_code: str, school_name: str) -> bool:
-    """Send OTP via email as fallback when SMS fails"""
-    try:
-        # Email configuration from .env
-        email_host = os.environ.get("EMAIL_HOST")
-        email_port = int(os.environ.get("EMAIL_PORT", "587"))
-        email_user = os.environ.get("EMAIL_USER")
-        email_password = os.environ.get("EMAIL_PASSWORD")
-        from_email = os.environ.get("DEFAULT_FROM_EMAIL", "noreply@koshquest.in")
-        from_name = os.environ.get("DEFAULT_FROM_NAME", "Koshquest")
-        
-        # Create email message
-        msg = EmailMessage()
-        msg['Subject'] = f"Koshquest Password Reset OTP - {school_name}"
-        msg['From'] = f"{from_name} <{from_email}>"
-        msg['To'] = email
-        
-        # Email content
-        html_content = f"""
-        <html>
-        <body style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-            <div style="background-color: #f8f9fa; padding: 20px; border-radius: 10px;">
-                <h2 style="color: #333; text-align: center;">Koshquest Password Reset</h2>
-                <p>Dear {school_name},</p>
-                <p>Your One-Time Password (OTP) for password reset is:</p>
-                <div style="background-color: #007bff; color: white; padding: 15px; 
-                            text-align: center; font-size: 24px; font-weight: bold; 
-                            border-radius: 5px; margin: 20px 0;">
-                    {otp_code}
-                </div>
-                <p>This OTP is valid for 10 minutes. Do not share this code with anyone.</p>
-                <p>If you didn't request this OTP, please contact support immediately.</p>
-                <hr style="border: 1px solid #ddd; margin: 20px 0;">
-                <p style="color: #666; font-size: 12px; text-align: center;">
-                    This is an automated message from Koshquest Digital Library.
-                </p>
+def get_email_logo_path() -> Optional[Path]:
+    candidate_paths = [
+        FRONTEND_ROOT_DIR / "public" / "wonder-logo.png",
+        ROOT_DIR / "wonder-logo.png",
+    ]
+    for candidate in candidate_paths:
+        if candidate.exists():
+            return candidate
+    return None
+
+def get_email_inline_assets() -> List[Dict[str, Any]]:
+    logo_path = get_email_logo_path()
+    if not logo_path:
+        return []
+    return [{
+        "cid": EMAIL_LOGO_CID,
+        "path": logo_path,
+        "filename": logo_path.name,
+        "mime_type": mimetypes.guess_type(str(logo_path))[0] or "image/png",
+    }]
+
+def render_email_logo_markup() -> str:
+    if get_email_logo_path():
+        return (
+            f'<img src="cid:{EMAIL_LOGO_CID}" alt="Wonder Learning India" '
+            'style="display:block;height:56px;width:auto;max-width:220px;">'
+        )
+    return (
+        '<div style="font-size:24px;font-weight:800;letter-spacing:0.02em;color:#ffffff;">'
+        'Wonder Learning India'
+        '</div>'
+    )
+
+def format_multiline_html(text: str) -> str:
+    escaped_text = html.escape((text or "").strip())
+    return escaped_text.replace("\n", "<br>")
+
+def build_school_login_url() -> str:
+    login_url = (config.frontend_url or "").rstrip("/")
+    if config.environment == "production" and (not login_url or "localhost" in login_url):
+        login_url = f"https://{config.domain}".rstrip("/")
+    if not login_url:
+        login_url = "https://koshquest.in/login"
+    elif not login_url.endswith("/login"):
+        login_url = f"{login_url}/login"
+    return login_url
+
+def build_email_shell(
+    eyebrow: str,
+    title: str,
+    intro_html: str,
+    body_html: str,
+    footer_note: str = "Wonder Learning India Digital Library"
+) -> str:
+    return f"""
+    <!DOCTYPE html>
+    <html lang="en">
+      <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>{html.escape(title)}</title>
+      </head>
+      <body style="margin:0;padding:0;background:#eef4fb;font-family:Arial,Helvetica,sans-serif;color:#16324f;">
+        <div style="max-width:720px;margin:0 auto;padding:32px 16px 40px;">
+          <div style="background:linear-gradient(135deg,#081a3c,#0f4c81 56%,#1fa2a6);border-radius:30px;padding:34px 30px 44px;color:#ffffff;box-shadow:0 26px 56px rgba(8,26,60,0.24);">
+            <div style="display:inline-flex;align-items:center;justify-content:center;background:rgba(255,255,255,0.12);border:1px solid rgba(255,255,255,0.22);border-radius:20px;padding:12px 16px;margin-bottom:18px;">
+              {render_email_logo_markup()}
             </div>
-        </body>
-        </html>
-        """
-        
-        msg.add_alternative(html_content, subtype='html')
-        
-        # Send email
-        with smtplib.SMTP(email_host, email_port) as server:
-            server.starttls()
-            server.login(email_user, email_password)
-            server.send_message(msg)
-        
+            <div style="font-size:12px;letter-spacing:1.8px;text-transform:uppercase;opacity:0.82;margin-bottom:12px;">{html.escape(eyebrow)}</div>
+            <h1 style="margin:0 0 12px;font-size:31px;line-height:1.2;">{html.escape(title)}</h1>
+            <div style="font-size:16px;line-height:1.85;opacity:0.94;">
+              {intro_html}
+            </div>
+          </div>
+
+          <div style="background:#ffffff;margin-top:-20px;border-radius:26px;padding:30px 26px 28px;box-shadow:0 20px 44px rgba(13,38,59,0.10);">
+            {body_html}
+          </div>
+
+          <div style="text-align:center;font-size:12px;color:#7188a0;padding-top:18px;line-height:1.7;">
+            {html.escape(footer_note)}
+          </div>
+        </div>
+      </body>
+    </html>
+    """.strip()
+
+def build_school_password_reset_otp_email(school_name: str, otp_code: str) -> Dict[str, str]:
+    subject = f"Wonder Learning India Password Reset OTP - {school_name}"
+    text_content = f"""
+Hello {school_name},
+
+Use the following one-time password to reset your Wonder Learning India account password:
+
+OTP: {otp_code}
+
+This OTP is valid for 10 minutes.
+Please do not share this code with anyone.
+
+If you did not request this OTP, you can safely ignore this email.
+
+Warm regards,
+Wonder Learning India
+""".strip()
+
+    intro_html = (
+        f"<p style=\"margin:0;\">Hello <strong>{html.escape(school_name)}</strong>,</p>"
+        "<p style=\"margin:12px 0 0;\">Use the one-time password below to continue resetting your Wonder Learning India digital library password.</p>"
+    )
+    body_html = f"""
+      <div style="background:linear-gradient(135deg,#fff7ea,#eef8ff);border:1px solid #d9e8f7;border-radius:22px;padding:26px 22px;margin-bottom:22px;text-align:center;">
+        <div style="font-size:12px;letter-spacing:1.3px;text-transform:uppercase;color:#6b7f91;margin-bottom:10px;">Your verification code</div>
+        <div style="display:inline-block;padding:16px 26px;border-radius:18px;background:#081a3c;color:#ffffff;font-size:34px;letter-spacing:8px;font-weight:800;box-shadow:0 16px 28px rgba(8,26,60,0.18);">
+          {html.escape(otp_code)}
+        </div>
+        <div style="font-size:14px;color:#5d7990;line-height:1.8;margin-top:14px;">This OTP expires in 10 minutes.</div>
+      </div>
+
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px;margin-bottom:22px;">
+        <div style="background:#f7fbff;border:1px solid #d8e6f3;border-radius:18px;padding:18px;">
+          <div style="font-size:12px;color:#5d7990;text-transform:uppercase;letter-spacing:1px;margin-bottom:8px;">Security note</div>
+          <div style="font-size:15px;line-height:1.8;color:#16324f;">For your safety, never share this code over call, chat, or email.</div>
+        </div>
+        <div style="background:#fff8ef;border:1px solid #f3ddbf;border-radius:18px;padding:18px;">
+          <div style="font-size:12px;color:#8a5a13;text-transform:uppercase;letter-spacing:1px;margin-bottom:8px;">Did not request this?</div>
+          <div style="font-size:15px;line-height:1.8;color:#6a4a1f;">You can ignore this email and your current password will remain unchanged.</div>
+        </div>
+      </div>
+
+      <div style="font-size:14px;line-height:1.85;color:#5d7990;">
+        Need help? Reply to this email and our team will assist you.
+      </div>
+    """
+    html_content = build_email_shell(
+        eyebrow="Password Reset OTP",
+        title="Your secure reset code is ready",
+        intro_html=intro_html,
+        body_html=body_html,
+    )
+    return {
+        "subject": subject,
+        "text_content": text_content,
+        "html_content": html_content,
+    }
+
+def send_email_otp(email: str, otp_code: str, school_name: str) -> bool:
+    """Send password reset OTP to the registered school email."""
+    try:
+        email_settings = get_batch_email_settings()
+        otp_email = build_school_password_reset_otp_email(school_name, otp_code)
+        send_smtp_email(
+            email_settings=email_settings,
+            to_email=email,
+            to_name=school_name,
+            subject=otp_email["subject"],
+            text_content=otp_email["text_content"],
+            html_content=otp_email["html_content"],
+            inline_assets=get_email_inline_assets(),
+        )
         print(f"Email OTP sent successfully to {email}")
         return True
-        
     except Exception as e:
         print(f"Failed to send email OTP: {e}")
         return False
@@ -1938,6 +2091,199 @@ Wonder Learning India
         "html_content": html_content,
     }
 
+def build_batch_watermark_email(school: School, zip_filename: str, subject: str, custom_message: str) -> Dict[str, str]:
+    """Build branded HTML email for batch watermark ZIP delivery."""
+    text_content = f"""
+Dear {school.school_name},
+
+Greetings from Wonder Learning India,
+
+Please find attached to this email the ZIP file containing your customized watermarked learning resources.
+
+{custom_message}
+
+We hope these materials add value to your learning initiatives and support your educational goals effectively.
+
+Should you require any modifications, additional customization, or assistance, please feel free to reply to this email. We would be happy to help.
+
+Thank you for choosing Wonder Learning India. We appreciate the opportunity to support your institution.
+
+Warm regards,
+Wonder Learning India
+Support Team
+Empowering Better Learning
+""".strip()
+
+    intro_html = (
+        f"<p style=\"margin:0;\">Hello <strong>{html.escape(school.school_name)}</strong>,</p>"
+        "<p style=\"margin:12px 0 0;\">Your customized, watermarked learning resources have been prepared and are attached to this email as a ZIP file.</p>"
+    )
+    body_html = f"""
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px;margin-bottom:24px;">
+        <div style="background:#f7fbff;border:1px solid #d8e6f3;border-radius:18px;padding:18px;">
+          <div style="font-size:12px;color:#5d7990;text-transform:uppercase;letter-spacing:1px;margin-bottom:8px;">School ID</div>
+          <div style="font-size:18px;font-weight:700;color:#16324f;">{html.escape(school.school_id)}</div>
+        </div>
+        <div style="background:#eef9f3;border:1px solid #c8e8d1;border-radius:18px;padding:18px;">
+          <div style="font-size:12px;color:#5d7990;text-transform:uppercase;letter-spacing:1px;margin-bottom:8px;">ZIP File</div>
+          <div style="font-size:16px;font-weight:700;color:#16324f;">{html.escape(zip_filename)}</div>
+        </div>
+      </div>
+
+      <div style="background:#fff8ef;border:1px solid #f3ddbf;border-radius:18px;padding:22px 20px;margin-bottom:24px;">
+        <div style="font-size:18px;font-weight:700;color:#7c4d0f;margin-bottom:10px;">Message from Admin</div>
+        <div style="font-size:15px;line-height:1.9;color:#6a4a1f;">
+          {format_multiline_html(custom_message)}
+        </div>
+      </div>
+
+      <div style="background:linear-gradient(135deg,#081a3c,#0f4c81);border-radius:20px;padding:18px 20px;color:#ffffff;margin-bottom:22px;text-align:center;">
+        <div style="font-size:16px;font-weight:700;line-height:1.6;">The customized resources are attached directly to this email.</div>
+      </div>
+
+      <div style="font-size:14px;line-height:1.85;color:#5d7990;">
+        Need help? Reply to this email and our support team will assist you with any updates or additional customization.
+      </div>
+    """
+    html_content = build_email_shell(
+        eyebrow="Resources Ready",
+        title=f"{school.school_name}, your customized resources are ready.",
+        intro_html=intro_html,
+        body_html=body_html,
+    )
+    return {
+        "subject": subject,
+        "text_content": text_content,
+        "html_content": html_content,
+    }
+
+def build_school_welcome_email(school: School) -> Dict[str, str]:
+    login_url = build_school_login_url()
+    subject = f"Welcome to Wonder Learning India, {school.school_name}"
+    text_content = f"""
+Hello {school.school_name},
+
+Welcome to Wonder Learning India.
+
+Your school account is now active and ready to use. You can sign in to explore curated resources, download branded materials, upload school content for approval, track usage, and stay connected with the admin team.
+
+School ID: {school.school_id}
+Registered Email: {school.email}
+
+Login here: {login_url}
+
+If you ever need help, please use the chat or support ticket options inside your dashboard.
+
+Warm regards,
+Wonder Learning India
+""".strip()
+
+    intro_html = (
+        f"<p style=\"margin:0;\">Welcome <strong>{html.escape(school.school_name)}</strong>.</p>"
+        "<p style=\"margin:12px 0 0;\">Your digital library account is active and ready for your team to explore, download, and manage learning resources from one place.</p>"
+    )
+    body_html = f"""
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px;margin-bottom:24px;">
+        <div style="background:#f7fbff;border:1px solid #d8e6f3;border-radius:18px;padding:18px;">
+          <div style="font-size:12px;color:#5d7990;text-transform:uppercase;letter-spacing:1px;margin-bottom:8px;">School ID</div>
+          <div style="font-size:18px;font-weight:700;color:#16324f;">{html.escape(school.school_id)}</div>
+        </div>
+        <div style="background:#f7fbff;border:1px solid #d8e6f3;border-radius:18px;padding:18px;">
+          <div style="font-size:12px;color:#5d7990;text-transform:uppercase;letter-spacing:1px;margin-bottom:8px;">Registered Email</div>
+          <div style="font-size:16px;font-weight:700;color:#16324f;">{html.escape(school.email)}</div>
+        </div>
+      </div>
+
+      <div style="background:#fff8ef;border:1px solid #f3ddbf;border-radius:18px;padding:20px 22px;margin-bottom:24px;">
+        <div style="font-size:18px;font-weight:700;color:#7c4d0f;margin-bottom:10px;">What you can do next</div>
+        <div style="font-size:15px;line-height:1.9;color:#6a4a1f;">
+          Explore resources by category, download branded assets, upload school content for approval, and track announcements, chat replies, and support ticket updates from your dashboard.
+        </div>
+      </div>
+
+      <div style="text-align:center;margin:26px 0 20px;">
+        <a href="{html.escape(login_url)}" style="display:inline-block;padding:14px 28px;border-radius:999px;background:#16324f;color:#ffffff;text-decoration:none;font-size:15px;font-weight:700;">
+          Open School Dashboard
+        </a>
+      </div>
+
+      <div style="font-size:14px;line-height:1.85;color:#5d7990;">
+        If you ever need help, simply reply to this email or use the in-app chat and support ticket options inside your dashboard.
+      </div>
+    """
+    html_content = build_email_shell(
+        eyebrow="Welcome Aboard",
+        title=f"{school.school_name}, your digital library is ready.",
+        intro_html=intro_html,
+        body_html=body_html,
+    )
+    return {
+        "subject": subject,
+        "text_content": text_content,
+        "html_content": html_content,
+    }
+
+def build_school_password_reset_success_email(school: School) -> Dict[str, str]:
+    login_url = build_school_login_url()
+    subject = f"Password Reset Successful - {school.school_name}"
+    text_content = f"""
+Hello {school.school_name},
+
+Your Wonder Learning India account password has been reset successfully.
+
+You can now sign in again using your new password:
+{login_url}
+
+If you did not perform this action, please contact the administrator immediately.
+
+Warm regards,
+Wonder Learning India
+""".strip()
+
+    intro_html = (
+        f"<p style=\"margin:0;\">Hello <strong>{html.escape(school.school_name)}</strong>,</p>"
+        "<p style=\"margin:12px 0 0;\">Your password was updated successfully, and your account is secure with the new credentials.</p>"
+    )
+    body_html = f"""
+      <div style="background:linear-gradient(135deg,#effaf3,#eef8ff);border:1px solid #d2ead9;border-radius:22px;padding:24px 22px;margin-bottom:22px;text-align:center;">
+        <div style="display:inline-flex;align-items:center;justify-content:center;width:72px;height:72px;border-radius:999px;background:#1f9d55;color:#ffffff;font-size:34px;font-weight:800;box-shadow:0 14px 24px rgba(31,157,85,0.24);margin-bottom:14px;">
+          OK
+        </div>
+        <div style="font-size:22px;font-weight:800;color:#16324f;margin-bottom:8px;">Password reset completed</div>
+        <div style="font-size:15px;line-height:1.85;color:#4f6b82;">
+          Your new password is now active for the school account <strong>{html.escape(school.email)}</strong>.
+        </div>
+      </div>
+
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px;margin-bottom:24px;">
+        <div style="background:#f7fbff;border:1px solid #d8e6f3;border-radius:18px;padding:18px;">
+          <div style="font-size:12px;color:#5d7990;text-transform:uppercase;letter-spacing:1px;margin-bottom:8px;">Next step</div>
+          <div style="font-size:15px;line-height:1.85;color:#16324f;">Sign in again with your updated password to continue using the digital library.</div>
+        </div>
+        <div style="background:#fff8ef;border:1px solid #f3ddbf;border-radius:18px;padding:18px;">
+          <div style="font-size:12px;color:#8a5a13;text-transform:uppercase;letter-spacing:1px;margin-bottom:8px;">Security note</div>
+          <div style="font-size:15px;line-height:1.85;color:#6a4a1f;">If this was not done by you, contact the administrator immediately and secure the account.</div>
+        </div>
+      </div>
+
+      <div style="text-align:center;margin:28px 0 20px;">
+        <a href="{html.escape(login_url)}" style="display:inline-block;padding:14px 28px;border-radius:999px;background:#081a3c;color:#ffffff;text-decoration:none;font-size:15px;font-weight:700;">
+          Return to Login
+        </a>
+      </div>
+    """
+    html_content = build_email_shell(
+        eyebrow="Password Updated",
+        title="Your account password has been reset successfully",
+        intro_html=intro_html,
+        body_html=body_html,
+    )
+    return {
+        "subject": subject,
+        "text_content": text_content,
+        "html_content": html_content,
+    }
+
 def send_school_welcome_email_if_needed(db: Session, school: School):
     if not school or school.welcome_email_sent_at or not school.email:
         return
@@ -1952,6 +2298,7 @@ def send_school_welcome_email_if_needed(db: Session, school: School):
             subject=welcome_email["subject"],
             text_content=welcome_email["text_content"],
             html_content=welcome_email["html_content"],
+            inline_assets=get_email_inline_assets(),
         )
         school.welcome_email_sent_at = datetime.utcnow()
         db.commit()
@@ -2875,6 +3222,68 @@ async def send_admin_batch_watermark_emails(
         raise HTTPException(status_code=404, detail=f"School not found: {', '.join(missing_schools)}")
 
     results = []
+    for email_item in request.emails:
+        school = school_map[email_item.school_id]
+        folder_entry = folder_map[email_item.school_id]
+
+        if not school.email:
+            results.append({
+                "school_id": school.school_id,
+                "school_name": school.school_name,
+                "email": "",
+                "status": "failed",
+                "message": "School does not have an email address"
+            })
+            continue
+
+        try:
+            zip_bytes, zip_filename = build_school_batch_zip_bytes(job_path, folder_entry)
+            email_template = build_batch_watermark_email(
+                school,
+                zip_filename,
+                email_item.subject,
+                email_item.message
+            )
+            send_smtp_email(
+                email_settings=email_settings,
+                to_email=school.email,
+                to_name=school.school_name,
+                subject=email_template["subject"],
+                text_content=email_template["text_content"],
+                html_content=email_template["html_content"],
+                inline_assets=get_email_inline_assets(),
+                attachments=[{
+                    "data": zip_bytes,
+                    "filename": zip_filename,
+                    "mime_type": "application/zip",
+                }],
+            )
+            results.append({
+                "school_id": school.school_id,
+                "school_name": school.school_name,
+                "email": school.email,
+                "status": "sent",
+                "message": f"Email sent successfully with attachment {zip_filename}"
+            })
+        except Exception as send_error:
+            print(f"Error sending batch watermark email to {school.school_name}: {send_error}")
+            results.append({
+                "school_id": school.school_id,
+                "school_name": school.school_name,
+                "email": school.email,
+                "status": "failed",
+                "message": str(send_error)
+            })
+
+    sent_count = len([item for item in results if item["status"] == "sent"])
+    failed_count = len(results) - sent_count
+    return {
+        "message": f"Email automation completed. Sent: {sent_count}, Failed: {failed_count}",
+        "sent_count": sent_count,
+        "failed_count": failed_count,
+        "results": results
+    }
+
     smtp_client = None
 
     try:
@@ -3283,6 +3692,32 @@ async def reset_school_password_with_otp(
         }
     )
     db.commit()
+
+    email_sent = True
+    email_message = "Password reset success email sent"
+    try:
+        email_settings = get_batch_email_settings()
+        success_email = build_school_password_reset_success_email(school)
+        send_smtp_email(
+            email_settings=email_settings,
+            to_email=school.email,
+            to_name=school.school_name,
+            subject=success_email["subject"],
+            text_content=success_email["text_content"],
+            html_content=success_email["html_content"],
+            inline_assets=get_email_inline_assets(),
+        )
+        print(f"Password reset success email sent to {school.email}")
+    except Exception as exc:
+        email_sent = False
+        email_message = "Password updated, but success email could not be delivered"
+        print(f"Password reset success email failed for {school.school_id}: {exc}")
+
+    return {
+        "message": "Password reset successfully",
+        "email_sent": email_sent,
+        "email_message": email_message
+    }
 
     # Send password reset success notification via email instead of SMS
     email_sent = True

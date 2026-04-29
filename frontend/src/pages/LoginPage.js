@@ -211,7 +211,7 @@ const LoginPage = ({ setUser }) => {
       <div className="login-left" data-testid="login-info-section">
         <div className="login-info">
           <div className="logo-container">
-            <img src="/wonder-learning-logo.png" alt="Wonder Learning Logo" className="company-logo" />
+            <img src="/wonder-logo.png" alt="Wonder Learning Logo" className="company-logo" />
           </div>
           <h1 className="library-title" data-testid="library-title">Wonder Learning Digital Library</h1>
           <div className="info-content">
