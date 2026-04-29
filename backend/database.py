@@ -73,6 +73,7 @@ class SchoolPasswordResetOTP(Base):
     request_id = Column(String(64), unique=True, nullable=False, index=True)
     school_id = Column(String(100), nullable=False, index=True)
     school_name = Column(String(255), nullable=False)
+    email = Column(String(255), nullable=True, index=True)
     mobile_number = Column(String(20), nullable=False, index=True)
     otp_code = Column(String(10), nullable=False)
     purpose = Column(String(50), default="password_reset", nullable=False)
@@ -149,6 +150,21 @@ class Announcement(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
+class AnnouncementAttachment(Base):
+    __tablename__ = "announcement_attachments"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    announcement_id = Column(Integer, ForeignKey('announcements.id'), nullable=False)
+    filename = Column(String(255), nullable=False)
+    original_name = Column(String(255), nullable=False)
+    file_path = Column(String(500), nullable=False)
+    file_size = Column(Integer, nullable=False)
+    file_type = Column(String(100), nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    
+    # Relationship
+    announcement = relationship("Announcement", backref="attachments")
+
 class AnnouncementRead(Base):
     __tablename__ = "announcement_reads"
 
@@ -191,6 +207,19 @@ class ChatMessage(Base):
     sender_type = Column(String(50), nullable=False)  # 'admin' or 'school'
     message = Column(Text, nullable=False)
     is_read = Column(Boolean, default=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+# Chat Attachment Model
+class ChatAttachment(Base):
+    __tablename__ = "chat_attachments"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    message_id = Column(Integer, ForeignKey('chat_messages.id'), nullable=False)
+    filename = Column(String(255), nullable=False)
+    original_name = Column(String(255), nullable=False)
+    file_path = Column(String(500), nullable=False)
+    file_size = Column(Integer, nullable=False)
+    file_type = Column(String(100), nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
 
 # Resource Download Log Model
@@ -365,6 +394,19 @@ class SchoolWatermarkText(Base):
     __table_args__ = (
         UniqueConstraint('school_id', 'resource_id', name='unique_school_resource_text'),
     )
+
+# Support Ticket Attachment Model
+class SupportTicketAttachment(Base):
+    __tablename__ = "support_ticket_attachments"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    ticket_id = Column(String(100), nullable=False, index=True)
+    filename = Column(String(255), nullable=False)
+    original_name = Column(String(255), nullable=False)
+    file_path = Column(String(500), nullable=False)
+    file_size = Column(Integer, nullable=False)
+    file_type = Column(String(100), nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
 
 # Dependency to get DB session
 def get_db():

@@ -1,11 +1,12 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Card, Table, Button, Modal, Form, Input, Select, Tag, message } from 'antd';
-import { FileTextOutlined, MessageOutlined, DeleteOutlined } from '@ant-design/icons';
+import { Card, Table, Button, Modal, Form, Input, Select, Tag, message, Space, Image, Typography } from 'antd';
+import { FileTextOutlined, MessageOutlined, DeleteOutlined, FileOutlined, EyeOutlined } from '@ant-design/icons';
 import { useSearchParams } from 'react-router-dom';
 import api from '../../api/axiosConfig';
 
 const { TextArea } = Input;
 const { Option } = Select;
+const { Text } = Typography;
 
 const SupportTickets = () => {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -13,6 +14,8 @@ const SupportTickets = () => {
   const [loading, setLoading] = useState(false);
   const [isModalVisible, setIsModalVisible] = useState(false);
   const [selectedTicket, setSelectedTicket] = useState(null);
+  const [previewVisible, setPreviewVisible] = useState(false);
+  const [previewFile, setPreviewFile] = useState(null);
   const [form] = Form.useForm();
   const openedFromQueryRef = useRef('');
   const requestedTicketId = searchParams.get('ticket_id');
@@ -116,6 +119,11 @@ const SupportTickets = () => {
       console.error('Error response:', error.response);
       message.error('Failed to delete ticket');
     }
+  };
+
+  const handlePreview = (file) => {
+    setPreviewFile(file);
+    setPreviewVisible(true);
   };
 
   const getStatusColor = (status) => {
@@ -231,6 +239,37 @@ const SupportTickets = () => {
               <div style={{ padding: '16px', background: '#f5f5f5', borderRadius: '8px' }}>
                 <p><strong>Message:</strong></p>
                 <p>{record.message}</p>
+                
+                {/* Show attachments if any */}
+                {record.attachments && record.attachments.length > 0 && (
+                  <div style={{ marginTop: '16px' }}>
+                    <div style={{ fontSize: '14px', fontWeight: 'bold', marginBottom: '8px', color: '#666' }}>
+                      Attachments:
+                    </div>
+                    <Space direction="vertical" size="small" style={{ width: '100%' }}>
+                      {record.attachments.map((file, idx) => (
+                        <Space key={idx} style={{ 
+                          padding: '8px 12px', 
+                          background: '#fff', 
+                          borderRadius: '6px',
+                          border: '1px solid #d9d9d9'
+                        }}>
+                          <FileOutlined style={{ color: '#1890ff' }} />
+                          <span style={{ fontSize: '14px' }}>{file.original_name}</span>
+                          <Button 
+                            type="link" 
+                            size="small" 
+                            icon={<EyeOutlined />}
+                            onClick={() => handlePreview(file)}
+                          >
+                            Preview
+                          </Button>
+                        </Space>
+                      ))}
+                    </Space>
+                  </div>
+                )}
+                
                 {record.admin_response && (
                   <>
                     <p style={{ marginTop: '16px' }}><strong>Admin Response:</strong></p>
@@ -296,6 +335,48 @@ const SupportTickets = () => {
             </Button>
           </Form.Item>
         </Form>
+      </Modal>
+
+      <Modal
+        title="File Preview"
+        open={previewVisible}
+        onCancel={() => setPreviewVisible(false)}
+        footer={null}
+        width={800}
+      >
+        {previewFile && (
+          <div>
+            {previewFile.file_type?.startsWith('image/') ? (
+              <Image 
+                src={previewFile.url} 
+                alt={previewFile.original_name}
+                style={{ width: '100%' }}
+              />
+            ) : previewFile.file_type?.includes('pdf') ? (
+              <iframe
+                src={previewFile.url}
+                style={{ width: '100%', height: '500px' }}
+                title={previewFile.original_name}
+              />
+            ) : (
+              <div style={{ textAlign: 'center', padding: '40px' }}>
+                <FileOutlined style={{ fontSize: '48px', marginBottom: '16px' }} />
+                <div>
+                  <Text strong>{previewFile.original_name}</Text>
+                  <br />
+                  <Button 
+                    type="primary" 
+                    href={previewFile.url}
+                    target="_blank"
+                    style={{ marginTop: '16px' }}
+                  >
+                    Download File
+                  </Button>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
       </Modal>
     </div>
   );

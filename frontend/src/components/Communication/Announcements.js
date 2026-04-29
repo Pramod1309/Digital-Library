@@ -1,10 +1,11 @@
 import React, { useState, useEffect } from 'react';
-import { Card, Button, Form, Input, Select, Table, Modal, message, Tag } from 'antd';
-import { PlusOutlined, EditOutlined, DeleteOutlined, NotificationOutlined } from '@ant-design/icons';
+import { Card, Button, Form, Input, Select, Table, Modal, message, Tag, Upload, Space, Image, Typography } from 'antd';
+import { PlusOutlined, EditOutlined, DeleteOutlined, NotificationOutlined, FileOutlined, EyeOutlined, UploadOutlined } from '@ant-design/icons';
 import api from '../../api/axiosConfig';
 
 const { TextArea } = Input;
 const { Option } = Select;
+const { Text } = Typography;
 
 const Announcements = () => {
   const [form] = Form.useForm();
@@ -13,6 +14,9 @@ const Announcements = () => {
   const [announcements, setAnnouncements] = useState([]);
   const [schools, setSchools] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [uploadedFiles, setUploadedFiles] = useState([]);
+  const [previewVisible, setPreviewVisible] = useState(false);
+  const [previewFile, setPreviewFile] = useState(null);
 
   useEffect(() => {
     fetchAnnouncements();
@@ -43,27 +47,38 @@ const Announcements = () => {
 
   const handleSubmit = async (values) => {
     try {
-      // Convert array to comma-separated string
-      const payload = {
-        title: values.title,
-        content: values.content,
-        priority: values.priority,
-        target_schools: values.target_schools && values.target_schools.length > 0 
-          ? values.target_schools.join(',') 
-          : null
-      };
+      // Create FormData for file upload
+      const formData = new FormData();
+      formData.append('title', values.title);
+      formData.append('content', values.content);
+      formData.append('priority', values.priority);
+      
+      if (values.target_schools && values.target_schools.length > 0) {
+        formData.append('target_schools', values.target_schools.join(','));
+      }
+      
+      // Append uploaded files
+      uploadedFiles.forEach((file, index) => {
+        formData.append(`files`, file.originFileObj);
+      });
 
       if (editingAnnouncement) {
-        await api.put(`/admin/announcements/${editingAnnouncement.id}`, payload);
+        formData.append('id', editingAnnouncement.id);
+        await api.put(`/admin/announcements/${editingAnnouncement.id}`, formData, {
+          headers: { 'Content-Type': 'multipart/form-data' }
+        });
         message.success('Announcement updated successfully');
       } else {
-        await api.post('/admin/announcements', payload);
+        await api.post('/admin/announcements', formData, {
+          headers: { 'Content-Type': 'multipart/form-data' }
+        });
         message.success('Announcement created successfully');
       }
       
       setIsModalVisible(false);
       form.resetFields();
       setEditingAnnouncement(null);
+      setUploadedFiles([]);
       fetchAnnouncements();
     } catch (error) {
       console.error('Error saving announcement:', error);
@@ -79,6 +94,16 @@ const Announcements = () => {
       priority: record.priority,
       target_schools: record.target_schools ? record.target_schools.split(',') : []
     });
+    // Set existing files if any
+    if (record.attachments) {
+      setUploadedFiles(record.attachments.map(file => ({
+        uid: file.id,
+        name: file.name,
+        status: 'done',
+        url: file.url,
+        type: file.type
+      })));
+    }
     setIsModalVisible(true);
   };
 
@@ -91,6 +116,25 @@ const Announcements = () => {
       console.error('Error deleting announcement:', error);
       message.error('Failed to delete announcement');
     }
+  };
+
+  const handlePreview = (file) => {
+    setPreviewFile(file);
+    setPreviewVisible(true);
+  };
+
+  const handleFileChange = ({ fileList }) => {
+    setUploadedFiles(fileList);
+  };
+
+  const beforeUpload = (file) => {
+    // Check file size (max 10MB)
+    const isLt10M = file.size / 1024 / 1024 < 10;
+    if (!isLt10M) {
+      message.error('File must be smaller than 10MB!');
+      return false;
+    }
+    return false; // Prevent automatic upload
   };
 
   const getPriorityColor = (priority) => {
@@ -144,6 +188,34 @@ const Announcements = () => {
               <Tag key={idx} color="blue">{name}</Tag>
             ))}
           </div>
+        );
+      }
+    },
+    { 
+      title: 'Attachments', 
+      dataIndex: 'attachments', 
+      key: 'attachments',
+      render: (attachments) => {
+        if (!attachments || attachments.length === 0) {
+          return <Text type="secondary">No files</Text>;
+        }
+        return (
+          <Space direction="vertical" size="small">
+            {attachments.map((file, idx) => (
+              <Space key={idx}>
+                <FileOutlined />
+                <Text>{file.name}</Text>
+                <Button 
+                  type="link" 
+                  size="small" 
+                  icon={<EyeOutlined />}
+                  onClick={() => handlePreview(file)}
+                >
+                  Preview
+                </Button>
+              </Space>
+            ))}
+          </Space>
         );
       }
     },
@@ -280,12 +352,71 @@ const Announcements = () => {
             </Select>
           </Form.Item>
 
+          <Form.Item label="Attachments">
+            <Upload
+              multiple
+              fileList={uploadedFiles}
+              onChange={handleFileChange}
+              beforeUpload={beforeUpload}
+              accept="image/*,.pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.txt,.mp4,.mp3,.avi,.mov"
+            >
+              <Button icon={<UploadOutlined />}>
+                Upload Files (Images, PDFs, Documents, Videos, Audio)
+              </Button>
+            </Upload>
+            <Text type="secondary" style={{ fontSize: '12px' }}>
+              Supported formats: Images, PDF, Word, PowerPoint, Excel, Text, Video, Audio. Max size: 10MB per file.
+            </Text>
+          </Form.Item>
+
           <Form.Item>
             <Button type="primary" htmlType="submit" block>
               {editingAnnouncement ? 'Update' : 'Create'} Announcement
             </Button>
           </Form.Item>
         </Form>
+      </Modal>
+
+      <Modal
+        title="File Preview"
+        open={previewVisible}
+        onCancel={() => setPreviewVisible(false)}
+        footer={null}
+        width={800}
+      >
+        {previewFile && (
+          <div>
+            {previewFile.type?.startsWith('image/') ? (
+              <Image 
+                src={previewFile.url} 
+                alt={previewFile.name}
+                style={{ width: '100%' }}
+              />
+            ) : previewFile.type?.includes('pdf') ? (
+              <iframe
+                src={previewFile.url}
+                style={{ width: '100%', height: '500px' }}
+                title={previewFile.name}
+              />
+            ) : (
+              <div style={{ textAlign: 'center', padding: '40px' }}>
+                <FileOutlined style={{ fontSize: '48px', marginBottom: '16px' }} />
+                <div>
+                  <Text strong>{previewFile.name}</Text>
+                  <br />
+                  <Button 
+                    type="primary" 
+                    href={previewFile.url}
+                    target="_blank"
+                    style={{ marginTop: '16px' }}
+                  >
+                    Download File
+                  </Button>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
       </Modal>
     </div>
   );

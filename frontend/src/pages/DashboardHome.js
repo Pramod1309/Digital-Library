@@ -36,8 +36,6 @@ const DashboardHome = () => {
 
   useEffect(() => {
     fetchDashboardData();
-    const interval = setInterval(fetchDashboardData, 10000);
-    return () => clearInterval(interval);
   }, []);
 
   const fetchDashboardData = async () => {

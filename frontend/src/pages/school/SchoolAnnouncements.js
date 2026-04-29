@@ -1,11 +1,13 @@
 import React, { useState, useEffect } from 'react';
-import { Card, List, Tag, Empty, Spin } from 'antd';
-import { NotificationOutlined, ClockCircleOutlined } from '@ant-design/icons';
+import { Card, List, Tag, Empty, Spin, Modal, Space, Image, Typography, Button } from 'antd';
+import { NotificationOutlined, ClockCircleOutlined, FileOutlined, EyeOutlined } from '@ant-design/icons';
 import api from '../../api/axiosConfig';
 
 const SchoolAnnouncements = ({ user }) => {
   const [announcements, setAnnouncements] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [previewVisible, setPreviewVisible] = useState(false);
+  const [previewFile, setPreviewFile] = useState(null);
 
   useEffect(() => {
     fetchAnnouncements();
@@ -37,6 +39,11 @@ const SchoolAnnouncements = ({ user }) => {
       case 'low': return 'default';
       default: return 'blue';
     }
+  };
+
+  const handlePreview = (file) => {
+    setPreviewFile(file);
+    setPreviewVisible(true);
   };
 
   return (
@@ -87,11 +94,83 @@ const SchoolAnnouncements = ({ user }) => {
                 <div style={{ marginTop: '12px', fontSize: '15px', lineHeight: '1.6' }}>
                   {item.content}
                 </div>
+                
+                {/* Show attachments if any */}
+                {item.attachments && item.attachments.length > 0 && (
+                  <div style={{ marginTop: '16px' }}>
+                    <div style={{ fontSize: '14px', fontWeight: 'bold', marginBottom: '8px', color: '#666' }}>
+                      Attachments:
+                    </div>
+                    <Space direction="vertical" size="small" style={{ width: '100%' }}>
+                      {item.attachments.map((file, idx) => (
+                        <Space key={idx} style={{ 
+                          padding: '8px 12px', 
+                          background: '#f5f5f5', 
+                          borderRadius: '6px',
+                          border: '1px solid #d9d9d9'
+                        }}>
+                          <FileOutlined style={{ color: '#1890ff' }} />
+                          <span style={{ fontSize: '14px' }}>{file.original_name}</span>
+                          <Button 
+                            type="link" 
+                            size="small" 
+                            icon={<EyeOutlined />}
+                            onClick={() => handlePreview(file)}
+                          >
+                            Preview
+                          </Button>
+                        </Space>
+                      ))}
+                    </Space>
+                  </div>
+                )}
               </List.Item>
             )}
           />
         )}
       </Card>
+
+      <Modal
+        title="File Preview"
+        open={previewVisible}
+        onCancel={() => setPreviewVisible(false)}
+        footer={null}
+        width={800}
+      >
+        {previewFile && (
+          <div>
+            {previewFile.file_type?.startsWith('image/') ? (
+              <Image 
+                src={previewFile.url} 
+                alt={previewFile.original_name}
+                style={{ width: '100%' }}
+              />
+            ) : previewFile.file_type?.includes('pdf') ? (
+              <iframe
+                src={previewFile.url}
+                style={{ width: '100%', height: '500px' }}
+                title={previewFile.original_name}
+              />
+            ) : (
+              <div style={{ textAlign: 'center', padding: '40px' }}>
+                <FileOutlined style={{ fontSize: '48px', marginBottom: '16px' }} />
+                <div>
+                  <span style={{ fontWeight: 'bold' }}>{previewFile.original_name}</span>
+                  <br />
+                  <Button 
+                    type="primary" 
+                    href={previewFile.url}
+                    target="_blank"
+                    style={{ marginTop: '16px' }}
+                  >
+                    Download File
+                  </Button>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+      </Modal>
     </div>
   );
 };

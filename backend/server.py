@@ -40,9 +40,9 @@ from collections import Counter, defaultdict
 # Import database
 from database import (
     get_db, Admin, School, PasswordResetToken, SchoolPasswordResetOTP, ActivityLog, Resource, 
-    Announcement, AnnouncementRead, SupportTicket, ChatMessage, ResourceDownload, 
+    Announcement, AnnouncementRead, AnnouncementAttachment, SupportTicket, ChatMessage, ChatAttachment, ResourceDownload, 
     KnowledgeArticle, SchoolLogoPosition, SchoolWatermarkText, engine, Base, AdminResourceWatermark,
-    AdminBatchWatermarkTemplate, SchoolSearchLog
+    AdminBatchWatermarkTemplate, SchoolSearchLog, SupportTicketAttachment
 )
 from init_db import init_database
 
@@ -118,11 +118,11 @@ class ForgotPasswordRequest(BaseModel):
     user_type: str  # 'admin' or 'school'
 
 class SchoolForgotPasswordOtpRequest(BaseModel):
-    mobile_number: str
+    email: EmailStr
 
 class SchoolForgotPasswordOtpVerifyRequest(BaseModel):
     request_id: str
-    mobile_number: str
+    email: EmailStr
     otp: str
 
 class SchoolForgotPasswordResetRequest(BaseModel):
@@ -188,6 +188,14 @@ class AnnouncementCreate(BaseModel):
     priority: str = 'normal'
     target_schools: Optional[str] = None
 
+class AnnouncementAttachmentResponse(BaseModel):
+    id: int
+    filename: str
+    original_name: str
+    file_type: str
+    file_size: int
+    url: str
+
 class AnnouncementResponse(BaseModel):
     id: int
     title: str
@@ -197,6 +205,7 @@ class AnnouncementResponse(BaseModel):
     is_active: bool
     created_at: datetime
     updated_at: datetime
+    attachments: Optional[List[AnnouncementAttachmentResponse]] = []
 
 class SupportTicketCreate(BaseModel):
     subject: str
@@ -222,6 +231,14 @@ class ChatMessageCreate(BaseModel):
     school_id: str
     message: str
 
+class ChatAttachmentResponse(BaseModel):
+    id: int
+    filename: str
+    original_name: str
+    file_type: str
+    file_size: int
+    url: str
+
 class ChatMessageResponse(BaseModel):
     id: int
     school_id: str
@@ -230,6 +247,7 @@ class ChatMessageResponse(BaseModel):
     message: str
     is_read: bool
     created_at: datetime
+    attachments: List[ChatAttachmentResponse] = []
 
 class KnowledgeArticleCreate(BaseModel):
     title: str
@@ -408,6 +426,16 @@ def mask_mobile_number(value: Optional[str]) -> str:
     digits = re.sub(r"\D", "", normalized)
     return f"+{digits[:2]} ******{digits[-4:]}"
 
+def mask_email_address(value: Optional[str]) -> str:
+    if not value or "@" not in value:
+        return "Unavailable"
+    local_part, domain = value.strip().split("@", 1)
+    if len(local_part) <= 2:
+        masked_local = local_part[:1] + "***"
+    else:
+        masked_local = local_part[:3] + "***"
+    return f"{masked_local}@{domain}"
+
 def generate_numeric_otp(length: int = 6) -> str:
     numeric_length = max(4, int(length))
     return str(uuid.uuid4().int % (10 ** numeric_length)).zfill(numeric_length)
@@ -430,6 +458,17 @@ def find_school_by_mobile_number(db: Session, mobile_number: str) -> Optional[Sc
     candidate_schools = db.query(School).filter(School.contact_number.isnot(None)).all()
     for school in candidate_schools:
         if normalize_indian_mobile_number(school.contact_number) == normalized_target:
+            return school
+    return None
+
+def find_school_by_email(db: Session, email: str) -> Optional[School]:
+    normalized_target = (email or "").strip().lower()
+    if not normalized_target:
+        return None
+
+    schools = db.query(School).all()
+    for school in schools:
+        if (school.email or "").strip().lower() == normalized_target:
             return school
     return None
 
@@ -795,7 +834,7 @@ def build_activity_description(activity_type: str, details: Optional[Dict[str, A
     if activity_type == "chat_message_sent":
         return "Sent a message to the admin."
     if activity_type == "password_reset":
-        return "Password was reset successfully using mobile OTP verification."
+        return "Password was reset successfully using email OTP verification."
 
     return details.get("message") or details.get("description") or "Activity recorded."
 
@@ -2954,7 +2993,7 @@ async def forgot_password(request: ForgotPasswordRequest, db: Session = Depends(
     if request.user_type != "admin":
         raise HTTPException(
             status_code=400,
-            detail="School password reset now uses mobile OTP verification."
+            detail="School password reset now uses email OTP verification."
         )
 
     # Check if user exists
@@ -2990,14 +3029,11 @@ async def request_school_password_reset_otp(
     request: SchoolForgotPasswordOtpRequest,
     db: Session = Depends(get_db)
 ):
-    """Send a mobile OTP only when the mobile number matches a registered school."""
-    normalized_mobile = normalize_indian_mobile_number(request.mobile_number)
-    if not normalized_mobile:
-        raise HTTPException(status_code=400, detail="Enter a valid school mobile number")
-
-    school = find_school_by_mobile_number(db, normalized_mobile)
+    """Send an email OTP only when the email matches a registered school."""
+    normalized_email = request.email.strip().lower()
+    school = find_school_by_email(db, normalized_email)
     if not school:
-        raise HTTPException(status_code=404, detail="This mobile number is not registered with any school")
+        raise HTTPException(status_code=404, detail="This email address is not registered with any school")
 
     now = datetime.utcnow()
     latest_request = db.query(SchoolPasswordResetOTP).filter(
@@ -3026,36 +3062,28 @@ async def request_school_password_reset_otp(
         request_id=generate_secure_token(),
         school_id=school.school_id,
         school_name=school.school_name,
-        mobile_number=normalized_mobile,
+        email=normalized_email,
+        mobile_number=school.contact_number or "email-only",
         otp_code=otp_code,
         purpose="password_reset",
         expires_at=now + timedelta(minutes=10),
     )
     db.add(otp_request)
 
-    # Try to send OTP with SMS fallback to email
-    otp_result = send_otp_with_fallback(normalized_mobile, school.email, otp_code, school.school_name)
-    
-    if not otp_result["success"]:
+    if not send_email_otp(school.email, otp_code, school.school_name):
         db.rollback()
-        raise HTTPException(status_code=502, detail=otp_result["message"])
+        raise HTTPException(status_code=502, detail="Unable to send OTP email right now. Please try again.")
     
     db.commit()
 
-    # Customize message based on delivery method
-    if otp_result["method"] == "email":
-        message = f"OTP sent successfully to {school.email} (SMS unavailable)"
-        masked_info = f"Email: {school.email[:3]}***@{school.email.split('@')[1]}"
-    else:
-        message = f"OTP sent successfully to {mask_mobile_number(normalized_mobile)}"
-        masked_info = mask_mobile_number(normalized_mobile)
+    masked_info = mask_email_address(school.email)
 
     return {
-        "message": message,
+        "message": f"OTP sent successfully to {masked_info}",
         "request_id": otp_request.request_id,
         "school_name": school.school_name,
-        "masked_mobile_number": masked_info,
-        "delivery_method": otp_result["method"],
+        "masked_email_address": masked_info,
+        "delivery_method": "email",
         "expires_in_seconds": 600,
         "resend_in_seconds": 60
     }
@@ -3066,9 +3094,7 @@ async def verify_school_password_reset_otp(
     db: Session = Depends(get_db)
 ):
     """Verify the OTP and issue a short-lived reset token."""
-    normalized_mobile = normalize_indian_mobile_number(request.mobile_number)
-    if not normalized_mobile:
-        raise HTTPException(status_code=400, detail="Enter a valid school mobile number")
+    normalized_email = request.email.strip().lower()
 
     otp_request = db.query(SchoolPasswordResetOTP).filter(
         SchoolPasswordResetOTP.request_id == request.request_id,
@@ -3078,8 +3104,8 @@ async def verify_school_password_reset_otp(
     if not otp_request:
         raise HTTPException(status_code=404, detail="Password reset request not found. Please request a new OTP.")
 
-    if otp_request.mobile_number != normalized_mobile:
-        raise HTTPException(status_code=400, detail="Mobile number does not match this OTP request")
+    if (otp_request.email or "").strip().lower() != normalized_email:
+        raise HTTPException(status_code=400, detail="Email address does not match this OTP request")
 
     if otp_request.used_at is not None:
         raise HTTPException(status_code=400, detail="This OTP request is no longer active. Please request a new OTP.")
@@ -3131,7 +3157,7 @@ async def reset_school_password_with_otp(
     request: SchoolForgotPasswordResetRequest,
     db: Session = Depends(get_db)
 ):
-    """Reset school password after OTP verification and send success SMS."""
+    """Reset school password after OTP verification and send success email."""
     password_error = validate_school_password(request.new_password, request.confirm_password)
     if password_error:
         raise HTTPException(status_code=400, detail=password_error)
@@ -3172,7 +3198,7 @@ async def reset_school_password_with_otp(
         "password_reset",
         {
             "message": "School password reset via OTP verification",
-            "mobile_number": mask_mobile_number(otp_request.mobile_number)
+            "email": mask_email_address(school.email)
         }
     )
     db.commit()
@@ -4501,18 +4527,56 @@ async def debug_files():
 # ==================== ANNOUNCEMENT ROUTES ====================
 
 @api_router.post("/admin/announcements", response_model=AnnouncementResponse)
-async def create_announcement(announcement: AnnouncementCreate, db: Session = Depends(get_db)):
-    """Create announcement - Admin only"""
+async def create_announcement(
+    title: str = Form(...),
+    content: str = Form(...),
+    priority: str = Form('normal'),
+    target_schools: Optional[str] = Form(None),
+    files: Optional[List[UploadFile]] = File(None),
+    db: Session = Depends(get_db)
+):
+    """Create announcement with file attachments - Admin only"""
     new_announcement = Announcement(
-        title=announcement.title,
-        content=announcement.content,
-        priority=announcement.priority,
-        target_schools=announcement.target_schools
+        title=title,
+        content=content,
+        priority=priority,
+        target_schools=target_schools
     )
     
     db.add(new_announcement)
     db.commit()
     db.refresh(new_announcement)
+    
+    # Handle file attachments
+    if files:
+        for file in files:
+            # Generate unique filename
+            file_extension = file.filename.split('.')[-1] if '.' in file.filename else ''
+            unique_filename = f"announcement_{new_announcement.id}_{uuid.uuid4().hex[:8]}.{file_extension}"
+            
+            # Save file to uploads directory
+            upload_dir = ROOT_DIR / "uploads" / "announcements"
+            upload_dir.mkdir(parents=True, exist_ok=True)
+            file_path = upload_dir / unique_filename
+            
+            # Write file
+            with open(file_path, "wb") as buffer:
+                content = await file.read()
+                buffer.write(content)
+            
+            # Create attachment record
+            attachment = AnnouncementAttachment(
+                announcement_id=new_announcement.id,
+                filename=unique_filename,
+                original_name=file.filename,
+                file_path=str(file_path),
+                file_size=len(content),
+                file_type=file.content_type or 'application/octet-stream'
+            )
+            db.add(attachment)
+        
+        db.commit()
+        db.refresh(new_announcement)
     
     return new_announcement
 
@@ -4520,7 +4584,37 @@ async def create_announcement(announcement: AnnouncementCreate, db: Session = De
 async def get_admin_announcements(db: Session = Depends(get_db)):
     """Get all announcements - Admin"""
     announcements = db.query(Announcement).order_by(Announcement.created_at.desc()).all()
-    return announcements
+    
+    result = []
+    for announcement in announcements:
+        attachments = db.query(AnnouncementAttachment).filter(
+            AnnouncementAttachment.announcement_id == announcement.id
+        ).all()
+        
+        attachment_responses = []
+        for attachment in attachments:
+            attachment_responses.append(AnnouncementAttachmentResponse(
+                id=attachment.id,
+                filename=attachment.filename,
+                original_name=attachment.original_name,
+                file_type=attachment.file_type,
+                file_size=attachment.file_size,
+                url=f"/api/announcements/{announcement.id}/files/{attachment.id}"
+            ))
+        
+        result.append(AnnouncementResponse(
+            id=announcement.id,
+            title=announcement.title,
+            content=announcement.content,
+            priority=announcement.priority,
+            target_schools=announcement.target_schools,
+            is_active=announcement.is_active,
+            created_at=announcement.created_at,
+            updated_at=announcement.updated_at,
+            attachments=attachment_responses
+        ))
+    
+    return result
 
 @api_router.put("/admin/announcements/{announcement_id}")
 async def update_announcement(
@@ -4568,7 +4662,63 @@ async def delete_announcement(announcement_id: int, db: Session = Depends(get_db
 @api_router.get("/school/announcements", response_model=List[AnnouncementResponse])
 async def get_school_announcements(school_id: str, db: Session = Depends(get_db)):
     """Get announcements for school"""
-    return get_visible_school_announcements(db, school_id)
+    announcements = get_visible_school_announcements(db, school_id)
+    
+    result = []
+    for announcement in announcements:
+        attachments = db.query(AnnouncementAttachment).filter(
+            AnnouncementAttachment.announcement_id == announcement.id
+        ).all()
+        
+        attachment_responses = []
+        for attachment in attachments:
+            attachment_responses.append(AnnouncementAttachmentResponse(
+                id=attachment.id,
+                filename=attachment.filename,
+                original_name=attachment.original_name,
+                file_type=attachment.file_type,
+                file_size=attachment.file_size,
+                url=f"/api/announcements/{announcement.id}/files/{attachment.id}"
+            ))
+        
+        result.append(AnnouncementResponse(
+            id=announcement.id,
+            title=announcement.title,
+            content=announcement.content,
+            priority=announcement.priority,
+            target_schools=announcement.target_schools,
+            is_active=announcement.is_active,
+            created_at=announcement.created_at,
+            updated_at=announcement.updated_at,
+            attachments=attachment_responses
+        ))
+    
+    return result
+
+@api_router.get("/announcements/{announcement_id}/files/{file_id}")
+async def get_announcement_file(
+    announcement_id: int,
+    file_id: int,
+    db: Session = Depends(get_db)
+):
+    """Get announcement file for preview/download"""
+    attachment = db.query(AnnouncementAttachment).filter(
+        AnnouncementAttachment.id == file_id,
+        AnnouncementAttachment.announcement_id == announcement_id
+    ).first()
+    
+    if not attachment:
+        raise HTTPException(status_code=404, detail="File not found")
+    
+    file_path = Path(attachment.file_path)
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="File not found on server")
+    
+    return FileResponse(
+        path=file_path,
+        filename=attachment.original_name,
+        media_type=attachment.file_type
+    )
 
 @api_router.post("/school/announcements/mark-read")
 async def mark_school_announcements_read(
@@ -4619,6 +4769,7 @@ async def create_support_ticket(
     priority: str = Form(...),
     school_id: str = Form(...),
     school_name: str = Form(...),
+    files: List[UploadFile] = File(default=[]),
     db: Session = Depends(get_db)
 ):
     """Create support ticket - School"""
@@ -4635,6 +4786,35 @@ async def create_support_ticket(
     )
     
     db.add(new_ticket)
+    db.commit()
+    db.refresh(new_ticket)
+    
+    # Handle file attachments
+    upload_dir = ROOT_DIR / "uploads" / "support_tickets"
+    upload_dir.mkdir(parents=True, exist_ok=True)
+    
+    for file in files:
+        if file and file.filename:
+            # Generate unique filename
+            file_extension = Path(file.filename).suffix
+            unique_filename = f"ticket_{new_ticket.id}_{uuid.uuid4()}{file_extension}"
+            file_path = upload_dir / unique_filename
+            
+            # Save file
+            with open(file_path, "wb") as buffer:
+                shutil.copyfileobj(file.file, buffer)
+            
+            # Create attachment record
+            attachment = SupportTicketAttachment(
+                ticket_id=new_ticket.ticket_id,
+                filename=unique_filename,
+                original_name=file.filename,
+                file_path=str(file_path),
+                file_size=file.size or 0,
+                file_type=file.content_type or "application/octet-stream"
+            )
+            db.add(attachment)
+    
     record_activity(
         db,
         school_id,
@@ -4658,9 +4838,43 @@ async def get_school_tickets(school_id: str, db: Session = Depends(get_db)):
     tickets = db.query(SupportTicket).filter(
         SupportTicket.school_id == school_id
     ).order_by(SupportTicket.created_at.desc()).all()
-
-    now = datetime.utcnow()
-    updated = False
+    
+    # Add attachments to each ticket
+    result = []
+    for ticket in tickets:
+        attachments = db.query(SupportTicketAttachment).filter(
+            SupportTicketAttachment.ticket_id == ticket.ticket_id
+        ).all()
+        
+        attachment_responses = []
+        for attachment in attachments:
+            attachment_responses.append({
+                "id": attachment.id,
+                "filename": attachment.filename,
+                "original_name": attachment.original_name,
+                "file_type": attachment.file_type,
+                "file_size": attachment.file_size,
+                "url": f"/api/support/tickets/{ticket.ticket_id}/files/{attachment.id}"
+            })
+        
+        ticket_dict = {
+            "id": ticket.id,
+            "ticket_id": ticket.ticket_id,
+            "school_id": ticket.school_id,
+            "school_name": ticket.school_name,
+            "subject": ticket.subject,
+            "message": ticket.message,
+            "category": ticket.category,
+            "priority": ticket.priority,
+            "status": ticket.status,
+            "admin_response": ticket.admin_response,
+            "created_at": ticket.created_at,
+            "updated_at": ticket.updated_at,
+            "attachments": attachment_responses
+        }
+        result.append(ticket_dict)
+    
+    return result
     for ticket in tickets:
         if ticket.admin_updated_at and (
             ticket.school_last_viewed_at is None or ticket.admin_updated_at > ticket.school_last_viewed_at
@@ -4677,7 +4891,43 @@ async def get_school_tickets(school_id: str, db: Session = Depends(get_db)):
 async def get_all_tickets(db: Session = Depends(get_db)):
     """Get all support tickets - Admin"""
     tickets = db.query(SupportTicket).order_by(SupportTicket.created_at.desc()).all()
-    return tickets
+    
+    # Add attachments to each ticket
+    result = []
+    for ticket in tickets:
+        attachments = db.query(SupportTicketAttachment).filter(
+            SupportTicketAttachment.ticket_id == ticket.ticket_id
+        ).all()
+        
+        attachment_responses = []
+        for attachment in attachments:
+            attachment_responses.append({
+                "id": attachment.id,
+                "filename": attachment.filename,
+                "original_name": attachment.original_name,
+                "file_type": attachment.file_type,
+                "file_size": attachment.file_size,
+                "url": f"/api/support/tickets/{ticket.ticket_id}/files/{attachment.id}"
+            })
+        
+        ticket_dict = {
+            "id": ticket.id,
+            "ticket_id": ticket.ticket_id,
+            "school_id": ticket.school_id,
+            "school_name": ticket.school_name,
+            "subject": ticket.subject,
+            "message": ticket.message,
+            "category": ticket.category,
+            "priority": ticket.priority,
+            "status": ticket.status,
+            "admin_response": ticket.admin_response,
+            "created_at": ticket.created_at,
+            "updated_at": ticket.updated_at,
+            "attachments": attachment_responses
+        }
+        result.append(ticket_dict)
+    
+    return result
 
 @api_router.put("/admin/support/tickets/{ticket_id}")
 async def update_ticket(
@@ -4715,6 +4965,41 @@ async def update_ticket(
     
     return ticket
 
+@api_router.get("/support/tickets/{ticket_id}/files/{file_id}")
+async def get_support_ticket_file(
+    ticket_id: str,
+    file_id: int,
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Get support ticket file for preview/download"""
+    # Verify ticket belongs to user's school if user is school
+    if current_user.get("user_type") == "school":
+        ticket = db.query(SupportTicket).filter(
+            SupportTicket.ticket_id == ticket_id,
+            SupportTicket.school_id == current_user.get("school_id")
+        ).first()
+        if not ticket:
+            raise HTTPException(status_code=404, detail="Ticket not found")
+    
+    attachment = db.query(SupportTicketAttachment).filter(
+        SupportTicketAttachment.id == file_id,
+        SupportTicketAttachment.ticket_id == ticket_id
+    ).first()
+    
+    if not attachment:
+        raise HTTPException(status_code=404, detail="File not found")
+    
+    file_path = Path(attachment.file_path)
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="File not found on server")
+    
+    return FileResponse(
+        path=file_path,
+        filename=attachment.original_name,
+        media_type=attachment.file_type
+    )
+
 @api_router.delete("/admin/support/tickets/{ticket_id}")
 async def delete_ticket(
     ticket_id: str, 
@@ -4745,6 +5030,7 @@ async def send_chat_message(
     school_name: str = Form(...),
     sender_type: str = Form(...),
     message: str = Form(...),
+    files: List[UploadFile] = File(default=[]),
     current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
@@ -4757,6 +5043,35 @@ async def send_chat_message(
     )
     
     db.add(new_message)
+    db.commit()
+    db.refresh(new_message)
+    
+    # Handle file attachments
+    upload_dir = ROOT_DIR / "uploads" / "chat_attachments"
+    upload_dir.mkdir(parents=True, exist_ok=True)
+    
+    for file in files:
+        if file and file.filename:
+            # Generate unique filename
+            file_extension = Path(file.filename).suffix
+            unique_filename = f"{uuid.uuid4()}{file_extension}"
+            file_path = upload_dir / unique_filename
+            
+            # Save file
+            with open(file_path, "wb") as buffer:
+                shutil.copyfileobj(file.file, buffer)
+            
+            # Create attachment record
+            attachment = ChatAttachment(
+                message_id=new_message.id,
+                filename=unique_filename,
+                original_name=file.filename,
+                file_path=str(file_path),
+                file_size=file.size or 0,
+                file_type=file.content_type or "application/octet-stream"
+            )
+            db.add(attachment)
+    
     if sender_type == "school":
         record_activity(
             db,
@@ -4768,10 +5083,37 @@ async def send_chat_message(
                 "preview": (message or "")[:120]
             }
         )
+    
     db.commit()
     db.refresh(new_message)
     
-    return new_message
+    # Get attachments for the message
+    attachments = db.query(ChatAttachment).filter(
+        ChatAttachment.message_id == new_message.id
+    ).all()
+    
+    attachment_responses = []
+    for attachment in attachments:
+        attachment_responses.append(ChatAttachmentResponse(
+            id=attachment.id,
+            filename=attachment.filename,
+            original_name=attachment.original_name,
+            file_type=attachment.file_type,
+            file_size=attachment.file_size,
+            url=f"/api/chat/messages/{new_message.id}/files/{attachment.id}"
+        ))
+    
+    # Return proper response model
+    return ChatMessageResponse(
+        id=new_message.id,
+        school_id=new_message.school_id,
+        school_name=new_message.school_name,
+        sender_type=new_message.sender_type,
+        message=new_message.message,
+        is_read=new_message.is_read,
+        created_at=new_message.created_at,
+        attachments=attachment_responses
+    )
 
 @api_router.get("/chat/messages", response_model=List[ChatMessageResponse])
 async def get_chat_messages(
@@ -4784,7 +5126,72 @@ async def get_chat_messages(
         ChatMessage.school_id == school_id
     ).order_by(ChatMessage.created_at.asc()).all()
     
-    return messages
+    # Add attachments to each message
+    result = []
+    for message in messages:
+        attachments = db.query(ChatAttachment).filter(
+            ChatAttachment.message_id == message.id
+        ).all()
+        
+        attachment_responses = []
+        for attachment in attachments:
+            attachment_responses.append(ChatAttachmentResponse(
+                id=attachment.id,
+                filename=attachment.filename,
+                original_name=attachment.original_name,
+                file_type=attachment.file_type,
+                file_size=attachment.file_size,
+                url=f"/api/chat/messages/{message.id}/files/{attachment.id}"
+            ))
+        
+        message_response = ChatMessageResponse(
+            id=message.id,
+            school_id=message.school_id,
+            school_name=message.school_name,
+            sender_type=message.sender_type,
+            message=message.message,
+            is_read=message.is_read,
+            created_at=message.created_at,
+            attachments=attachment_responses
+        )
+        result.append(message_response)
+    
+    return result
+
+@api_router.get("/chat/messages/{message_id}/files/{file_id}")
+async def get_chat_attachment_file(
+    message_id: int,
+    file_id: int,
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Get chat attachment file for preview/download"""
+    # Verify message belongs to user's school if user is school
+    if current_user.get("user_type") == "school":
+        message = db.query(ChatMessage).filter(
+            ChatMessage.id == message_id,
+            ChatMessage.school_id == current_user.get("school_id")
+        ).first()
+        if not message:
+            raise HTTPException(status_code=404, detail="Message not found")
+    
+    attachment = db.query(ChatAttachment).filter(
+        ChatAttachment.id == file_id,
+        ChatAttachment.message_id == message_id
+    ).first()
+    
+    if not attachment:
+        raise HTTPException(status_code=404, detail="File not found")
+    
+    file_path = Path(attachment.file_path)
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="File not found on server")
+    
+    return FileResponse(
+        path=file_path,
+        filename=attachment.original_name,
+        media_type=attachment.file_type
+    )
 
 @api_router.put("/chat/mark-read/{school_id}")
 async def mark_messages_read(

@@ -111,6 +111,16 @@ def migrate_database():
             print("Creating school_password_reset_otps table...")
             SchoolPasswordResetOTP.__table__.create(bind=engine)
             print("Created school_password_reset_otps table")
+        else:
+            reset_otp_columns = [col['name'] for col in inspector.get_columns('school_password_reset_otps')]
+            if 'email' not in reset_otp_columns:
+                try:
+                    db.execute(text("ALTER TABLE school_password_reset_otps ADD COLUMN email VARCHAR(255)"))
+                    db.commit()
+                    print("Added email column to school_password_reset_otps")
+                except Exception as e:
+                    print(f"  Note: {e}")
+                    print("  Column email might already exist or SQLite limitation encountered")
 
         if 'resources' not in table_names:
             print("Creating resources table...")

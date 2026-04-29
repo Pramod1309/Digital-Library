@@ -5,12 +5,12 @@ import '../styles/LoginPage.css';
 
 const createInitialForgotPasswordState = () => ({
   step: 'identify',
-  mobileNumber: '',
+  resetEmail: '',
   otp: '',
   requestId: '',
   resetToken: '',
   schoolName: '',
-  maskedMobileNumber: '',
+  maskedEmailAddress: '',
   newPassword: '',
   confirmPassword: '',
   resendSeconds: 0,
@@ -93,7 +93,7 @@ const LoginPage = ({ setUser }) => {
 
   const handleSchoolForgotPasswordOtpRequest = async () => {
     const response = await api.post('/school/forgot-password/request-otp', {
-      mobile_number: forgotPasswordState.mobileNumber
+      email: forgotPasswordState.resetEmail
     });
 
     setForgotPasswordState((prev) => ({
@@ -101,7 +101,7 @@ const LoginPage = ({ setUser }) => {
       step: 'otp',
       requestId: response.data.request_id,
       schoolName: response.data.school_name,
-      maskedMobileNumber: response.data.masked_mobile_number,
+      maskedEmailAddress: response.data.masked_email_address,
       resendSeconds: response.data.resend_in_seconds || 60,
       otp: '',
     }));
@@ -111,7 +111,7 @@ const LoginPage = ({ setUser }) => {
   const handleSchoolForgotPasswordOtpVerify = async () => {
     const response = await api.post('/school/forgot-password/verify-otp', {
       request_id: forgotPasswordState.requestId,
-      mobile_number: forgotPasswordState.mobileNumber,
+      email: forgotPasswordState.resetEmail,
       otp: forgotPasswordState.otp
     });
 
@@ -135,9 +135,9 @@ const LoginPage = ({ setUser }) => {
     setShowForgotPassword(false);
     setPassword('');
     setSuccessMessage(
-      response.data.sms_sent
-        ? 'Password reset successfully. A confirmation SMS has been sent to your registered mobile number.'
-        : `${response.data.message}. ${response.data.sms_message || ''}`.trim()
+      response.data.email_sent
+        ? 'Password reset successfully. A confirmation email has been sent to your registered school email.'
+        : `${response.data.message}. ${response.data.email_message || ''}`.trim()
     );
   };
 
@@ -199,9 +199,9 @@ const LoginPage = ({ setUser }) => {
   const forgotSubtitle = activeTab === 'school'
     ? (
       forgotPasswordState.step === 'identify'
-        ? 'Enter the registered school mobile number to receive an OTP.'
+        ? 'Enter the registered school email address to receive an OTP.'
         : forgotPasswordState.step === 'otp'
-          ? 'Enter the OTP sent to your registered mobile number.'
+          ? 'Enter the OTP sent to your registered school email address.'
           : 'Create and confirm the new password for this school account.'
     )
     : 'Enter your admin email to receive a password reset link.';
@@ -356,18 +356,18 @@ const LoginPage = ({ setUser }) => {
                   <>
                     {forgotPasswordState.step === 'identify' && (
                       <div className="form-group">
-                        <label htmlFor="mobileNumber">Registered Mobile Number</label>
+                        <label htmlFor="resetEmail">Registered School Email</label>
                         <input
-                          type="tel"
-                          id="mobileNumber"
-                          data-testid="forgot-password-mobile-input"
-                          value={forgotPasswordState.mobileNumber}
+                          type="email"
+                          id="resetEmail"
+                          data-testid="forgot-password-email-input"
+                          value={forgotPasswordState.resetEmail}
                           onChange={(e) => setForgotPasswordState((prev) => ({
                             ...prev,
-                            mobileNumber: e.target.value
+                            resetEmail: e.target.value
                           }))}
                           required
-                          placeholder="Enter registered mobile number"
+                          placeholder="Enter registered school email"
                         />
                       </div>
                     )}
@@ -376,7 +376,7 @@ const LoginPage = ({ setUser }) => {
                       <>
                         <div className="forgot-helper-card">
                           <strong>{forgotPasswordState.schoolName || 'Registered School'}</strong>
-                          <span>OTP sent to {forgotPasswordState.maskedMobileNumber}</span>
+                          <span>OTP sent to {forgotPasswordState.maskedEmailAddress}</span>
                         </div>
 
                         <div className="form-group">

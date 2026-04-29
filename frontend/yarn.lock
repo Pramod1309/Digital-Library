@@ -5449,6 +5449,13 @@ emittery@^0.8.1:
   resolved "https://registry.npmjs.org/emittery/-/emittery-0.8.1.tgz"
   integrity sha512-uDfvUjVrfGJJhymx/kz6prltenw1u7WrCg1oa94zYY8xxVpLLUu045LAT0dhDZdXG58/EpPL/5kA180fQ/qudg==
 
+emoji-picker-react@^4.19.1:
+  version "4.19.1"
+  resolved "https://registry.npmjs.org/emoji-picker-react/-/emoji-picker-react-4.19.1.tgz"
+  integrity sha512-BmDdqInKFVYJpv7qS9WI6L9656cDAC+FkDvUjJds56nKHbaVTBNeDmLwKBytRnzu37zWHs9Isg7gt5PT43y6xA==
+  dependencies:
+    flairup "1.0.0"
+
 emoji-regex@^8.0.0:
   version "8.0.0"
   resolved "https://registry.npmjs.org/emoji-regex/-/emoji-regex-8.0.0.tgz"
@@ -6328,6 +6335,11 @@ find-up@^5.0.0:
   dependencies:
     locate-path "^6.0.0"
     path-exists "^4.0.0"
+
+flairup@1.0.0:
+  version "1.0.0"
+  resolved "https://registry.npmjs.org/flairup/-/flairup-1.0.0.tgz"
+  integrity sha512-IKlE+pNvL2R+kVL1kEhUYqRxVqeFnjiIvHWDMLFXNaqyUdFXQM2wte44EfMYJNHkW16X991t2Zg8apKkhv7OBA==
 
 flat-cache@^3.0.4:
   version "3.2.0"
