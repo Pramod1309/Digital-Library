@@ -316,6 +316,11 @@ class AdminBatchWatermarkTemplateRequest(BaseModel):
     resource_id: str
     template: Dict[str, Any]
 
+class AdminBatchWatermarkApplyGroupRequest(BaseModel):
+    source_resource_id: str
+    target_resource_ids: List[str]
+    template: Dict[str, Any]
+
 class AdminBatchWatermarkGenerateRequest(BaseModel):
     school_ids: List[str]
     resource_ids: List[str]
@@ -1377,26 +1382,34 @@ def batch_template_to_text_position(template: Dict[str, Any]) -> Dict[str, Any]:
         "address": template["address"]
     }
 
-def is_supported_batch_watermark_resource(resource: Resource) -> bool:
+def get_batch_watermark_resource_kind(resource: Optional[Resource]) -> Optional[str]:
+    if not resource:
+        return None
+
     file_type = (resource.file_type or "").lower()
     file_path = (resource.file_path or "").lower()
     category = (resource.category or "").lower()
 
-    if category == "multimedia":
-        return False
-
-    if resource.is_video_link:
-        return False
+    if category == "multimedia" or resource.is_video_link:
+        return None
 
     if "audio" in file_type or "video" in file_type:
-        return False
+        return None
 
-    is_pdf = ("pdf" in file_type) or file_path.endswith(".pdf")
+    if ("pdf" in file_type) or file_path.endswith(".pdf"):
+        return "pdf"
+
     is_raster_image = any(file_path.endswith(ext) for ext in (".jpg", ".jpeg", ".png", ".gif", ".bmp", ".tiff", ".webp"))
     if not is_raster_image and "image" in file_type:
         is_raster_image = not file_path.endswith(".svg")
 
-    return is_pdf or is_raster_image
+    if is_raster_image:
+        return "image"
+
+    return None
+
+def is_supported_batch_watermark_resource(resource: Resource) -> bool:
+    return get_batch_watermark_resource_kind(resource) in {"pdf", "image"}
 
 def sanitize_batch_name(value: str, fallback: str) -> str:
     cleaned = re.sub(r'[<>:"/\\\\|?*]+', "_", (value or "").strip())
@@ -2548,6 +2561,74 @@ async def save_admin_batch_watermark_template(
         db.rollback()
         print(f"Error saving admin batch template: {e}")
         raise HTTPException(status_code=500, detail="Failed to save batch watermark layout")
+
+@api_router.post("/admin/batch-watermark/template/apply-group")
+async def apply_admin_batch_watermark_template_to_group(
+    request: AdminBatchWatermarkApplyGroupRequest,
+    current_admin: dict = Depends(get_current_admin),
+    db: Session = Depends(get_db)
+):
+    source_resource = db.query(Resource).filter(Resource.resource_id == request.source_resource_id).first()
+    if not source_resource:
+        raise HTTPException(status_code=404, detail="Source resource not found")
+
+    source_kind = get_batch_watermark_resource_kind(source_resource)
+    if source_kind not in {"pdf", "image"}:
+        raise HTTPException(status_code=400, detail="Only PDF and image resources can be used for batch watermark layouts")
+
+    target_resource_ids = []
+    seen_resource_ids = set()
+    for resource_id in request.target_resource_ids:
+        if resource_id and resource_id not in seen_resource_ids:
+            seen_resource_ids.add(resource_id)
+            target_resource_ids.append(resource_id)
+
+    if not target_resource_ids:
+        raise HTTPException(status_code=400, detail="Select at least one target resource")
+
+    target_resources = db.query(Resource).filter(Resource.resource_id.in_(target_resource_ids)).all()
+    target_map = {resource.resource_id: resource for resource in target_resources}
+
+    missing_target_ids = [resource_id for resource_id in target_resource_ids if resource_id not in target_map]
+    if missing_target_ids:
+        raise HTTPException(status_code=404, detail=f"Resource not found: {', '.join(missing_target_ids)}")
+
+    mismatched_targets = [
+        resource.name
+        for resource_id, resource in target_map.items()
+        if get_batch_watermark_resource_kind(resource) != source_kind
+    ]
+    if mismatched_targets:
+        raise HTTPException(
+            status_code=400,
+            detail=f"All selected target resources must be {source_kind.upper()} files. Mismatched resources: {', '.join(mismatched_targets)}"
+        )
+
+    try:
+        normalized_template = normalize_batch_watermark_template(request.template)
+        for resource_id in target_resource_ids:
+            upsert_admin_batch_template(
+                db,
+                current_admin.get("sub"),
+                resource_id,
+                normalized_template
+            )
+        db.commit()
+
+        return {
+            "message": f"Layout applied to {len(target_resource_ids)} {source_kind.upper()} resource(s)",
+            "resource_type": source_kind,
+            "applied_count": len(target_resource_ids),
+            "applied_resource_ids": target_resource_ids,
+            "template": normalized_template
+        }
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception as e:
+        db.rollback()
+        print(f"Error applying admin batch template to group: {e}")
+        raise HTTPException(status_code=500, detail="Failed to apply layout to selected resources")
 
 @api_router.post("/admin/batch-watermark/generate")
 async def generate_admin_batch_watermark_bundle(

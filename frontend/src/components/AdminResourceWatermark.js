@@ -96,6 +96,12 @@ const isSupportedBatchResource = (resource) => {
   return isPdfResource(resource) || isRasterImageResource(resource);
 };
 
+const getBatchResourceKind = (resource) => {
+  if (isPdfResource(resource)) return 'pdf';
+  if (isRasterImageResource(resource)) return 'image';
+  return null;
+};
+
 const createDefaultTemplate = () => ({
   showLogo: true,
   logoPosition: {
@@ -529,6 +535,7 @@ const AdminResourceWatermark = () => {
   const [templatesByResource, setTemplatesByResource] = useState({});
   const [templateLoading, setTemplateLoading] = useState(false);
   const [savingTemplate, setSavingTemplate] = useState(false);
+  const [bulkApplyLoadingType, setBulkApplyLoadingType] = useState(null);
   const [generating, setGenerating] = useState(false);
   const [downloadingZip, setDownloadingZip] = useState(false);
   const [generatedJob, setGeneratedJob] = useState(null);
@@ -592,9 +599,25 @@ const AdminResourceWatermark = () => {
     resources.find((resource) => resource.resource_id === activeResourceId) || null
   ), [resources, activeResourceId]);
 
+  const selectedPdfResourceIds = useMemo(() => (
+    selectedResourceIds.filter((resourceId) => {
+      const resource = resources.find((item) => item.resource_id === resourceId);
+      return getBatchResourceKind(resource) === 'pdf';
+    })
+  ), [resources, selectedResourceIds]);
+
+  const selectedImageResourceIds = useMemo(() => (
+    selectedResourceIds.filter((resourceId) => {
+      const resource = resources.find((item) => item.resource_id === resourceId);
+      return getBatchResourceKind(resource) === 'image';
+    })
+  ), [resources, selectedResourceIds]);
+
   const previewSchool = useMemo(() => (
     schools.find((school) => school.school_id === previewSchoolId) || null
   ), [schools, previewSchoolId]);
+
+  const activeResourceKind = useMemo(() => getBatchResourceKind(activeResource), [activeResource]);
 
   const currentTemplate = activeResourceId
     ? (templatesByResource[activeResourceId] || createDefaultTemplate())
@@ -888,6 +911,53 @@ const AdminResourceWatermark = () => {
       message.error(error.response?.data?.detail || 'Failed to save watermark layout');
     } finally {
       setSavingTemplate(false);
+    }
+  };
+
+  const handleApplyTemplateToGroup = async (resourceType) => {
+    if (!activeResourceId || !activeResource) {
+      message.warning('Select a resource preview first');
+      return;
+    }
+
+    if (activeResourceKind !== resourceType) {
+      message.warning(`Open a ${resourceType.toUpperCase()} resource preview before applying its layout to all ${resourceType.toUpperCase()} files`);
+      return;
+    }
+
+    const targetResourceIds = resourceType === 'pdf' ? selectedPdfResourceIds : selectedImageResourceIds;
+    if (!targetResourceIds.length) {
+      message.warning(`No ${resourceType.toUpperCase()} resources are selected`);
+      return;
+    }
+
+    try {
+      setBulkApplyLoadingType(resourceType);
+      const serializedTemplate = serializeTemplate(currentTemplate);
+      const response = await api.post('/admin/batch-watermark/template/apply-group', {
+        source_resource_id: activeResourceId,
+        target_resource_ids: targetResourceIds,
+        template: serializedTemplate
+      });
+
+      const nextTemplate = deserializeTemplate(response.data?.template || serializedTemplate);
+      const appliedResourceIds = response.data?.applied_resource_ids || targetResourceIds;
+
+      setTemplatesByResource((previous) => {
+        const nextState = { ...previous };
+        appliedResourceIds.forEach((resourceId) => {
+          nextState[resourceId] = cloneTemplate(nextTemplate);
+        });
+        return nextState;
+      });
+
+      clearGeneratedState();
+      message.success(response.data?.message || `Layout applied to all selected ${resourceType.toUpperCase()} resources`);
+    } catch (error) {
+      console.error(`Error applying layout to ${resourceType} resources:`, error);
+      message.error(error.response?.data?.detail || `Failed to apply layout to selected ${resourceType.toUpperCase()} resources`);
+    } finally {
+      setBulkApplyLoadingType(null);
     }
   };
 
@@ -1660,6 +1730,13 @@ const AdminResourceWatermark = () => {
                         description="Coordinates are saved per resource and reused for every selected school during generation."
                       />
 
+                      <Alert
+                        type="success"
+                        showIcon
+                        message="Bulk apply shortcuts"
+                        description={`Selected queue: ${selectedPdfResourceIds.length} PDF resource(s) and ${selectedImageResourceIds.length} image resource(s). Open one PDF or one image, adjust it once, then apply that layout to every selected file of the same type.`}
+                      />
+
                       <Card
                         size="small"
                         title="Logo Watermark"
@@ -1828,6 +1905,28 @@ const AdminResourceWatermark = () => {
                           block
                         >
                           Save Current Resource Layout
+                        </Button>
+                        <Button
+                          icon={<FilePdfOutlined />}
+                          onClick={() => handleApplyTemplateToGroup('pdf')}
+                          loading={bulkApplyLoadingType === 'pdf'}
+                          disabled={activeResourceKind !== 'pdf' || selectedPdfResourceIds.length === 0}
+                          block
+                        >
+                          {selectedPdfResourceIds.length > 0
+                            ? `Apply Current PDF Layout to All ${selectedPdfResourceIds.length} Selected PDFs`
+                            : 'Apply Current PDF Layout to All Selected PDFs'}
+                        </Button>
+                        <Button
+                          icon={<FileImageOutlined />}
+                          onClick={() => handleApplyTemplateToGroup('image')}
+                          loading={bulkApplyLoadingType === 'image'}
+                          disabled={activeResourceKind !== 'image' || selectedImageResourceIds.length === 0}
+                          block
+                        >
+                          {selectedImageResourceIds.length > 0
+                            ? `Apply Current Image Layout to All ${selectedImageResourceIds.length} Selected Images`
+                            : 'Apply Current Image Layout to All Selected Images'}
                         </Button>
                         <Button
                           type="primary"
