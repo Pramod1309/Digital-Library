@@ -225,7 +225,7 @@ const SchoolDashboard = ({ user, setUser }) => {
             <Route path="/reports" element={<UsageReports user={user} />} />
             
             {/* Settings */}
-            <Route path="/settings" element={<SchoolSettings user={user} />} />
+            <Route path="/settings" element={<SchoolSettings user={user} setUser={setUser} />} />
             
             {/* Catch-all route */}
             <Route path="*" element={<Navigate to="/school" replace />} />

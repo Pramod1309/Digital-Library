@@ -1,196 +1,198 @@
-import React, { useState } from 'react';
-import { Card, Form, Input, Button, Switch, message, Divider, Alert } from 'antd';
-import { LockOutlined, SafetyOutlined, WarningOutlined } from '@ant-design/icons';
+import React, { useEffect, useMemo, useState } from 'react';
+import { Card, Form, Input, Button, Switch, message, Alert, Spin, Row, Col } from 'antd';
+import { LockOutlined, SafetyOutlined } from '@ant-design/icons';
+import api from '../../api/axiosConfig';
 
-const Security = () => {
+const getApiErrorMessage = (error, fallbackMessage) => {
+  const detail = error?.response?.data?.detail;
+  if (Array.isArray(detail)) {
+    return detail.map((item) => item?.msg || item?.message).filter(Boolean).join(', ') || fallbackMessage;
+  }
+  if (typeof detail === 'string' && detail.trim()) {
+    return detail;
+  }
+  return fallbackMessage;
+};
+
+const Security = ({ user }) => {
+  const [settingsForm] = Form.useForm();
+  const [passwordForm] = Form.useForm();
+  const [profile, setProfile] = useState(null);
   const [loading, setLoading] = useState(false);
-  const [form] = Form.useForm();
-  const [twoFactorAuth, setTwoFactorAuth] = useState(false);
+  const [passwordLoading, setPasswordLoading] = useState(false);
+  const [fetching, setFetching] = useState(true);
 
-  const onFinish = async (values) => {
+  useEffect(() => {
+    fetchData();
+  }, []);
+
+  const fetchData = async () => {
+    setFetching(true);
+    try {
+      const [profileResponse, settingsResponse] = await Promise.all([
+        api.get('/admin/settings/profile'),
+        api.get('/admin/settings/security')
+      ]);
+      setProfile(profileResponse.data);
+      settingsForm.setFieldsValue(settingsResponse.data);
+    } catch (error) {
+      message.error(getApiErrorMessage(error, 'Failed to load security settings'));
+    } finally {
+      setFetching(false);
+    }
+  };
+
+  const isSuperAdmin = useMemo(
+    () => (profile?.role || user?.role) === 'superadmin',
+    [profile?.role, user?.role]
+  );
+
+  const saveSecuritySettings = async (values) => {
     setLoading(true);
     try {
-      // Simulate API call
-      await new Promise(resolve => setTimeout(resolve, 1000));
+      await api.put('/admin/settings/security', values);
       message.success('Security settings updated successfully');
+      fetchData();
     } catch (error) {
-      message.error('Failed to update security settings');
+      message.error(getApiErrorMessage(error, 'Failed to update security settings'));
     } finally {
       setLoading(false);
     }
   };
 
-  const handlePasswordChange = async (values) => {
-    setLoading(true);
+  const changePassword = async (values) => {
+    setPasswordLoading(true);
     try {
-      // Simulate API call
-      await new Promise(resolve => setTimeout(resolve, 1000));
+      await api.post('/admin/settings/security/change-password', values);
+      passwordForm.resetFields();
       message.success('Password changed successfully');
-      form.resetFields(['currentPassword', 'newPassword', 'confirmPassword']);
     } catch (error) {
-      message.error('Failed to change password');
+      message.error(getApiErrorMessage(error, 'Failed to change password'));
     } finally {
-      setLoading(false);
+      setPasswordLoading(false);
     }
   };
+
+  if (fetching) {
+    return (
+      <div className="settings-card">
+        <Card title="Security Settings">
+          <div style={{ textAlign: 'center', padding: '32px 0' }}>
+            <Spin size="large" />
+          </div>
+        </Card>
+      </div>
+    );
+  }
 
   return (
     <div className="settings-card">
       <Card title="Security Settings" style={{ marginBottom: 24 }}>
-        <Form
-          layout="vertical"
-          onFinish={onFinish}
-          initialValues={{
-            sessionTimeout: 30,
-            loginAttempts: 5,
-            passwordExpiry: 90,
-            enableBruteForce: true,
-          }}
-        >
-          <Form.Item
-            name="sessionTimeout"
-            label="Session Timeout (minutes)"
-            rules={[{ required: true }]}
-          >
-            <Input type="number" min={1} />
-          </Form.Item>
+        <Alert
+          type={isSuperAdmin ? 'success' : 'info'}
+          showIcon
+          icon={<SafetyOutlined />}
+          style={{ marginBottom: 24 }}
+          message={isSuperAdmin ? 'Super Admin controls' : 'Read-only security overview'}
+          description={
+            isSuperAdmin
+              ? 'You can update platform-wide security policies for admins and schools.'
+              : 'Only the super admin can change platform-wide security policies. You can still change your own password below.'
+          }
+        />
 
-          <Form.Item
-            name="loginAttempts"
-            label="Max Login Attempts"
-            rules={[{ required: true }]}
-          >
-            <Input type="number" min={1} max={10} />
-          </Form.Item>
+        <Form form={settingsForm} layout="vertical" onFinish={saveSecuritySettings} disabled={!isSuperAdmin}>
+          <Row gutter={16}>
+            <Col xs={24} md={8}>
+              <Form.Item
+                name="session_timeout_minutes"
+                label="Session Timeout (minutes)"
+                rules={[{ required: true, message: 'Please enter session timeout' }]}
+              >
+                <Input type="number" min={5} />
+              </Form.Item>
+            </Col>
+            <Col xs={24} md={8}>
+              <Form.Item
+                name="max_login_attempts"
+                label="Max Login Attempts"
+                rules={[{ required: true, message: 'Please enter max login attempts' }]}
+              >
+                <Input type="number" min={1} />
+              </Form.Item>
+            </Col>
+            <Col xs={24} md={8}>
+              <Form.Item
+                name="password_expiry_days"
+                label="Password Expiry (days)"
+                rules={[{ required: true, message: 'Please enter password expiry days' }]}
+              >
+                <Input type="number" min={1} />
+              </Form.Item>
+            </Col>
+          </Row>
 
-          <Form.Item
-            name="passwordExpiry"
-            label="Password Expiry (days)"
-            rules={[{ required: true }]}
-          >
-            <Input type="number" min={1} />
-          </Form.Item>
-
-          <Form.Item
-            name="enableBruteForce"
-            label="Enable Brute Force Protection"
-            valuePropName="checked"
-          >
+          <Form.Item name="enable_brute_force" label="Enable Brute Force Protection" valuePropName="checked">
             <Switch />
           </Form.Item>
 
-          <Form.Item>
-            <Button type="primary" htmlType="submit" loading={loading}>
-              Save Settings
-            </Button>
+          <Form.Item name="allow_school_profile_edits" label="Allow School Profile Edits" valuePropName="checked">
+            <Switch />
           </Form.Item>
+
+          <Form.Item name="require_strong_passwords" label="Require Strong Passwords" valuePropName="checked">
+            <Switch />
+          </Form.Item>
+
+          {isSuperAdmin && (
+            <Form.Item>
+              <Button type="primary" htmlType="submit" loading={loading}>
+                Save Security Settings
+              </Button>
+            </Form.Item>
+          )}
         </Form>
       </Card>
 
-      <Card title="Two-Factor Authentication" style={{ marginBottom: 24 }}>
-        <div style={{ marginBottom: 24 }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <div>
-              <h4>Two-Factor Authentication</h4>
-              <p>Add an extra layer of security to your account</p>
-            </div>
-            <Switch 
-              checked={twoFactorAuth} 
-              onChange={setTwoFactorAuth} 
-              checkedChildren="On" 
-              unCheckedChildren="Off" 
-            />
-          </div>
-          
-          {twoFactorAuth && (
-            <div style={{ marginTop: 16 }}>
-              <Alert
-                message="Two-Factor Authentication is enabled"
-                type="success"
-                showIcon
-                icon={<SafetyOutlined />}
-                style={{ marginBottom: 16 }}
-              />
-              <p>Use Google Authenticator or Authy to scan the QR code below:</p>
-              <div style={{ 
-                background: '#f5f5f5', 
-                padding: 20, 
-                textAlign: 'center',
-                margin: '16px 0',
-                borderRadius: 4
-              }}>
-                <p>QR Code Placeholder</p>
-                <p style={{ fontSize: 12, color: '#999' }}>Or enter this code manually: ABCDEFGHIJKLMNOP</p>
-              </div>
-              <Form.Item
-                name="verificationCode"
-                label="Verification Code"
-                rules={[{ required: true, message: 'Please input the verification code!' }]}
-              >
-                <Input placeholder="Enter 6-digit code" maxLength={6} />
-              </Form.Item>
-              <Button type="primary">Verify and Activate</Button>
-            </div>
-          )}
-        </div>
-      </Card>
-
       <Card title="Change Password">
-        <Form
-          layout="vertical"
-          onFinish={handlePasswordChange}
-        >
+        <Form form={passwordForm} layout="vertical" onFinish={changePassword}>
           <Form.Item
-            name="currentPassword"
+            name="current_password"
             label="Current Password"
-            rules={[{ required: true, message: 'Please input your current password!' }]}
+            rules={[{ required: true, message: 'Please enter current password' }]}
           >
-            <Input.Password
-              prefix={<LockOutlined />}
-              placeholder="Enter current password"
-            />
+            <Input.Password prefix={<LockOutlined />} placeholder="Current password" />
           </Form.Item>
 
           <Form.Item
-            name="newPassword"
+            name="new_password"
             label="New Password"
-            rules={[
-              { required: true, message: 'Please input your new password!' },
-              { min: 8, message: 'Password must be at least 8 characters!' },
-            ]}
-            hasFeedback
+            rules={[{ required: true, message: 'Please enter new password' }]}
           >
-            <Input.Password
-              prefix={<LockOutlined />}
-              placeholder="Enter new password"
-            />
+            <Input.Password prefix={<LockOutlined />} placeholder="New password" />
           </Form.Item>
 
           <Form.Item
-            name="confirmPassword"
+            name="confirm_password"
             label="Confirm New Password"
-            dependencies={['newPassword']}
-            hasFeedback
+            dependencies={['new_password']}
             rules={[
-              { required: true, message: 'Please confirm your new password!' },
+              { required: true, message: 'Please confirm new password' },
               ({ getFieldValue }) => ({
                 validator(_, value) {
-                  if (!value || getFieldValue('newPassword') === value) {
+                  if (!value || getFieldValue('new_password') === value) {
                     return Promise.resolve();
                   }
-                  return Promise.reject('The two passwords do not match!');
-                },
-              }),
+                  return Promise.reject(new Error('Passwords do not match'));
+                }
+              })
             ]}
           >
-            <Input.Password
-              prefix={<LockOutlined />}
-              placeholder="Confirm new password"
-            />
+            <Input.Password prefix={<LockOutlined />} placeholder="Confirm new password" />
           </Form.Item>
 
           <Form.Item>
-            <Button type="primary" htmlType="submit" loading={loading}>
+            <Button type="primary" htmlType="submit" loading={passwordLoading}>
               Change Password
             </Button>
           </Form.Item>

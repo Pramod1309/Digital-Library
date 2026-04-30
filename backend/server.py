@@ -44,7 +44,8 @@ from database import (
     get_db, Admin, School, PasswordResetToken, SchoolPasswordResetOTP, ActivityLog, Resource, 
     Announcement, AnnouncementRead, AnnouncementAttachment, SupportTicket, ChatMessage, ChatAttachment, ResourceDownload, 
     KnowledgeArticle, SchoolLogoPosition, SchoolWatermarkText, engine, Base, AdminResourceWatermark,
-    AdminBatchWatermarkTemplate, SchoolSearchLog, SupportTicketAttachment
+    AdminBatchWatermarkTemplate, SchoolSearchLog, SupportTicketAttachment, PlatformSetting,
+    ContentEntry, SchoolPreference
 )
 from init_db import init_database
 
@@ -84,6 +85,10 @@ UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 RESOURCES_UPLOAD_DIR = ROOT_DIR / "uploads" / "resources"
 RESOURCES_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
+# Create settings upload directory
+SETTINGS_UPLOAD_DIR = ROOT_DIR / "uploads" / "settings"
+SETTINGS_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+
 # Create output directory for generated admin batch watermark bundles
 BATCH_WATERMARK_OUTPUT_DIR = ROOT_DIR / "generated" / "batch_watermark_jobs"
 BATCH_WATERMARK_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -114,6 +119,10 @@ class LoginResponse(BaseModel):
     user_type: str
     email: str
     name: Optional[str] = None
+    role: Optional[str] = None
+    status: Optional[str] = None
+    phone: Optional[str] = None
+    avatar_path: Optional[str] = None
     school_id: Optional[str] = None
     logo_path: Optional[str] = None
 
@@ -155,6 +164,129 @@ class SchoolResponse(BaseModel):
     logo_path: Optional[str] = None
     created_at: datetime
     updated_at: datetime
+
+class AdminProfileResponse(BaseModel):
+    id: int
+    email: str
+    full_name: Optional[str] = None
+    phone: Optional[str] = None
+    role: str
+    status: str
+    avatar_path: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime
+    last_login_at: Optional[datetime] = None
+
+class AdminProfileUpdateRequest(BaseModel):
+    full_name: str
+    phone: Optional[str] = None
+
+class AdminUserCreateRequest(BaseModel):
+    full_name: str
+    email: EmailStr
+    password: str
+    phone: Optional[str] = None
+    role: str = "admin"
+
+class AdminUserUpdateRequest(BaseModel):
+    full_name: Optional[str] = None
+    phone: Optional[str] = None
+    role: Optional[str] = None
+    status: Optional[str] = None
+    password: Optional[str] = None
+
+class AdminUserResponse(BaseModel):
+    id: int
+    email: str
+    full_name: Optional[str] = None
+    phone: Optional[str] = None
+    role: str
+    status: str
+    avatar_path: Optional[str] = None
+    created_by: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime
+    last_login_at: Optional[datetime] = None
+
+class BrandingSettingsResponse(BaseModel):
+    site_name: str
+    tagline: str
+    support_email: Optional[str] = None
+    support_phone: Optional[str] = None
+    primary_color: str
+    secondary_color: str
+    dark_mode: bool = False
+    logo_path: Optional[str] = None
+    favicon_path: Optional[str] = None
+    updated_at: Optional[datetime] = None
+
+class SecuritySettingsRequest(BaseModel):
+    session_timeout_minutes: int
+    max_login_attempts: int
+    password_expiry_days: int
+    enable_brute_force: bool = True
+    allow_school_profile_edits: bool = True
+    require_strong_passwords: bool = True
+
+class SecuritySettingsResponse(SecuritySettingsRequest):
+    updated_at: Optional[datetime] = None
+
+class AdminPasswordChangeRequest(BaseModel):
+    current_password: str
+    new_password: str
+    confirm_password: str
+
+class ContentEntryCreateRequest(BaseModel):
+    entry_type: str
+    title: str
+    slug: Optional[str] = None
+    section_key: Optional[str] = None
+    content: Optional[str] = None
+    is_active: bool = True
+
+class ContentEntryUpdateRequest(BaseModel):
+    title: Optional[str] = None
+    slug: Optional[str] = None
+    section_key: Optional[str] = None
+    content: Optional[str] = None
+    is_active: Optional[bool] = None
+
+class ContentEntryResponse(BaseModel):
+    id: int
+    entry_type: str
+    title: str
+    slug: Optional[str] = None
+    section_key: Optional[str] = None
+    content: Optional[str] = None
+    is_active: bool
+    created_by: Optional[str] = None
+    updated_by: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime
+
+class SchoolPreferenceResponse(BaseModel):
+    preferred_language: str
+    email_notifications: bool
+    announcement_notifications: bool
+    chat_notifications: bool
+    ticket_notifications: bool
+    auto_mark_announcements_read: bool
+    dashboard_layout: str
+    updated_at: Optional[datetime] = None
+
+class SchoolPreferenceUpdateRequest(BaseModel):
+    preferred_language: str
+    email_notifications: bool
+    announcement_notifications: bool
+    chat_notifications: bool
+    ticket_notifications: bool
+    auto_mark_announcements_read: bool
+    dashboard_layout: str
+
+class SchoolPasswordChangeRequest(BaseModel):
+    current_password: str
+    new_password: str
+    confirm_password: str
 
 class ResourceCreate(BaseModel):
     name: str
@@ -242,6 +374,9 @@ class SupportTicketResponse(BaseModel):
 
 class ChatMessageCreate(BaseModel):
     school_id: str
+    message: str
+
+class ChatMessageUpdateRequest(BaseModel):
     message: str
 
 class ChatAttachmentResponse(BaseModel):
@@ -898,6 +1033,20 @@ def normalize_optional_csv_text(value: Optional[str]) -> Optional[str]:
     normalized = value.strip()
     return normalized or None
 
+def normalize_optional_string(value: Optional[str]) -> Optional[str]:
+    if value is None:
+        return None
+    normalized = str(value).strip()
+    return normalized or None
+
+def normalize_csv_input(value: Optional[Union[str, List[str]]]) -> Optional[str]:
+    if value is None:
+        return None
+    if isinstance(value, list):
+        normalized_items = [str(item).strip() for item in value if str(item).strip()]
+        return ",".join(normalized_items) if normalized_items else None
+    return normalize_optional_csv_text(value)
+
 def iter_valid_uploads(files: Optional[List[UploadFile]]) -> List[UploadFile]:
     return [
         upload
@@ -926,6 +1075,15 @@ def delete_announcement_attachments(db: Session, announcement_id: int) -> None:
 def delete_support_ticket_attachments(db: Session, ticket_id: str) -> None:
     attachments = db.query(SupportTicketAttachment).filter(
         SupportTicketAttachment.ticket_id == ticket_id
+    ).all()
+
+    for attachment in attachments:
+        delete_file_if_present(attachment.file_path)
+        db.delete(attachment)
+
+def delete_chat_attachments(db: Session, message_id: int) -> None:
+    attachments = db.query(ChatAttachment).filter(
+        ChatAttachment.message_id == message_id
     ).all()
 
     for attachment in attachments:
@@ -1038,6 +1196,219 @@ def ensure_default_knowledge_articles(db: Session) -> None:
         db.add(KnowledgeArticle(**article))
 
     db.commit()
+
+def admin_to_response(admin: Admin) -> AdminUserResponse:
+    return AdminUserResponse(
+        id=admin.id,
+        email=admin.email,
+        full_name=admin.full_name,
+        phone=admin.phone,
+        role=admin.role or "admin",
+        status=admin.status or "active",
+        avatar_path=admin.avatar_path,
+        created_by=admin.created_by,
+        created_at=admin.created_at,
+        updated_at=admin.updated_at,
+        last_login_at=admin.last_login_at
+    )
+
+def get_admin_record_or_404(db: Session, email: str) -> Admin:
+    admin = db.query(Admin).filter(Admin.email == email).first()
+    if not admin:
+        raise HTTPException(status_code=404, detail="Admin not found")
+    return admin
+
+def require_superadmin(current_admin: dict, db: Session) -> Admin:
+    admin_record = get_admin_record_or_404(db, current_admin.get("sub"))
+    if (admin_record.role or "admin") != "superadmin":
+        raise HTTPException(status_code=403, detail="Only super admin can perform this action")
+    return admin_record
+
+def get_platform_setting_value(db: Session, setting_key: str, default_value: Dict[str, Any]) -> Dict[str, Any]:
+    record = db.query(PlatformSetting).filter(PlatformSetting.setting_key == setting_key).first()
+    if not record:
+        return dict(default_value)
+    try:
+        parsed = json.loads(record.value_json or "{}")
+        if isinstance(parsed, dict):
+            merged = dict(default_value)
+            merged.update(parsed)
+            return merged
+    except Exception:
+        pass
+    return dict(default_value)
+
+def upsert_platform_setting(db: Session, setting_key: str, value: Dict[str, Any], updated_by: Optional[str]) -> PlatformSetting:
+    record = db.query(PlatformSetting).filter(PlatformSetting.setting_key == setting_key).first()
+    if not record:
+        record = PlatformSetting(setting_key=setting_key)
+        db.add(record)
+
+    record.value_json = json.dumps(value)
+    record.updated_by = updated_by
+    record.updated_at = datetime.utcnow()
+    return record
+
+DEFAULT_BRANDING_SETTINGS = {
+    "site_name": "Wonder Learning India Digital Library",
+    "tagline": "Empowering preschools with a digital treasure trove",
+    "support_email": "support@wonderlearning.in",
+    "support_phone": "",
+    "primary_color": "#1890ff",
+    "secondary_color": "#52c41a",
+    "dark_mode": False,
+    "logo_path": "/wonder-logo.png",
+    "favicon_path": None
+}
+
+DEFAULT_SECURITY_SETTINGS = {
+    "session_timeout_minutes": 30,
+    "max_login_attempts": 5,
+    "password_expiry_days": 90,
+    "enable_brute_force": True,
+    "allow_school_profile_edits": True,
+    "require_strong_passwords": True
+}
+
+DEFAULT_CMS_ENTRIES = [
+    {
+        "entry_type": "page",
+        "title": "About Wonder Learning India",
+        "slug": "about-us",
+        "section_key": None,
+        "content": "Wonder Learning India helps preschools manage digital books, rhymes, activities, announcements, and support workflows from one platform.",
+        "is_active": True
+    },
+    {
+        "entry_type": "page",
+        "title": "Support Overview",
+        "slug": "support-overview",
+        "section_key": None,
+        "content": "Use chat for quick help and support tickets for tracked issue resolution with attachment evidence.",
+        "is_active": True
+    },
+    {
+        "entry_type": "section",
+        "title": "Homepage Hero",
+        "slug": None,
+        "section_key": "home.hero",
+        "content": "India's digital library for young minds.",
+        "is_active": True
+    },
+    {
+        "entry_type": "section",
+        "title": "Announcements Help",
+        "slug": None,
+        "section_key": "communication.announcements.help",
+        "content": "Publish targeted announcements with documents, visuals, and school-facing updates.",
+        "is_active": True
+    }
+]
+
+def ensure_default_cms_entries(db: Session) -> None:
+    has_entries = db.query(ContentEntry.id).first()
+    if has_entries:
+        return
+
+    for entry in DEFAULT_CMS_ENTRIES:
+        db.add(ContentEntry(
+            entry_type=entry["entry_type"],
+            title=entry["title"],
+            slug=entry["slug"],
+            section_key=entry["section_key"],
+            content=entry["content"],
+            is_active=entry["is_active"],
+            created_by="system",
+            updated_by="system"
+        ))
+
+    db.commit()
+
+def save_settings_upload(file: UploadFile, prefix: str) -> str:
+    upload_dir = SETTINGS_UPLOAD_DIR / prefix
+    upload_dir.mkdir(parents=True, exist_ok=True)
+    file_extension = Path(file.filename or "").suffix
+    unique_filename = f"{prefix}_{uuid.uuid4().hex[:10]}{file_extension}"
+    relative_path = Path("uploads") / "settings" / prefix / unique_filename
+    absolute_path = ROOT_DIR / relative_path
+
+    with open(absolute_path, "wb") as buffer:
+        shutil.copyfileobj(file.file, buffer)
+
+    return f"/{relative_path.as_posix()}"
+
+def get_school_preference_record(db: Session, school_id: str) -> SchoolPreference:
+    preference = db.query(SchoolPreference).filter(SchoolPreference.school_id == school_id).first()
+    if preference:
+        return preference
+
+    preference = SchoolPreference(school_id=school_id)
+    db.add(preference)
+    db.commit()
+    db.refresh(preference)
+    return preference
+
+def school_preference_to_response(preference: SchoolPreference) -> SchoolPreferenceResponse:
+    return SchoolPreferenceResponse(
+        preferred_language=preference.preferred_language,
+        email_notifications=preference.email_notifications,
+        announcement_notifications=preference.announcement_notifications,
+        chat_notifications=preference.chat_notifications,
+        ticket_notifications=preference.ticket_notifications,
+        auto_mark_announcements_read=preference.auto_mark_announcements_read,
+        dashboard_layout=preference.dashboard_layout,
+        updated_at=preference.updated_at
+    )
+
+def slugify_text(value: str) -> str:
+    normalized = re.sub(r"[^a-zA-Z0-9]+", "-", (value or "").strip().lower()).strip("-")
+    return normalized or "content-entry"
+
+def is_strong_password(password: str) -> bool:
+    if len(password or "") < 8:
+        return False
+    return (
+        re.search(r"[A-Z]", password) is not None
+        and re.search(r"[a-z]", password) is not None
+        and re.search(r"\d", password) is not None
+        and re.search(r"[^A-Za-z0-9]", password) is not None
+    )
+
+async def extract_announcement_payload(
+    request: Request,
+    title: Optional[str],
+    content: Optional[str],
+    priority: Optional[str],
+    target_schools: Optional[str]
+) -> Dict[str, Optional[str]]:
+    resolved_title = normalize_optional_string(title)
+    resolved_content = normalize_optional_string(content)
+    resolved_priority = normalize_optional_string(priority) or "normal"
+    resolved_targets: Optional[Union[str, List[str]]] = target_schools
+
+    if not resolved_title or not resolved_content:
+        content_type = (request.headers.get("content-type") or "").lower()
+        if "application/json" in content_type:
+            try:
+                payload = await request.json()
+            except Exception:
+                payload = {}
+
+            if isinstance(payload, dict):
+                resolved_title = normalize_optional_string(resolved_title or payload.get("title"))
+                resolved_content = normalize_optional_string(resolved_content or payload.get("content"))
+                resolved_priority = normalize_optional_string(payload.get("priority")) or resolved_priority
+                resolved_targets = payload.get("target_schools", resolved_targets)
+
+    if not resolved_title or not resolved_content:
+        raise HTTPException(status_code=422, detail="Title and content are required")
+
+    return {
+        "title": resolved_title,
+        "content": resolved_content,
+        "priority": resolved_priority,
+        "target_schools": normalize_csv_input(resolved_targets)
+    }
 
 def get_unread_school_ticket_updates(db: Session, school_id: str) -> List[SupportTicket]:
     tickets = db.query(SupportTicket).filter(
@@ -3563,9 +3934,24 @@ async def admin_login(login_data: LoginRequest, db: Session = Depends(get_db)):
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid email or password"
         )
+
+    if (admin.status or "active") != "active":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="This admin account is inactive. Please contact the super admin."
+        )
+
+    admin.last_login_at = datetime.utcnow()
+    db.commit()
+    db.refresh(admin)
     
     access_token = create_access_token(
-        data={"sub": admin.email, "user_type": "admin"}
+        data={
+            "sub": admin.email,
+            "user_type": "admin",
+            "role": admin.role or "admin",
+            "name": admin.full_name or "Admin"
+        }
     )
     
     return LoginResponse(
@@ -3573,7 +3959,11 @@ async def admin_login(login_data: LoginRequest, db: Session = Depends(get_db)):
         token_type="bearer",
         user_type="admin",
         email=admin.email,
-        name="Admin"
+        name=admin.full_name or "Admin",
+        role=admin.role or "admin",
+        status=admin.status or "active",
+        phone=admin.phone,
+        avatar_path=admin.avatar_path
     )
 
 @api_router.post("/school/login", response_model=LoginResponse)
@@ -3637,7 +4027,8 @@ async def school_login(login_data: LoginRequest, db: Session = Depends(get_db)):
         email=school.email,
         name=school.school_name,
         school_id=school.school_id,
-        logo_path=logo_path
+        logo_path=logo_path,
+        phone=school.contact_number
     )
 
 @api_router.post("/forgot-password")
@@ -5207,19 +5598,22 @@ async def debug_files():
 
 @api_router.post("/admin/announcements", response_model=AnnouncementResponse)
 async def create_announcement(
-    title: str = Form(...),
-    content: str = Form(...),
-    priority: str = Form('normal'),
+    request: Request,
+    title: Optional[str] = Form(None),
+    content: Optional[str] = Form(None),
+    priority: Optional[str] = Form(None),
     target_schools: Optional[str] = Form(None),
     files: Optional[List[UploadFile]] = File(None),
     db: Session = Depends(get_db)
 ):
     """Create announcement with file attachments - Admin only"""
+    payload = await extract_announcement_payload(request, title, content, priority, target_schools)
+
     new_announcement = Announcement(
-        title=title,
-        content=content,
-        priority=priority,
-        target_schools=normalize_optional_csv_text(target_schools)
+        title=payload["title"],
+        content=payload["content"],
+        priority=payload["priority"],
+        target_schools=payload["target_schools"]
     )
     
     db.add(new_announcement)
@@ -5318,9 +5712,10 @@ async def get_admin_announcements(db: Session = Depends(get_db)):
 @api_router.put("/admin/announcements/{announcement_id}", response_model=AnnouncementResponse)
 async def update_announcement(
     announcement_id: int,
-    title: str = Form(...),
-    content: str = Form(...),
-    priority: str = Form('normal'),
+    request: Request,
+    title: Optional[str] = Form(None),
+    content: Optional[str] = Form(None),
+    priority: Optional[str] = Form(None),
     target_schools: Optional[str] = Form(None),
     files: Optional[List[UploadFile]] = File(None),
     db: Session = Depends(get_db)
@@ -5330,11 +5725,13 @@ async def update_announcement(
     
     if not existing:
         raise HTTPException(status_code=404, detail="Announcement not found")
+
+    payload = await extract_announcement_payload(request, title, content, priority, target_schools)
     
-    existing.title = title
-    existing.content = content
-    existing.priority = priority
-    existing.target_schools = normalize_optional_csv_text(target_schools)
+    existing.title = payload["title"]
+    existing.content = payload["content"]
+    existing.priority = payload["priority"]
+    existing.target_schools = payload["target_schools"]
     existing.updated_at = datetime.utcnow()
 
     upload_dir = ROOT_DIR / "uploads" / "announcements"
@@ -5786,6 +6183,13 @@ async def send_chat_message(
     db: Session = Depends(get_db)
 ):
     """Send chat message"""
+    if current_user.get("user_type") == "school":
+        if sender_type != "school" or school_id != current_user.get("school_id"):
+            raise HTTPException(status_code=403, detail="School chat sender mismatch")
+    elif current_user.get("user_type") == "admin":
+        if sender_type != "admin":
+            raise HTTPException(status_code=403, detail="Admin chat sender mismatch")
+
     new_message = ChatMessage(
         school_id=school_id,
         school_name=school_name,
@@ -5870,6 +6274,9 @@ async def get_chat_messages(
     db: Session = Depends(get_db)
 ):
     """Get chat messages for a school"""
+    if current_user.get("user_type") == "school" and school_id != current_user.get("school_id"):
+        raise HTTPException(status_code=403, detail="Not enough permissions for this chat thread")
+
     messages = db.query(ChatMessage).filter(
         ChatMessage.school_id == school_id
     ).order_by(ChatMessage.created_at.asc()).all()
@@ -5905,6 +6312,79 @@ async def get_chat_messages(
         result.append(message_response)
     
     return result
+
+@api_router.put("/chat/messages/{message_id}", response_model=ChatMessageResponse)
+async def update_chat_message(
+    message_id: int,
+    payload: ChatMessageUpdateRequest,
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Update an existing chat message."""
+    chat_message = db.query(ChatMessage).filter(ChatMessage.id == message_id).first()
+    if not chat_message:
+        raise HTTPException(status_code=404, detail="Message not found")
+
+    if current_user.get("user_type") == "school":
+        if chat_message.school_id != current_user.get("school_id") or chat_message.sender_type != "school":
+            raise HTTPException(status_code=403, detail="You can update only your own school messages")
+
+    normalized_message = normalize_optional_string(payload.message)
+    if not normalized_message:
+        raise HTTPException(status_code=422, detail="Message cannot be empty")
+
+    chat_message.message = normalized_message
+    db.commit()
+    db.refresh(chat_message)
+
+    attachments = db.query(ChatAttachment).filter(
+        ChatAttachment.message_id == chat_message.id
+    ).all()
+
+    attachment_responses = [
+        ChatAttachmentResponse(
+            id=attachment.id,
+            filename=attachment.filename,
+            original_name=attachment.original_name,
+            file_type=attachment.file_type,
+            file_size=attachment.file_size,
+            url=f"/api/chat/messages/{chat_message.id}/files/{attachment.id}"
+        )
+        for attachment in attachments
+    ]
+
+    return ChatMessageResponse(
+        id=chat_message.id,
+        school_id=chat_message.school_id,
+        school_name=chat_message.school_name,
+        sender_type=chat_message.sender_type,
+        message=chat_message.message,
+        is_read=chat_message.is_read,
+        created_at=chat_message.created_at,
+        attachments=attachment_responses
+    )
+
+@api_router.delete("/chat/messages/{message_id}")
+async def delete_chat_message(
+    message_id: int,
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Delete a chat message and its attachments."""
+    chat_message = db.query(ChatMessage).filter(ChatMessage.id == message_id).first()
+    if not chat_message:
+        raise HTTPException(status_code=404, detail="Message not found")
+
+    if current_user.get("user_type") == "school":
+        if chat_message.school_id != current_user.get("school_id") or chat_message.sender_type != "school":
+            raise HTTPException(status_code=403, detail="You can delete only your own school messages")
+
+    delete_chat_attachments(db, chat_message.id)
+    db.flush()
+    db.delete(chat_message)
+    db.commit()
+
+    return {"message": "Chat message deleted successfully"}
 
 @api_router.get("/chat/messages/{message_id}/files/{file_id}")
 async def get_chat_attachment_file(
@@ -5949,6 +6429,9 @@ async def mark_messages_read(
     db: Session = Depends(get_db)
 ):
     """Mark messages as read"""
+    if current_user.get("user_type") == "school" and school_id != current_user.get("school_id"):
+        raise HTTPException(status_code=403, detail="Not enough permissions for this chat thread")
+
     # Mark all messages from opposite sender as read
     opposite_sender = 'school' if sender_type == 'admin' else 'admin'
     
@@ -5961,6 +6444,483 @@ async def mark_messages_read(
     db.commit()
     
     return {"message": "Messages marked as read"}
+
+# ==================== SETTINGS ROUTES ====================
+
+@api_router.get("/admin/settings/profile", response_model=AdminProfileResponse)
+async def get_admin_profile(
+    current_admin: dict = Depends(get_current_admin),
+    db: Session = Depends(get_db)
+):
+    admin_record = get_admin_record_or_404(db, current_admin.get("sub"))
+    return AdminProfileResponse(
+        id=admin_record.id,
+        email=admin_record.email,
+        full_name=admin_record.full_name,
+        phone=admin_record.phone,
+        role=admin_record.role or "admin",
+        status=admin_record.status or "active",
+        avatar_path=admin_record.avatar_path,
+        created_at=admin_record.created_at,
+        updated_at=admin_record.updated_at,
+        last_login_at=admin_record.last_login_at
+    )
+
+@api_router.put("/admin/settings/profile", response_model=AdminProfileResponse)
+async def update_admin_profile(
+    full_name: str = Form(...),
+    phone: Optional[str] = Form(None),
+    avatar: Optional[UploadFile] = File(None),
+    current_admin: dict = Depends(get_current_admin),
+    db: Session = Depends(get_db)
+):
+    admin_record = get_admin_record_or_404(db, current_admin.get("sub"))
+    admin_record.full_name = normalize_optional_string(full_name) or admin_record.full_name
+    admin_record.phone = normalize_optional_string(phone)
+
+    if avatar and avatar.filename:
+      admin_record.avatar_path = save_settings_upload(avatar, "admin_avatars")
+
+    admin_record.updated_at = datetime.utcnow()
+    db.commit()
+    db.refresh(admin_record)
+
+    return AdminProfileResponse(
+        id=admin_record.id,
+        email=admin_record.email,
+        full_name=admin_record.full_name,
+        phone=admin_record.phone,
+        role=admin_record.role or "admin",
+        status=admin_record.status or "active",
+        avatar_path=admin_record.avatar_path,
+        created_at=admin_record.created_at,
+        updated_at=admin_record.updated_at,
+        last_login_at=admin_record.last_login_at
+    )
+
+@api_router.get("/admin/settings/admin-users", response_model=List[AdminUserResponse])
+async def get_admin_users(
+    current_admin: dict = Depends(get_current_admin),
+    db: Session = Depends(get_db)
+):
+    get_admin_record_or_404(db, current_admin.get("sub"))
+    admins = db.query(Admin).order_by(Admin.created_at.asc()).all()
+    return [admin_to_response(admin) for admin in admins]
+
+@api_router.post("/admin/settings/admin-users", response_model=AdminUserResponse)
+async def create_admin_user(
+    payload: AdminUserCreateRequest,
+    current_admin: dict = Depends(get_current_admin),
+    db: Session = Depends(get_db)
+):
+    creator = require_superadmin(current_admin, db)
+
+    if db.query(Admin).filter(Admin.email == payload.email.lower()).first():
+        raise HTTPException(status_code=409, detail="An admin with this email already exists")
+
+    security_settings = get_platform_setting_value(db, "security", DEFAULT_SECURITY_SETTINGS)
+    if security_settings.get("require_strong_passwords") and not is_strong_password(payload.password):
+        raise HTTPException(status_code=400, detail="Password must be at least 8 characters and include upper, lower, number, and special character")
+
+    new_admin = Admin(
+        email=payload.email.lower(),
+        password_plain=payload.password,
+        password_hash=get_password_hash(payload.password),
+        full_name=normalize_optional_string(payload.full_name),
+        phone=normalize_optional_string(payload.phone),
+        role="admin",
+        status="active",
+        created_by=creator.email
+    )
+    db.add(new_admin)
+    db.commit()
+    db.refresh(new_admin)
+    return admin_to_response(new_admin)
+
+@api_router.put("/admin/settings/admin-users/{admin_id}", response_model=AdminUserResponse)
+async def update_admin_user(
+    admin_id: int,
+    payload: AdminUserUpdateRequest,
+    current_admin: dict = Depends(get_current_admin),
+    db: Session = Depends(get_db)
+):
+    current_admin_record = get_admin_record_or_404(db, current_admin.get("sub"))
+    target_admin = db.query(Admin).filter(Admin.id == admin_id).first()
+    if not target_admin:
+        raise HTTPException(status_code=404, detail="Admin user not found")
+
+    can_manage_all = (current_admin_record.role or "admin") == "superadmin"
+    is_self = current_admin_record.id == target_admin.id
+    if not can_manage_all and not is_self:
+        raise HTTPException(status_code=403, detail="You can update only your own profile details")
+
+    if payload.full_name is not None:
+        target_admin.full_name = normalize_optional_string(payload.full_name)
+    if payload.phone is not None:
+        target_admin.phone = normalize_optional_string(payload.phone)
+
+    if payload.password:
+        security_settings = get_platform_setting_value(db, "security", DEFAULT_SECURITY_SETTINGS)
+        if security_settings.get("require_strong_passwords") and not is_strong_password(payload.password):
+            raise HTTPException(status_code=400, detail="Password must be at least 8 characters and include upper, lower, number, and special character")
+        target_admin.password_plain = payload.password
+        target_admin.password_hash = get_password_hash(payload.password)
+
+    if can_manage_all:
+        if payload.status is not None:
+            normalized_status = normalize_optional_string(payload.status) or "active"
+            if normalized_status not in {"active", "inactive"}:
+                raise HTTPException(status_code=400, detail="Status must be active or inactive")
+            if is_self and normalized_status != "active":
+                raise HTTPException(status_code=400, detail="Super admin cannot deactivate their own account")
+            target_admin.status = normalized_status
+
+        if payload.role is not None:
+            normalized_role = normalize_optional_string(payload.role) or "admin"
+            if normalized_role not in {"admin", "superadmin"}:
+                raise HTTPException(status_code=400, detail="Role must be admin or superadmin")
+            if (target_admin.role or "admin") == "superadmin" and normalized_role != "superadmin":
+                raise HTTPException(status_code=400, detail="Existing super admin role cannot be downgraded from this screen")
+            target_admin.role = normalized_role
+
+    target_admin.updated_at = datetime.utcnow()
+    db.commit()
+    db.refresh(target_admin)
+    return admin_to_response(target_admin)
+
+@api_router.delete("/admin/settings/admin-users/{admin_id}")
+async def delete_admin_user(
+    admin_id: int,
+    current_admin: dict = Depends(get_current_admin),
+    db: Session = Depends(get_db)
+):
+    current_admin_record = require_superadmin(current_admin, db)
+    target_admin = db.query(Admin).filter(Admin.id == admin_id).first()
+    if not target_admin:
+        raise HTTPException(status_code=404, detail="Admin user not found")
+    if target_admin.id == current_admin_record.id:
+        raise HTTPException(status_code=400, detail="Super admin cannot delete their own account")
+    if (target_admin.role or "admin") == "superadmin":
+        raise HTTPException(status_code=400, detail="Super admin account cannot be deleted from this screen")
+
+    db.delete(target_admin)
+    db.commit()
+    return {"message": "Admin user deleted successfully"}
+
+@api_router.get("/admin/settings/branding", response_model=BrandingSettingsResponse)
+async def get_branding_settings(
+    current_admin: dict = Depends(get_current_admin),
+    db: Session = Depends(get_db)
+):
+    get_admin_record_or_404(db, current_admin.get("sub"))
+    record = db.query(PlatformSetting).filter(PlatformSetting.setting_key == "branding").first()
+    branding = get_platform_setting_value(db, "branding", DEFAULT_BRANDING_SETTINGS)
+    return BrandingSettingsResponse(**branding, updated_at=record.updated_at if record else None)
+
+@api_router.put("/admin/settings/branding", response_model=BrandingSettingsResponse)
+async def update_branding_settings(
+    site_name: str = Form(...),
+    tagline: str = Form(...),
+    support_email: Optional[str] = Form(None),
+    support_phone: Optional[str] = Form(None),
+    primary_color: str = Form(...),
+    secondary_color: str = Form(...),
+    dark_mode: bool = Form(False),
+    logo: Optional[UploadFile] = File(None),
+    favicon: Optional[UploadFile] = File(None),
+    current_admin: dict = Depends(get_current_admin),
+    db: Session = Depends(get_db)
+):
+    current_admin_record = get_admin_record_or_404(db, current_admin.get("sub"))
+    existing = get_platform_setting_value(db, "branding", DEFAULT_BRANDING_SETTINGS)
+
+    updated_branding = {
+        **existing,
+        "site_name": normalize_optional_string(site_name) or DEFAULT_BRANDING_SETTINGS["site_name"],
+        "tagline": normalize_optional_string(tagline) or DEFAULT_BRANDING_SETTINGS["tagline"],
+        "support_email": normalize_optional_string(support_email),
+        "support_phone": normalize_optional_string(support_phone),
+        "primary_color": normalize_optional_string(primary_color) or DEFAULT_BRANDING_SETTINGS["primary_color"],
+        "secondary_color": normalize_optional_string(secondary_color) or DEFAULT_BRANDING_SETTINGS["secondary_color"],
+        "dark_mode": bool(dark_mode)
+    }
+
+    if logo and logo.filename:
+        updated_branding["logo_path"] = save_settings_upload(logo, "branding_logo")
+    if favicon and favicon.filename:
+        updated_branding["favicon_path"] = save_settings_upload(favicon, "branding_favicon")
+
+    record = upsert_platform_setting(db, "branding", updated_branding, current_admin_record.email)
+    db.commit()
+    db.refresh(record)
+    return BrandingSettingsResponse(**updated_branding, updated_at=record.updated_at)
+
+@api_router.get("/admin/settings/security", response_model=SecuritySettingsResponse)
+async def get_security_settings(
+    current_admin: dict = Depends(get_current_admin),
+    db: Session = Depends(get_db)
+):
+    get_admin_record_or_404(db, current_admin.get("sub"))
+    record = db.query(PlatformSetting).filter(PlatformSetting.setting_key == "security").first()
+    security_settings = get_platform_setting_value(db, "security", DEFAULT_SECURITY_SETTINGS)
+    return SecuritySettingsResponse(**security_settings, updated_at=record.updated_at if record else None)
+
+@api_router.put("/admin/settings/security", response_model=SecuritySettingsResponse)
+async def update_security_settings(
+    payload: SecuritySettingsRequest,
+    current_admin: dict = Depends(get_current_admin),
+    db: Session = Depends(get_db)
+):
+    current_admin_record = require_superadmin(current_admin, db)
+    settings_payload = payload.model_dump()
+    if settings_payload["session_timeout_minutes"] < 5:
+        raise HTTPException(status_code=400, detail="Session timeout must be at least 5 minutes")
+    if settings_payload["max_login_attempts"] < 1:
+        raise HTTPException(status_code=400, detail="Max login attempts must be at least 1")
+    if settings_payload["password_expiry_days"] < 1:
+        raise HTTPException(status_code=400, detail="Password expiry must be at least 1 day")
+
+    record = upsert_platform_setting(db, "security", settings_payload, current_admin_record.email)
+    db.commit()
+    db.refresh(record)
+    return SecuritySettingsResponse(**settings_payload, updated_at=record.updated_at)
+
+@api_router.post("/admin/settings/security/change-password")
+async def change_admin_password(
+    payload: AdminPasswordChangeRequest,
+    current_admin: dict = Depends(get_current_admin),
+    db: Session = Depends(get_db)
+):
+    admin_record = get_admin_record_or_404(db, current_admin.get("sub"))
+    if not verify_password(payload.current_password, admin_record.password_hash):
+        raise HTTPException(status_code=400, detail="Current password is incorrect")
+    if payload.new_password != payload.confirm_password:
+        raise HTTPException(status_code=400, detail="New password and confirmation do not match")
+
+    security_settings = get_platform_setting_value(db, "security", DEFAULT_SECURITY_SETTINGS)
+    if security_settings.get("require_strong_passwords") and not is_strong_password(payload.new_password):
+        raise HTTPException(status_code=400, detail="Password must be at least 8 characters and include upper, lower, number, and special character")
+
+    admin_record.password_plain = payload.new_password
+    admin_record.password_hash = get_password_hash(payload.new_password)
+    admin_record.updated_at = datetime.utcnow()
+    db.commit()
+    return {"message": "Password changed successfully"}
+
+@api_router.get("/admin/settings/content", response_model=List[ContentEntryResponse])
+async def get_content_entries(
+    current_admin: dict = Depends(get_current_admin),
+    db: Session = Depends(get_db)
+):
+    get_admin_record_or_404(db, current_admin.get("sub"))
+    ensure_default_cms_entries(db)
+    entries = db.query(ContentEntry).order_by(ContentEntry.entry_type.asc(), ContentEntry.updated_at.desc()).all()
+    return entries
+
+@api_router.post("/admin/settings/content", response_model=ContentEntryResponse)
+async def create_content_entry(
+    payload: ContentEntryCreateRequest,
+    current_admin: dict = Depends(get_current_admin),
+    db: Session = Depends(get_db)
+):
+    admin_record = get_admin_record_or_404(db, current_admin.get("sub"))
+    entry_type = normalize_optional_string(payload.entry_type)
+    if entry_type not in {"page", "section"}:
+        raise HTTPException(status_code=400, detail="Entry type must be page or section")
+
+    slug = slugify_text(payload.slug or payload.title) if entry_type == "page" else None
+    section_key = normalize_optional_string(payload.section_key) if entry_type == "section" else None
+    if entry_type == "section" and not section_key:
+        section_key = slugify_text(payload.title)
+
+    if slug and db.query(ContentEntry).filter(ContentEntry.slug == slug).first():
+        raise HTTPException(status_code=409, detail="A page with this slug already exists")
+    if section_key and db.query(ContentEntry).filter(ContentEntry.section_key == section_key).first():
+        raise HTTPException(status_code=409, detail="A section with this key already exists")
+
+    entry = ContentEntry(
+        entry_type=entry_type,
+        title=normalize_optional_string(payload.title) or "Untitled",
+        slug=slug,
+        section_key=section_key,
+        content=payload.content or "",
+        is_active=payload.is_active,
+        created_by=admin_record.email,
+        updated_by=admin_record.email
+    )
+    db.add(entry)
+    db.commit()
+    db.refresh(entry)
+    return entry
+
+@api_router.put("/admin/settings/content/{entry_id}", response_model=ContentEntryResponse)
+async def update_content_entry(
+    entry_id: int,
+    payload: ContentEntryUpdateRequest,
+    current_admin: dict = Depends(get_current_admin),
+    db: Session = Depends(get_db)
+):
+    admin_record = get_admin_record_or_404(db, current_admin.get("sub"))
+    entry = db.query(ContentEntry).filter(ContentEntry.id == entry_id).first()
+    if not entry:
+        raise HTTPException(status_code=404, detail="Content entry not found")
+
+    if payload.title is not None:
+        entry.title = normalize_optional_string(payload.title) or entry.title
+        if entry.entry_type == "page" and payload.slug is None:
+            entry.slug = slugify_text(entry.title)
+    if payload.content is not None:
+        entry.content = payload.content
+    if payload.is_active is not None:
+        entry.is_active = payload.is_active
+    if entry.entry_type == "page" and payload.slug is not None:
+        candidate_slug = slugify_text(payload.slug)
+        duplicate = db.query(ContentEntry).filter(ContentEntry.slug == candidate_slug, ContentEntry.id != entry.id).first()
+        if duplicate:
+            raise HTTPException(status_code=409, detail="A page with this slug already exists")
+        entry.slug = candidate_slug
+    if entry.entry_type == "section" and payload.section_key is not None:
+        candidate_key = normalize_optional_string(payload.section_key)
+        duplicate = db.query(ContentEntry).filter(ContentEntry.section_key == candidate_key, ContentEntry.id != entry.id).first()
+        if duplicate:
+            raise HTTPException(status_code=409, detail="A section with this key already exists")
+        entry.section_key = candidate_key
+
+    entry.updated_by = admin_record.email
+    entry.updated_at = datetime.utcnow()
+    db.commit()
+    db.refresh(entry)
+    return entry
+
+@api_router.delete("/admin/settings/content/{entry_id}")
+async def delete_content_entry(
+    entry_id: int,
+    current_admin: dict = Depends(get_current_admin),
+    db: Session = Depends(get_db)
+):
+    get_admin_record_or_404(db, current_admin.get("sub"))
+    entry = db.query(ContentEntry).filter(ContentEntry.id == entry_id).first()
+    if not entry:
+        raise HTTPException(status_code=404, detail="Content entry not found")
+    db.delete(entry)
+    db.commit()
+    return {"message": "Content entry deleted successfully"}
+
+@api_router.get("/school/settings/profile", response_model=SchoolResponse)
+async def get_school_settings_profile(
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    if current_user.get("user_type") != "school":
+        raise HTTPException(status_code=403, detail="Not enough permissions")
+
+    school = db.query(School).filter(School.school_id == current_user.get("school_id")).first()
+    if not school:
+        raise HTTPException(status_code=404, detail="School not found")
+
+    return school
+
+@api_router.put("/school/settings/profile", response_model=SchoolResponse)
+async def update_school_settings_profile(
+    school_name: str = Form(...),
+    email: EmailStr = Form(...),
+    contact_number: Optional[str] = Form(None),
+    password: Optional[str] = Form(None),
+    logo: Optional[UploadFile] = File(None),
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    if current_user.get("user_type") != "school":
+        raise HTTPException(status_code=403, detail="Not enough permissions")
+
+    security_settings = get_platform_setting_value(db, "security", DEFAULT_SECURITY_SETTINGS)
+    if not security_settings.get("allow_school_profile_edits", True):
+        raise HTTPException(status_code=403, detail="School profile edits are currently disabled by admin")
+
+    school = db.query(School).filter(School.school_id == current_user.get("school_id")).first()
+    if not school:
+        raise HTTPException(status_code=404, detail="School not found")
+
+    normalized_email = str(email).strip().lower()
+    duplicate_school = db.query(School).filter(School.email == normalized_email, School.id != school.id).first()
+    if duplicate_school:
+        raise HTTPException(status_code=409, detail="Another school is already using this email address")
+
+    school.school_name = normalize_optional_string(school_name) or school.school_name
+    school.email = normalized_email
+    school.contact_number = normalize_optional_string(contact_number)
+
+    if password:
+        if security_settings.get("require_strong_passwords") and not is_strong_password(password):
+            raise HTTPException(status_code=400, detail="Password must be at least 8 characters and include upper, lower, number, and special character")
+        school.password_hash = get_password_hash(password)
+
+    if logo and logo.filename:
+        school.logo_path = save_settings_upload(logo, "school_logos")
+
+    school.updated_at = datetime.utcnow()
+    db.commit()
+    db.refresh(school)
+    return school
+
+@api_router.get("/school/settings/preferences", response_model=SchoolPreferenceResponse)
+async def get_school_preferences(
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    if current_user.get("user_type") != "school":
+        raise HTTPException(status_code=403, detail="Not enough permissions")
+
+    preference = get_school_preference_record(db, current_user.get("school_id"))
+    return school_preference_to_response(preference)
+
+@api_router.put("/school/settings/preferences", response_model=SchoolPreferenceResponse)
+async def update_school_preferences(
+    payload: SchoolPreferenceUpdateRequest,
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    if current_user.get("user_type") != "school":
+        raise HTTPException(status_code=403, detail="Not enough permissions")
+
+    preference = get_school_preference_record(db, current_user.get("school_id"))
+    preference.preferred_language = normalize_optional_string(payload.preferred_language) or "en"
+    preference.email_notifications = payload.email_notifications
+    preference.announcement_notifications = payload.announcement_notifications
+    preference.chat_notifications = payload.chat_notifications
+    preference.ticket_notifications = payload.ticket_notifications
+    preference.auto_mark_announcements_read = payload.auto_mark_announcements_read
+    preference.dashboard_layout = normalize_optional_string(payload.dashboard_layout) or "comfortable"
+    preference.updated_at = datetime.utcnow()
+    db.commit()
+    db.refresh(preference)
+    return school_preference_to_response(preference)
+
+@api_router.post("/school/settings/security/change-password")
+async def change_school_password(
+    payload: SchoolPasswordChangeRequest,
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    if current_user.get("user_type") != "school":
+        raise HTTPException(status_code=403, detail="Not enough permissions")
+
+    school = db.query(School).filter(School.school_id == current_user.get("school_id")).first()
+    if not school:
+        raise HTTPException(status_code=404, detail="School not found")
+    if not verify_password(payload.current_password, school.password_hash):
+        raise HTTPException(status_code=400, detail="Current password is incorrect")
+    if payload.new_password != payload.confirm_password:
+        raise HTTPException(status_code=400, detail="New password and confirmation do not match")
+
+    security_settings = get_platform_setting_value(db, "security", DEFAULT_SECURITY_SETTINGS)
+    if security_settings.get("require_strong_passwords") and not is_strong_password(payload.new_password):
+        raise HTTPException(status_code=400, detail="Password must be at least 8 characters and include upper, lower, number, and special character")
+
+    school.password_hash = get_password_hash(payload.new_password)
+    school.updated_at = datetime.utcnow()
+    db.commit()
+    return {"message": "Password changed successfully"}
 
 # ==================== KNOWLEDGE BASE ROUTES ====================
 

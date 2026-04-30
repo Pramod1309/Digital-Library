@@ -1,29 +1,30 @@
 .admin-dashboard {
   min-height: 100vh;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  background: var(--bg-primary);
   padding: 30px;
 }
 
 .dashboard-header {
-  background: white;
+  background: var(--surface-primary);
   padding: 25px 40px;
   border-radius: 15px;
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
+  box-shadow: 0 4px 20px var(--shadow-medium);
   display: flex;
   justify-content: space-between;
   align-items: center;
   margin-bottom: 30px;
+  border: 1px solid var(--border-primary);
 }
 
 .dashboard-header h1 {
-  color: #1e293b;
+  color: var(--text-primary);
   font-size: 2rem;
   font-weight: 700;
   margin-bottom: 5px;
 }
 
 .dashboard-header p {
-  color: #64748b;
+  color: var(--text-secondary);
   font-size: 0.95rem;
 }
 

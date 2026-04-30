@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Card, List, Select, Input, Button, Avatar, message, Spin, Empty, Modal, Upload, Dropdown, Menu, Badge, Tooltip } from 'antd';
+import { Card, List, Select, Input, Button, Avatar, message, Spin, Empty, Modal, Upload, Dropdown, Badge, Tooltip } from 'antd';
 import { SendOutlined, UserOutlined, CommentOutlined, PaperClipOutlined, CameraOutlined, AudioOutlined, SmileOutlined, MoreOutlined, DeleteOutlined, EditOutlined, SearchOutlined, PhoneOutlined, VideoCameraOutlined, InfoCircleOutlined, FileImageOutlined, FilePdfOutlined, FileTextOutlined, FileUnknownOutlined, PlayCircleOutlined } from '@ant-design/icons';
 import { useSearchParams } from 'react-router-dom';
 import api from '../../api/axiosConfig';
@@ -360,7 +360,7 @@ const AdminChat = () => {
       setNewMessage('');
       fetchMessages();
     } catch (error) {
-      message.error('Failed to update message');
+      message.error(getApiErrorMessage(error, 'Failed to update message'));
     }
   };
 
@@ -376,23 +376,39 @@ const AdminChat = () => {
       await api.delete(`/chat/messages/${messageToDelete.id}`);
       message.success('Message deleted successfully');
       setDeleteModalVisible(false);
+      if (editingMessage?.id === messageToDelete.id) {
+        setEditingMessage(null);
+        setNewMessage('');
+      }
       setMessageToDelete(null);
       fetchMessages();
     } catch (error) {
-      message.error('Failed to delete message');
+      message.error(getApiErrorMessage(error, 'Failed to delete message'));
     }
   };
 
-  const getMessageActions = (message) => (
-    <Menu>
-      <Menu.Item key="edit" icon={<EditOutlined />} onClick={() => handleEditMessage(message)}>
-        Edit Message
-      </Menu.Item>
-      <Menu.Item key="delete" icon={<DeleteOutlined />} onClick={() => handleDeleteMessage(message)}>
-        Delete Message
-      </Menu.Item>
-    </Menu>
-  );
+  const getMessageActions = (chatMessage) => {
+    const items = [];
+
+    if (chatMessage.sender_type === 'admin') {
+      items.push({
+        key: 'edit',
+        icon: <EditOutlined />,
+        label: 'Edit Message',
+        onClick: () => handleEditMessage(chatMessage)
+      });
+    }
+
+    items.push({
+      key: 'delete',
+      icon: <DeleteOutlined />,
+      label: 'Delete Message',
+      danger: true,
+      onClick: () => handleDeleteMessage(chatMessage)
+    });
+
+    return { items };
+  };
 
   const filteredSchools = schools.filter(school => 
     school.school_name.toLowerCase().includes(searchTerm.toLowerCase())
@@ -676,19 +692,17 @@ const AdminChat = () => {
                                 hour: '2-digit', 
                                 minute: '2-digit' 
                               })}</span>
-                              {isAdmin && (
-                                <Dropdown overlay={getMessageActions(msg)} trigger={['click']}>
-                                  <Button 
-                                    type="text" 
-                                    size="small" 
-                                    icon={<MoreOutlined />}
-                                    style={{ 
-                                      color: '#667781',
-                                      padding: '0 4px'
-                                    }}
-                                  />
-                                </Dropdown>
-                              )}
+                              <Dropdown menu={getMessageActions(msg)} trigger={['click']}>
+                                <Button 
+                                  type="text" 
+                                  size="small" 
+                                  icon={<MoreOutlined />}
+                                  style={{ 
+                                    color: '#667781',
+                                    padding: '0 4px'
+                                  }}
+                                />
+                              </Dropdown>
                             </div>
                           </>
                         )}

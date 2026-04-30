@@ -1,0 +1,402 @@
+/* Theme Variables and Dark Mode Styles */
+
+/* Light Theme Variables (Default) */
+:root[data-theme="light"] {
+  /* Primary Colors */
+  --primary-color: #1890ff;
+  --primary-hover: #40a9ff;
+  --primary-active: #096dd9;
+  
+  /* Background Colors */
+  --bg-primary: #ffffff;
+  --bg-secondary: #fafafa;
+  --bg-tertiary: #f5f5f5;
+  --bg-quaternary: #f0f0f0;
+  
+  /* Surface Colors */
+  --surface-primary: #ffffff;
+  --surface-secondary: #fafafa;
+  --surface-tertiary: #f5f5f5;
+  
+  /* Text Colors */
+  --text-primary: #262626;
+  --text-secondary: #595959;
+  --text-tertiary: #8c8c8c;
+  --text-quaternary: #bfbfbf;
+  --text-disabled: #d9d9d9;
+  
+  /* Border Colors */
+  --border-primary: #d9d9d9;
+  --border-secondary: #f0f0f0;
+  --border-tertiary: #e8e8e8;
+  
+  /* Shadow Colors */
+  --shadow-light: rgba(0, 0, 0, 0.04);
+  --shadow-medium: rgba(0, 0, 0, 0.08);
+  --shadow-heavy: rgba(0, 0, 0, 0.12);
+  
+  /* Status Colors */
+  --success-color: #52c41a;
+  --warning-color: #faad14;
+  --error-color: #ff4d4f;
+  --info-color: #1890ff;
+  
+  /* Component Specific */
+  --card-bg: #ffffff;
+  --sidebar-bg: #001529;
+  --header-bg: #ffffff;
+  --modal-bg: #ffffff;
+  --dropdown-bg: #ffffff;
+  --input-bg: #ffffff;
+  --hover-bg: #f5f5f5;
+  --active-bg: #e6f7ff;
+}
+
+/* Dark Theme Variables */
+:root[data-theme="dark"] {
+  /* Primary Colors */
+  --primary-color: #1890ff;
+  --primary-hover: #40a9ff;
+  --primary-active: #096dd9;
+  
+  /* Background Colors */
+  --bg-primary: #141414;
+  --bg-secondary: #1f1f1f;
+  --bg-tertiary: #262626;
+  --bg-quaternary: #303030;
+  
+  /* Surface Colors */
+  --surface-primary: #1f1f1f;
+  --surface-secondary: #262626;
+  --surface-tertiary: #303030;
+  
+  /* Text Colors */
+  --text-primary: #ffffff;
+  --text-secondary: #d9d9d9;
+  --text-tertiary: #bfbfbf;
+  --text-quaternary: #8c8c8c;
+  --text-disabled: #595959;
+  
+  /* Border Colors */
+  --border-primary: #434343;
+  --border-secondary: #303030;
+  --border-tertiary: #434343;
+  
+  /* Shadow Colors */
+  --shadow-light: rgba(0, 0, 0, 0.12);
+  --shadow-medium: rgba(0, 0, 0, 0.24);
+  --shadow-heavy: rgba(0, 0, 0, 0.36);
+  
+  /* Status Colors */
+  --success-color: #52c41a;
+  --warning-color: #faad14;
+  --error-color: #ff4d4f;
+  --info-color: #1890ff;
+  
+  /* Component Specific */
+  --card-bg: #1f1f1f;
+  --sidebar-bg: #141414;
+  --header-bg: #1f1f1f;
+  --modal-bg: #1f1f1f;
+  --dropdown-bg: #262626;
+  --input-bg: #262626;
+  --hover-bg: #262626;
+  --active-bg: #111b26;
+}
+
+/* Global Dark Mode Styles */
+[data-theme="dark"] {
+  background-color: var(--bg-primary);
+  color: var(--text-primary);
+}
+
+/* Scrollbar Styles for Dark Mode */
+[data-theme="dark"] ::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+[data-theme="dark"] ::-webkit-scrollbar-track {
+  background: var(--bg-tertiary);
+}
+
+[data-theme="dark"] ::-webkit-scrollbar-thumb {
+  background: var(--border-primary);
+  border-radius: 4px;
+}
+
+[data-theme="dark"] ::-webkit-scrollbar-thumb:hover {
+  background: var(--text-tertiary);
+}
+
+/* Ant Design Component Overrides for Dark Mode */
+[data-theme="dark"] .ant-layout {
+  background: var(--bg-primary);
+}
+
+[data-theme="dark"] .ant-layout-header {
+  background: var(--header-bg);
+  border-bottom: 1px solid var(--border-primary);
+}
+
+[data-theme="dark"] .ant-layout-sider {
+  background: var(--sidebar-bg);
+}
+
+[data-theme="dark"] .ant-layout-content {
+  background: var(--bg-primary);
+}
+
+[data-theme="dark"] .ant-card {
+  background: var(--card-bg);
+  border-color: var(--border-primary);
+}
+
+[data-theme="dark"] .ant-card-head {
+  background: var(--surface-secondary);
+  border-bottom-color: var(--border-primary);
+}
+
+[data-theme="dark"] .ant-card-body {
+  background: var(--card-bg);
+}
+
+[data-theme="dark"] .ant-menu {
+  background: var(--sidebar-bg);
+  color: var(--text-secondary);
+}
+
+[data-theme="dark"] .ant-menu-item {
+  color: var(--text-secondary);
+}
+
+[data-theme="dark"] .ant-menu-item:hover {
+  background: var(--hover-bg);
+  color: var(--text-primary);
+}
+
+[data-theme="dark"] .ant-menu-item-selected {
+  background: var(--primary-color);
+  color: #ffffff;
+}
+
+[data-theme="dark"] .ant-btn {
+  background: var(--surface-secondary);
+  border-color: var(--border-primary);
+  color: var(--text-primary);
+}
+
+[data-theme="dark"] .ant-btn:hover {
+  background: var(--hover-bg);
+  border-color: var(--primary-color);
+  color: var(--primary-color);
+}
+
+[data-theme="dark"] .ant-btn-primary {
+  background: var(--primary-color);
+  border-color: var(--primary-color);
+  color: #ffffff;
+}
+
+[data-theme="dark"] .ant-btn-primary:hover {
+  background: var(--primary-hover);
+  border-color: var(--primary-hover);
+}
+
+[data-theme="dark"] .ant-input {
+  background: var(--input-bg);
+  border-color: var(--border-primary);
+  color: var(--text-primary);
+}
+
+[data-theme="dark"] .ant-input:focus {
+  border-color: var(--primary-color);
+  box-shadow: 0 0 0 2px rgba(24, 144, 255, 0.2);
+}
+
+[data-theme="dark"] .ant-select {
+  color: var(--text-primary);
+}
+
+[data-theme="dark"] .ant-select-selector {
+  background: var(--input-bg);
+  border-color: var(--border-primary);
+  color: var(--text-primary);
+}
+
+[data-theme="dark"] .ant-dropdown {
+  background: var(--dropdown-bg);
+  border: 1px solid var(--border-primary);
+}
+
+[data-theme="dark"] .ant-dropdown-menu {
+  background: var(--dropdown-bg);
+}
+
+[data-theme="dark"] .ant-dropdown-menu-item {
+  color: var(--text-primary);
+}
+
+[data-theme="dark"] .ant-dropdown-menu-item:hover {
+  background: var(--hover-bg);
+}
+
+[data-theme="dark"] .ant-modal {
+  background: var(--modal-bg);
+}
+
+[data-theme="dark"] .ant-modal-header {
+  background: var(--surface-secondary);
+  border-bottom-color: var(--border-primary);
+}
+
+[data-theme="dark"] .ant-modal-content {
+  background: var(--modal-bg);
+}
+
+[data-theme="dark"] .ant-modal-body {
+  background: var(--modal-bg);
+}
+
+[data-theme="dark"] .ant-table {
+  background: var(--surface-primary);
+  color: var(--text-primary);
+}
+
+[data-theme="dark"] .ant-table-thead > tr > th {
+  background: var(--surface-secondary);
+  color: var(--text-primary);
+  border-bottom-color: var(--border-primary);
+}
+
+[data-theme="dark"] .ant-table-tbody > tr > td {
+  background: var(--surface-primary);
+  border-bottom-color: var(--border-secondary);
+}
+
+[data-theme="dark"] .ant-table-tbody > tr:hover > td {
+  background: var(--hover-bg);
+}
+
+[data-theme="dark"] .ant-pagination {
+  color: var(--text-primary);
+}
+
+[data-theme="dark"] .ant-pagination-item {
+  background: var(--surface-secondary);
+  border-color: var(--border-primary);
+}
+
+[data-theme="dark"] .ant-pagination-item a {
+  color: var(--text-primary);
+}
+
+[data-theme="dark"] .ant-pagination-item-active {
+  background: var(--primary-color);
+  border-color: var(--primary-color);
+}
+
+[data-theme="dark"] .ant-pagination-item-active a {
+  color: #ffffff;
+}
+
+[data-theme="dark"] .ant-form-item-label > label {
+  color: var(--text-primary);
+}
+
+[data-theme="dark"] .ant-typography {
+  color: var(--text-primary);
+}
+
+[data-theme="dark"] .ant-typography h1,
+[data-theme="dark"] .ant-typography h2,
+[data-theme="dark"] .ant-typography h3,
+[data-theme="dark"] .ant-typography h4,
+[data-theme="dark"] .ant-typography h5,
+[data-theme="dark"] .ant-typography h6 {
+  color: var(--text-primary);
+}
+
+[data-theme="dark"] .ant-statistic-title {
+  color: var(--text-secondary);
+}
+
+[data-theme="dark"] .ant-statistic-content {
+  color: var(--text-primary);
+}
+
+/* Custom Component Dark Mode Styles */
+[data-theme="dark"] .dashboard-card {
+  background: var(--card-bg);
+  border-color: var(--border-primary);
+}
+
+[data-theme="dark"] .dashboard-card:hover {
+  background: var(--surface-secondary);
+}
+
+[data-theme="dark"] .sidebar-item {
+  color: var(--text-secondary);
+}
+
+[data-theme="dark"] .sidebar-item:hover {
+  background: var(--hover-bg);
+  color: var(--text-primary);
+}
+
+[data-theme="dark"] .sidebar-item.active {
+  background: var(--primary-color);
+  color: #ffffff;
+}
+
+[data-theme="dark"] .message-bubble {
+  background: var(--surface-secondary);
+  color: var(--text-primary);
+}
+
+[data-theme="dark"] .message-bubble.admin {
+  background: var(--primary-color);
+  color: #ffffff;
+}
+
+[data-theme="dark"] .resource-item {
+  background: var(--surface-primary);
+  border-color: var(--border-primary);
+}
+
+[data-theme="dark"] .resource-item:hover {
+  background: var(--hover-bg);
+}
+
+/* Theme Toggle Button Styles */
+.theme-toggle {
+  background: var(--surface-secondary);
+  border: 1px solid var(--border-primary);
+  border-radius: 6px;
+  padding: 8px 12px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-primary);
+  transition: all 0.3s ease;
+}
+
+.theme-toggle:hover {
+  background: var(--hover-bg);
+  border-color: var(--primary-color);
+}
+
+.theme-toggle-icon {
+  font-size: 16px;
+}
+
+.theme-toggle-text {
+  font-size: 14px;
+  font-weight: 500;
+}
+
+/* Smooth transitions for theme switching */
+* {
+  transition: background-color 0.3s ease, color 0.3s ease, border-color 0.3s ease;
+}

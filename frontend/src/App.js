@@ -6,7 +6,9 @@ import WelcomeScreen from './pages/WelcomeScreen';
 import AdminDashboard from './pages/AdminDashboard';
 import SchoolDashboard from './pages/SchoolDashboard';
 import SchoolRegistration from './pages/SchoolRegistration';
+import { ThemeProvider } from './contexts/ThemeContext';
 import './App.css';
+import './styles/theme.css';
 
 function App() {
   // Initialize user state from sessionStorage if it exists
@@ -16,8 +18,9 @@ function App() {
   });
 
   return (
-    <Router>
-      <Routes>
+    <ThemeProvider>
+      <Router>
+        <Routes>
         <Route 
           path="/" 
           element={user ? (
@@ -63,7 +66,8 @@ function App() {
           element={<SchoolRegistration />} 
         />
       </Routes>
-    </Router>
+      </Router>
+    </ThemeProvider>
   );
 }
 

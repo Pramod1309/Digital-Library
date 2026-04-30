@@ -608,11 +608,11 @@ const AdminDashboard = ({ user, setUser }) => {
             
             {/* Settings */}
             <Route path="/settings" element={<div style={{ padding: '24px' }}><Outlet /></div>}>
-              <Route path="profile" element={<AdminProfile />} />
-              <Route path="branding" element={<Branding />} />
-              <Route path="cms" element={<ContentManagement />} />
-              <Route path="admins" element={<AdminUsers />} />
-              <Route path="security" element={<Security />} />
+              <Route path="profile" element={<AdminProfile user={user} setUser={setUser} />} />
+              <Route path="branding" element={<Branding user={user} setUser={setUser} />} />
+              <Route path="cms" element={<ContentManagement user={user} setUser={setUser} />} />
+              <Route path="admins" element={<AdminUsers user={user} setUser={setUser} />} />
+              <Route path="security" element={<Security user={user} setUser={setUser} />} />
               <Route path="backup" element={<DataBackup />} />
               <Route index element={<Navigate to="profile" replace />} />
             </Route>

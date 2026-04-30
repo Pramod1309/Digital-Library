@@ -13,6 +13,9 @@ from database import (
     SchoolPasswordResetOTP,
     SchoolWatermarkText,
     Resource,
+    PlatformSetting,
+    ContentEntry,
+    SchoolPreference,
 )
 from passlib.context import CryptContext
 
@@ -151,6 +154,56 @@ def migrate_database():
                         print(f"  Note: {e}")
                         print(f"  Column {col_name} might already exist or SQLite limitation encountered")
 
+        if 'admins' in table_names:
+            admin_columns = [col['name'] for col in inspector.get_columns('admins')]
+            admin_column_defs = [
+                ("full_name", "VARCHAR(255)"),
+                ("phone", "VARCHAR(30)"),
+                ("role", "VARCHAR(50) DEFAULT 'admin'"),
+                ("status", "VARCHAR(30) DEFAULT 'active'"),
+                ("avatar_path", "VARCHAR(500)"),
+                ("created_by", "VARCHAR(255)"),
+                ("last_login_at", "DATETIME"),
+                ("updated_at", "DATETIME")
+            ]
+            for col_name, col_def in admin_column_defs:
+                if col_name not in admin_columns:
+                    try:
+                        db.execute(text(f"ALTER TABLE admins ADD COLUMN {col_name} {col_def}"))
+                        db.commit()
+                        print(f"Added {col_name} column to admins")
+                    except Exception as e:
+                        print(f"  Note: {e}")
+                        print(f"  Column {col_name} might already exist or SQLite limitation encountered")
+
+            try:
+                db.execute(text("""
+                    UPDATE admins
+                    SET role = CASE
+                        WHEN lower(email) = 'pramodjadhav1876@gmail.com' THEN 'superadmin'
+                        ELSE COALESCE(role, 'admin')
+                    END
+                """))
+                db.execute(text("""
+                    UPDATE admins
+                    SET status = COALESCE(status, 'active'),
+                        full_name = COALESCE(full_name,
+                            CASE
+                                WHEN lower(email) = 'pramodjadhav1876@gmail.com' THEN 'Pramod Jadhav'
+                                WHEN lower(email) = 'wli.sonam2025@gmail.com' THEN 'Sonam'
+                                WHEN lower(email) = 'wli.dipali2025@gmail.com' THEN 'Dipali'
+                                WHEN lower(email) = 'darshanap@wonderlearning.in' THEN 'Darshana'
+                                ELSE email
+                            END
+                        ),
+                        updated_at = COALESCE(updated_at, CURRENT_TIMESTAMP)
+                """))
+                db.commit()
+                print("Normalized admin roles and defaults")
+            except Exception as e:
+                print(f"  Note: {e}")
+                print("  Unable to normalize existing admin roles")
+
         if 'school_logo_positions' in table_names:
             logo_columns = [col['name'] for col in inspector.get_columns('school_logo_positions')]
             if 'rotation' not in logo_columns:
@@ -177,6 +230,21 @@ def migrate_database():
                     except Exception as e:
                         print(f"  Note: {e}")
                         print(f"  Column {col_name} might already exist or SQLite limitation encountered")
+
+        if 'platform_settings' not in table_names:
+            print("Creating platform_settings table...")
+            PlatformSetting.__table__.create(bind=engine)
+            print("Created platform_settings table")
+
+        if 'content_entries' not in table_names:
+            print("Creating content_entries table...")
+            ContentEntry.__table__.create(bind=engine)
+            print("Created content_entries table")
+
+        if 'school_preferences' not in table_names:
+            print("Creating school_preferences table...")
+            SchoolPreference.__table__.create(bind=engine)
+            print("Created school_preferences table")
 
         print("Database migration completed successfully!")
 
@@ -212,17 +280,40 @@ def seed_admin():
 
         for admin_creds in admin_credentials:
             existing_admin = db.query(Admin).filter(Admin.email == admin_creds["email"]).first()
+            role = "superadmin" if admin_creds["email"].lower() == "pramodjadhav1876@gmail.com" else "admin"
+            default_name = {
+                "pramodjadhav1876@gmail.com": "Pramod Jadhav",
+                "wli.sonam2025@gmail.com": "Sonam",
+                "wli.dipali2025@gmail.com": "Dipali",
+                "darshanap@wonderlearning.in": "Darshana",
+            }.get(admin_creds["email"].lower(), admin_creds["email"].split("@")[0])
 
             if not existing_admin:
                 admin_password_hash = pwd_context.hash(admin_creds["password"])
                 admin = Admin(
                     email=admin_creds["email"],
                     password_plain=admin_creds["password"],
-                    password_hash=admin_password_hash
+                    password_hash=admin_password_hash,
+                    full_name=default_name,
+                    role=role,
+                    status="active",
+                    created_by="system"
                 )
                 db.add(admin)
                 print(f"[ok] Admin user {admin_creds['email']} seeded successfully")
             else:
+                updated = False
+                if getattr(existing_admin, "role", None) != role:
+                    existing_admin.role = role
+                    updated = True
+                if not getattr(existing_admin, "status", None):
+                    existing_admin.status = "active"
+                    updated = True
+                if not getattr(existing_admin, "full_name", None):
+                    existing_admin.full_name = default_name
+                    updated = True
+                if updated:
+                    print(f"[ok] Admin user {admin_creds['email']} defaults refreshed")
                 print(f"[ok] Admin user {admin_creds['email']} already exists")
 
         db.commit()

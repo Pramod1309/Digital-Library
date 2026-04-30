@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Card, Input, Button, List, Avatar, message, Spin, Upload, Dropdown, Menu, Tooltip } from 'antd';
-import { SendOutlined, UserOutlined, CommentOutlined, PaperClipOutlined, CameraOutlined, AudioOutlined, SmileOutlined, PhoneOutlined, VideoCameraOutlined, InfoCircleOutlined, FileImageOutlined, FilePdfOutlined, FileTextOutlined, FileUnknownOutlined, PlayCircleOutlined } from '@ant-design/icons';
+import { Card, Input, Button, List, Avatar, message, Spin, Upload, Dropdown, Modal, Tooltip } from 'antd';
+import { SendOutlined, UserOutlined, CommentOutlined, PaperClipOutlined, CameraOutlined, AudioOutlined, SmileOutlined, PhoneOutlined, VideoCameraOutlined, InfoCircleOutlined, FileImageOutlined, FilePdfOutlined, FileTextOutlined, FileUnknownOutlined, PlayCircleOutlined, MoreOutlined, EditOutlined, DeleteOutlined } from '@ant-design/icons';
 import api from '../../api/axiosConfig';
 import EmojiPicker from 'emoji-picker-react';
 import AttachmentPreviewModal from '../../components/shared/AttachmentPreviewModal';
@@ -38,6 +38,9 @@ const SchoolChat = ({ user }) => {
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
   const [uploadedFiles, setUploadedFiles] = useState([]);
   const [isRecording, setIsRecording] = useState(false);
+  const [editingMessage, setEditingMessage] = useState(null);
+  const [deleteModalVisible, setDeleteModalVisible] = useState(false);
+  const [messageToDelete, setMessageToDelete] = useState(null);
   const [previewVisible, setPreviewVisible] = useState(false);
   const [previewFile, setPreviewFile] = useState(null);
   const messagesEndRef = useRef(null);
@@ -291,6 +294,70 @@ const SchoolChat = ({ user }) => {
     recognition.start();
   };
 
+  const handleEditMessage = (chatMessage) => {
+    setEditingMessage(chatMessage);
+    setNewMessage(chatMessage.message);
+  };
+
+  const handleUpdateMessage = async () => {
+    if (!editingMessage || !newMessage.trim()) {
+      return;
+    }
+
+    try {
+      await api.put(`/chat/messages/${editingMessage.id}`, { message: newMessage });
+      message.success('Message updated successfully');
+      setEditingMessage(null);
+      setNewMessage('');
+      fetchMessages();
+    } catch (error) {
+      message.error(getApiErrorMessage(error, 'Failed to update message'));
+    }
+  };
+
+  const handleDeleteMessage = (chatMessage) => {
+    setMessageToDelete(chatMessage);
+    setDeleteModalVisible(true);
+  };
+
+  const confirmDeleteMessage = async () => {
+    if (!messageToDelete) {
+      return;
+    }
+
+    try {
+      await api.delete(`/chat/messages/${messageToDelete.id}`);
+      message.success('Message deleted successfully');
+      setDeleteModalVisible(false);
+      setMessageToDelete(null);
+      if (editingMessage?.id === messageToDelete.id) {
+        setEditingMessage(null);
+        setNewMessage('');
+      }
+      fetchMessages();
+    } catch (error) {
+      message.error(getApiErrorMessage(error, 'Failed to delete message'));
+    }
+  };
+
+  const getMessageActions = (chatMessage) => ({
+    items: [
+      {
+        key: 'edit',
+        icon: <EditOutlined />,
+        label: 'Edit Message',
+        onClick: () => handleEditMessage(chatMessage)
+      },
+      {
+        key: 'delete',
+        icon: <DeleteOutlined />,
+        label: 'Delete Message',
+        danger: true,
+        onClick: () => handleDeleteMessage(chatMessage)
+      }
+    ]
+  });
+
   return (
     <div style={{ height: 'calc(100vh - 140px)', display: 'flex', backgroundColor: '#f0f2f5' }}>
       {/* Chat Area - Full Width for School */}
@@ -361,6 +428,7 @@ const SchoolChat = ({ user }) => {
           ) : (
             messages.map((msg, index) => {
               const isSchool = msg.sender_type === 'school';
+              const isEditing = editingMessage?.id === msg.id;
               
               return (
                 <div
@@ -383,23 +451,60 @@ const SchoolChat = ({ user }) => {
                         wordBreak: 'break-word'
                       }}
                     >
-                      {msg.attachments?.length > 0 && (
-                        <div style={{ display: 'grid', gap: '8px', marginBottom: msg.message?.trim() ? '8px' : 0 }}>
-                          {msg.attachments.map((file) => renderAttachmentCard(file, isSchool ? '#f4fff0' : '#f8fafc'))}
+                      {isEditing ? (
+                        <div>
+                          <Input.TextArea
+                            value={newMessage}
+                            onChange={(e) => setNewMessage(e.target.value)}
+                            autoSize={{ minRows: 1, maxRows: 4 }}
+                            style={{ border: 'none', padding: 0 }}
+                            autoFocus
+                          />
+                          <div style={{ display: 'flex', gap: '8px', marginTop: '8px' }}>
+                            <Button size="small" onClick={() => {
+                              setEditingMessage(null);
+                              setNewMessage('');
+                            }}>
+                              Cancel
+                            </Button>
+                            <Button size="small" type="primary" onClick={handleUpdateMessage}>
+                              Update
+                            </Button>
+                          </div>
                         </div>
+                      ) : (
+                        <>
+                          {msg.attachments?.length > 0 && (
+                            <div style={{ display: 'grid', gap: '8px', marginBottom: msg.message?.trim() ? '8px' : 0 }}>
+                              {msg.attachments.map((file) => renderAttachmentCard(file, isSchool ? '#f4fff0' : '#f8fafc'))}
+                            </div>
+                          )}
+                          {msg.message?.trim() ? <div>{msg.message}</div> : null}
+                          <div style={{ 
+                            fontSize: '11px', 
+                            color: '#667781', 
+                            marginTop: '4px',
+                            display: 'flex',
+                            justifyContent: 'space-between',
+                            alignItems: 'center'
+                          }}>
+                            <span>{new Date(msg.created_at).toLocaleTimeString([], { 
+                              hour: '2-digit', 
+                              minute: '2-digit' 
+                            })}</span>
+                            {isSchool && (
+                              <Dropdown menu={getMessageActions(msg)} trigger={['click']}>
+                                <Button
+                                  type="text"
+                                  size="small"
+                                  icon={<MoreOutlined />}
+                                  style={{ color: '#667781', padding: '0 4px' }}
+                                />
+                              </Dropdown>
+                            )}
+                          </div>
+                        </>
                       )}
-                      {msg.message?.trim() ? <div>{msg.message}</div> : null}
-                      <div style={{ 
-                        fontSize: '11px', 
-                        color: '#667781', 
-                        marginTop: '4px',
-                        textAlign: 'right'
-                      }}>
-                        {new Date(msg.created_at).toLocaleTimeString([], { 
-                          hour: '2-digit', 
-                          minute: '2-digit' 
-                        })}
-                      </div>
                     </div>
                   </div>
                 </div>
@@ -523,14 +628,14 @@ const SchoolChat = ({ user }) => {
             />
 
             {/* Send Button */}
-            <Button
-              type="primary"
-              icon={<SendOutlined />}
-              onClick={handleSend}
-              loading={sending}
-              disabled={!newMessage.trim() && uploadedFiles.length === 0}
-              style={{
-                backgroundColor: '#25d366',
+                <Button
+                  type="primary"
+                  icon={<SendOutlined />}
+                  onClick={editingMessage ? handleUpdateMessage : handleSend}
+                  loading={sending}
+                  disabled={!newMessage.trim() && uploadedFiles.length === 0}
+                  style={{
+                    backgroundColor: '#25d366',
                 borderColor: '#25d366',
                 borderRadius: '50%'
               }}
@@ -555,6 +660,17 @@ const SchoolChat = ({ user }) => {
         capture="environment"
         onChange={(e) => e.target.files[0] && handleCameraCapture(e.target.files[0])}
       />
+      <Modal
+        title="Delete Message"
+        open={deleteModalVisible}
+        onOk={confirmDeleteMessage}
+        onCancel={() => setDeleteModalVisible(false)}
+        okText="Delete"
+        cancelText="Cancel"
+        okButtonProps={{ danger: true }}
+      >
+        <p>Are you sure you want to delete this message? This action cannot be undone.</p>
+      </Modal>
       <AttachmentPreviewModal
         open={previewVisible}
         file={previewFile}

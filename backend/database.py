@@ -37,7 +37,15 @@ class Admin(Base):
     email = Column(String(255), unique=True, index=True, nullable=False)
     password_plain = Column(String(255), nullable=False)
     password_hash = Column(String(255), nullable=False)
+    full_name = Column(String(255), nullable=True)
+    phone = Column(String(30), nullable=True)
+    role = Column(String(50), nullable=False, default="admin")
+    status = Column(String(30), nullable=False, default="active")
+    avatar_path = Column(String(500), nullable=True)
+    created_by = Column(String(255), nullable=True)
+    last_login_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 # School Model
 class School(Base):
@@ -243,6 +251,46 @@ class KnowledgeArticle(Base):
     tags = Column(Text, nullable=True)
     view_count = Column(Integer, default=0)
     is_published = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+class PlatformSetting(Base):
+    __tablename__ = "platform_settings"
+
+    id = Column(Integer, primary_key=True, index=True)
+    setting_key = Column(String(100), unique=True, nullable=False, index=True)
+    value_json = Column(Text, nullable=False, default="{}")
+    updated_by = Column(String(255), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+class ContentEntry(Base):
+    __tablename__ = "content_entries"
+
+    id = Column(Integer, primary_key=True, index=True)
+    entry_type = Column(String(30), nullable=False, index=True)  # 'page' or 'section'
+    title = Column(String(255), nullable=False)
+    slug = Column(String(255), nullable=True, unique=True)
+    section_key = Column(String(255), nullable=True, unique=True)
+    content = Column(Text, nullable=True)
+    is_active = Column(Boolean, default=True)
+    created_by = Column(String(255), nullable=True)
+    updated_by = Column(String(255), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+class SchoolPreference(Base):
+    __tablename__ = "school_preferences"
+
+    id = Column(Integer, primary_key=True, index=True)
+    school_id = Column(String(100), nullable=False, unique=True, index=True)
+    preferred_language = Column(String(20), nullable=False, default="en")
+    email_notifications = Column(Boolean, default=True)
+    announcement_notifications = Column(Boolean, default=True)
+    chat_notifications = Column(Boolean, default=True)
+    ticket_notifications = Column(Boolean, default=True)
+    auto_mark_announcements_read = Column(Boolean, default=True)
+    dashboard_layout = Column(String(30), nullable=False, default="comfortable")
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     

@@ -1,13 +1,15 @@
 import React, { useState } from 'react';
-import { Card, Form, Input, Button, Upload, message, Avatar } from 'antd';
-import { UserOutlined, MailOutlined, LockOutlined, UploadOutlined } from '@ant-design/icons';
+import { Card, Form, Input, Button, Upload, message, Avatar, Space } from 'antd';
+import { UserOutlined, MailOutlined, LockOutlined, UploadOutlined, SunOutlined, MoonOutlined } from '@ant-design/icons';
 import axios from 'axios';
 import config from '../../config';
+import { useTheme } from '../../contexts/ThemeContext';
 
 const BACKEND_URL = config.apiBaseUrl;
 const API = `${BACKEND_URL}/api`;
 
 const SchoolProfile = ({ user }) => {
+  const { theme, toggleTheme, isDark } = useTheme();
   const [form] = Form.useForm();
   const [loading, setLoading] = useState(false);
   const [fileList, setFileList] = useState([]);
@@ -57,6 +59,24 @@ const SchoolProfile = ({ user }) => {
             <p style={{ margin: 0, color: '#888' }}>School ID: {user.school_id}</p>
           </div>
         </div>
+
+        <Space direction="vertical" size="middle" style={{ width: '100%', marginBottom: 24 }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <div>
+              <h4 style={{ margin: 0, marginBottom: 4 }}>Theme Preference</h4>
+              <p style={{ margin: 0, color: 'var(--text-secondary)' }}>
+                Choose your preferred theme for the school interface
+              </p>
+            </div>
+            <Button
+              className="theme-toggle"
+              onClick={toggleTheme}
+              icon={isDark ? <SunOutlined /> : <MoonOutlined />}
+            >
+              {isDark ? 'Light Mode' : 'Dark Mode'}
+            </Button>
+          </div>
+        </Space>
 
         <Form
           form={form}
