@@ -1400,8 +1400,12 @@ async def extract_announcement_payload(
                 resolved_priority = normalize_optional_string(payload.get("priority")) or resolved_priority
                 resolved_targets = payload.get("target_schools", resolved_targets)
 
-    if not resolved_title or not resolved_content:
-        raise HTTPException(status_code=422, detail="Title and content are required")
+    # Check if title or content are empty/null after normalization
+    if not resolved_title or not resolved_title.strip():
+        raise HTTPException(status_code=422, detail="Title is required and cannot be empty")
+    
+    if not resolved_content or not resolved_content.strip():
+        raise HTTPException(status_code=422, detail="Content is required and cannot be empty")
 
     return {
         "title": resolved_title,
@@ -5603,7 +5607,7 @@ async def create_announcement(
     content: Optional[str] = Form(None),
     priority: Optional[str] = Form(None),
     target_schools: Optional[str] = Form(None),
-    files: Optional[List[UploadFile]] = File(None),
+    files: List[UploadFile] = File(default=[]),
     db: Session = Depends(get_db)
 ):
     """Create announcement with file attachments - Admin only"""
@@ -5717,7 +5721,7 @@ async def update_announcement(
     content: Optional[str] = Form(None),
     priority: Optional[str] = Form(None),
     target_schools: Optional[str] = Form(None),
-    files: Optional[List[UploadFile]] = File(None),
+    files: List[UploadFile] = File(default=[]),
     db: Session = Depends(get_db)
 ):
     """Update announcement - Admin only"""
