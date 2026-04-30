@@ -13,6 +13,23 @@ import {
   revokeUploadPreviews
 } from '../../utils/attachments';
 
+const getApiErrorMessage = (error, fallbackMessage) => {
+  const detail = error?.response?.data?.detail;
+
+  if (Array.isArray(detail)) {
+    return detail
+      .map((item) => item?.msg || item?.message)
+      .filter(Boolean)
+      .join(', ') || fallbackMessage;
+  }
+
+  if (typeof detail === 'string' && detail.trim()) {
+    return detail;
+  }
+
+  return fallbackMessage;
+};
+
 const SchoolChat = ({ user }) => {
   const [messages, setMessages] = useState([]);
   const [newMessage, setNewMessage] = useState('');
@@ -26,6 +43,8 @@ const SchoolChat = ({ user }) => {
   const messagesEndRef = useRef(null);
   const fileInputRef = useRef(null);
   const cameraInputRef = useRef(null);
+  const recognitionRef = useRef(null);
+  const recognitionStoppedByUserRef = useRef(false);
 
   useEffect(() => {
     fetchMessages();
@@ -37,6 +56,14 @@ const SchoolChat = ({ user }) => {
   useEffect(() => {
     scrollToBottom();
   }, [messages]);
+
+  useEffect(() => () => {
+    if (recognitionRef.current) {
+      recognitionStoppedByUserRef.current = true;
+      recognitionRef.current.stop();
+      recognitionRef.current = null;
+    }
+  }, []);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -77,18 +104,14 @@ const SchoolChat = ({ user }) => {
         }
       });
 
-      await api.post('/chat/send', formData, {
-        headers: {
-          'Content-Type': 'multipart/form-data',
-        },
-      });
+      await api.post('/chat/send', formData);
       setNewMessage('');
       revokeUploadPreviews(uploadedFiles);
       setUploadedFiles([]);
       await fetchMessages();
     } catch (error) {
       console.error('Error sending message:', error);
-      message.error('Failed to send message');
+      message.error(getApiErrorMessage(error, 'Failed to send message'));
     } finally {
       setSending(false);
     }
@@ -212,13 +235,21 @@ const SchoolChat = ({ user }) => {
   };
 
   const startRecording = () => {
-    if (!window.SpeechRecognition || !window.webkitSpeechRecognition) {
-      message.error('Speech recognition is not supported in your browser');
+    if (isRecording && recognitionRef.current) {
+      recognitionStoppedByUserRef.current = true;
+      recognitionRef.current.stop();
       return;
     }
 
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SpeechRecognition) {
+      message.error('Speech recognition is not supported in your browser');
+      return;
+    }
+
     const recognition = new SpeechRecognition();
+    recognitionRef.current = recognition;
+    recognitionStoppedByUserRef.current = false;
     
     recognition.continuous = true;
     recognition.interimResults = true;
@@ -230,14 +261,10 @@ const SchoolChat = ({ user }) => {
 
     recognition.onresult = (event) => {
       let finalTranscript = '';
-      let interimTranscript = '';
-
       for (let i = event.resultIndex; i < event.results.length; i++) {
         const transcript = event.results[i][0].transcript;
         if (event.results[i].isFinal) {
           finalTranscript += transcript + ' ';
-        } else {
-          interimTranscript += transcript;
         }
       }
 
@@ -248,11 +275,16 @@ const SchoolChat = ({ user }) => {
 
     recognition.onerror = (event) => {
       console.error('Speech recognition error:', event.error);
-      message.error('Speech recognition error: ' + event.error);
+      const isExpectedAbort = event.error === 'aborted' && recognitionStoppedByUserRef.current;
+      if (!isExpectedAbort) {
+        message.error('Speech recognition error: ' + event.error);
+      }
       setIsRecording(false);
     };
 
     recognition.onend = () => {
+      recognitionRef.current = null;
+      recognitionStoppedByUserRef.current = false;
       setIsRecording(false);
     };
 

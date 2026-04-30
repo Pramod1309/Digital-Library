@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Card, Table, Button, Modal, Form, Input, Select, Tag, message, Space } from 'antd';
+import { Card, Table, Button, Modal, Form, Input, Select, Tag, message } from 'antd';
 import { FileTextOutlined, MessageOutlined, DeleteOutlined, FileOutlined, EyeOutlined } from '@ant-design/icons';
 import { useSearchParams } from 'react-router-dom';
 import api from '../../api/axiosConfig';
@@ -127,6 +127,55 @@ const SupportTickets = () => {
     setPreviewVisible(true);
   };
 
+  const renderAttachmentList = (attachments = [], compact = false) => {
+    if (!attachments.length) {
+      return <span style={{ color: '#999' }}>No files</span>;
+    }
+
+    return (
+      <div style={{ display: 'grid', gap: compact ? 6 : 8 }}>
+        {attachments.map((file) => (
+          <div
+            key={file.id || file.url || getAttachmentName(file)}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8,
+              minWidth: 0,
+              padding: compact ? 0 : '8px 12px',
+              background: compact ? 'transparent' : '#fff',
+              borderRadius: compact ? 0 : '6px',
+              border: compact ? 'none' : '1px solid #d9d9d9'
+            }}
+          >
+            <FileOutlined style={{ color: '#1890ff', flexShrink: 0 }} />
+            <span
+              style={{
+                flex: 1,
+                minWidth: 0,
+                fontSize: '14px',
+                whiteSpace: 'nowrap',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis'
+              }}
+              title={getAttachmentName(file)}
+            >
+              {getAttachmentName(file)}
+            </span>
+            <Button
+              type="link"
+              size="small"
+              icon={<EyeOutlined />}
+              onClick={() => handlePreview(file)}
+            >
+              Preview
+            </Button>
+          </div>
+        ))}
+      </div>
+    );
+  };
+
   const getStatusColor = (status) => {
     switch(status) {
       case 'open': return 'blue';
@@ -188,6 +237,13 @@ const SupportTickets = () => {
       render: (date) => new Date(date).toLocaleDateString()
     },
     {
+      title: 'Attachments',
+      dataIndex: 'attachments',
+      key: 'attachments',
+      width: 260,
+      render: (attachments) => renderAttachmentList(attachments, true)
+    },
+    {
       title: 'Actions',
       key: 'actions',
       render: (_, record) => (
@@ -247,27 +303,7 @@ const SupportTickets = () => {
                     <div style={{ fontSize: '14px', fontWeight: 'bold', marginBottom: '8px', color: '#666' }}>
                       Attachments:
                     </div>
-                    <Space direction="vertical" size="small" style={{ width: '100%' }}>
-                      {record.attachments.map((file, idx) => (
-                        <Space key={idx} style={{ 
-                          padding: '8px 12px', 
-                          background: '#fff', 
-                          borderRadius: '6px',
-                          border: '1px solid #d9d9d9'
-                        }}>
-                          <FileOutlined style={{ color: '#1890ff' }} />
-                          <span style={{ fontSize: '14px' }}>{getAttachmentName(file)}</span>
-                          <Button 
-                            type="link" 
-                            size="small" 
-                            icon={<EyeOutlined />}
-                            onClick={() => handlePreview(file)}
-                          >
-                            Preview
-                          </Button>
-                        </Space>
-                      ))}
-                    </Space>
+                    {renderAttachmentList(record.attachments)}
                   </div>
                 )}
                 

@@ -1,332 +1,461 @@
-import React, { useState } from 'react';
-import { Card, Collapse, Input, Typography, Tag, List, Button, Divider } from 'antd';
-import { SearchOutlined, PlusOutlined, EditOutlined, DeleteOutlined } from '@ant-design/icons';
+import React, { useEffect, useMemo, useState } from 'react';
+import {
+  Button,
+  Card,
+  Empty,
+  Form,
+  Input,
+  List,
+  Modal,
+  Popconfirm,
+  Row,
+  Col,
+  Select,
+  Space,
+  Spin,
+  Statistic,
+  Tag,
+  Typography,
+  message
+} from 'antd';
+import {
+  BookOutlined,
+  DeleteOutlined,
+  EditOutlined,
+  EyeOutlined,
+  PlusOutlined,
+  SearchOutlined
+} from '@ant-design/icons';
+import api from '../../api/axiosConfig';
 
-const { Title, Text } = Typography;
-const { Panel } = Collapse;
+const { Title, Text, Paragraph } = Typography;
 const { TextArea } = Input;
 
-// Mock data - replace with actual API calls
-const categories = [
-  {
-    id: 'getting-started',
-    name: 'Getting Started',
-    articles: [
-      {
-        id: 'gs-1',
-        title: 'How to log in to your account',
-        content: 'To log in to your account, follow these steps...',
-        tags: ['login', 'authentication'],
-      },
-      {
-        id: 'gs-2',
-        title: 'Navigating the dashboard',
-        content: 'The dashboard provides an overview of...',
-        tags: ['dashboard', 'navigation'],
-      },
-    ],
-  },
-  {
-    id: 'resources',
-    name: 'Resources',
-    articles: [
-      {
-        id: 'res-1',
-        title: 'Uploading and managing resources',
-        content: 'Learn how to upload and organize your resources...',
-        tags: ['upload', 'resources', 'files'],
-      },
-      {
-        id: 'res-2',
-        title: 'Sharing resources with your team',
-        content: 'You can share resources with your team members by...',
-        tags: ['sharing', 'collaboration'],
-      },
-    ],
-  },
-  {
-    id: 'troubleshooting',
-    name: 'Troubleshooting',
-    articles: [
-      {
-        id: 'ts-1',
-        title: 'Common login issues and solutions',
-        content: 'If you\'re having trouble logging in, try these solutions...',
-        tags: ['login', 'authentication', 'issues'],
-      },
-      {
-        id: 'ts-2',
-        title: 'File upload errors',
-        content: 'If you encounter errors while uploading files...',
-        tags: ['upload', 'errors', 'files'],
-      },
-    ],
-  },
+const CATEGORY_OPTIONS = [
+  { value: 'onboarding', label: 'Onboarding' },
+  { value: 'account-access', label: 'Account & Access' },
+  { value: 'communication', label: 'Communication' },
+  { value: 'resources', label: 'Resources & Watermarking' },
+  { value: 'support', label: 'Support Operations' },
+  { value: 'analytics', label: 'Analytics & Reporting' },
+  { value: 'troubleshooting', label: 'Troubleshooting' }
 ];
 
+const getApiErrorMessage = (error, fallbackMessage) => {
+  const detail = error?.response?.data?.detail;
+
+  if (Array.isArray(detail)) {
+    return detail
+      .map((item) => item?.msg || item?.message)
+      .filter(Boolean)
+      .join(', ') || fallbackMessage;
+  }
+
+  if (typeof detail === 'string' && detail.trim()) {
+    return detail;
+  }
+
+  return fallbackMessage;
+};
+
+const parseTags = (tags) => (
+  String(tags || '')
+    .split(',')
+    .map((tag) => tag.trim())
+    .filter(Boolean)
+);
+
+const formatCategoryLabel = (category) => {
+  const matchedOption = CATEGORY_OPTIONS.find((option) => option.value === category);
+  if (matchedOption) {
+    return matchedOption.label;
+  }
+
+  return String(category || 'General')
+    .split(/[-_]/g)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ');
+};
+
 const KnowledgeBase = () => {
+  const [form] = Form.useForm();
+  const [articles, setArticles] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
-  const [isEditing, setIsEditing] = useState(false);
+  const [isEditorOpen, setIsEditorOpen] = useState(false);
   const [editingArticle, setEditingArticle] = useState(null);
-  const [isNewArticle, setIsNewArticle] = useState(false);
-  const [formData, setFormData] = useState({
-    category: '',
-    title: '',
-    content: '',
-    tags: [],
-  });
-  const [newTag, setNewTag] = useState('');
+  const [viewingArticle, setViewingArticle] = useState(null);
+  const [viewModalOpen, setViewModalOpen] = useState(false);
 
-  const filteredCategories = categories.map(category => ({
-    ...category,
-    articles: category.articles.filter(article => 
-      article.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      article.content.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      article.tags.some(tag => tag.toLowerCase().includes(searchQuery.toLowerCase()))
-    ),
-  })).filter(category => category.articles.length > 0);
+  useEffect(() => {
+    fetchArticles();
+  }, []);
 
-  const handleSearch = (e) => {
-    setSearchQuery(e.target.value);
-  };
-
-  const handleEditArticle = (article, categoryId) => {
-    setEditingArticle({ ...article, categoryId });
-    setFormData({
-      category: categoryId,
-      title: article.title,
-      content: article.content,
-      tags: [...article.tags],
-    });
-    setIsEditing(true);
-    setIsNewArticle(false);
-  };
-
-  const handleNewArticle = () => {
-    setEditingArticle(null);
-    setFormData({
-      category: categories[0]?.id || '',
-      title: '',
-      content: '',
-      tags: [],
-    });
-    setIsEditing(true);
-    setIsNewArticle(true);
-  };
-
-  const handleSaveArticle = () => {
-    // In a real app, this would be an API call to save the article
-    console.log('Saving article:', formData);
-    
-    // Reset form and close editor
-    setIsEditing(false);
-    setFormData({
-      category: '',
-      title: '',
-      content: '',
-      tags: [],
-    });
-  };
-
-  const handleDeleteArticle = (articleId) => {
-    // In a real app, this would be an API call to delete the article
-    console.log('Deleting article:', articleId);
-  };
-
-  const handleAddTag = () => {
-    if (newTag.trim() && !formData.tags.includes(newTag.trim().toLowerCase())) {
-      setFormData({
-        ...formData,
-        tags: [...formData.tags, newTag.trim().toLowerCase()],
-      });
-      setNewTag('');
+  const fetchArticles = async () => {
+    setLoading(true);
+    try {
+      const response = await api.get('/knowledge-base');
+      setArticles(response.data || []);
+    } catch (error) {
+      console.error('Error fetching knowledge base articles:', error);
+      message.error(getApiErrorMessage(error, 'Failed to load knowledge base'));
+    } finally {
+      setLoading(false);
     }
   };
 
-  const handleRemoveTag = (tagToRemove) => {
-    setFormData({
-      ...formData,
-      tags: formData.tags.filter(tag => tag !== tagToRemove),
+  const groupedArticles = useMemo(() => {
+    const query = searchQuery.trim().toLowerCase();
+    const filtered = articles.filter((article) => {
+      const tagText = parseTags(article.tags).join(' ').toLowerCase();
+      const haystack = [
+        article.title,
+        article.content,
+        article.category,
+        tagText
+      ]
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase();
+
+      return !query || haystack.includes(query);
     });
+
+    return filtered.reduce((accumulator, article) => {
+      const key = article.category || 'general';
+      if (!accumulator[key]) {
+        accumulator[key] = [];
+      }
+      accumulator[key].push(article);
+      return accumulator;
+    }, {});
+  }, [articles, searchQuery]);
+
+  const categoryCards = useMemo(() => Object.entries(groupedArticles).map(([category, items]) => ({
+    category,
+    label: formatCategoryLabel(category),
+    count: items.length
+  })), [groupedArticles]);
+
+  const totalViews = useMemo(
+    () => articles.reduce((sum, article) => sum + (article.view_count || 0), 0),
+    [articles]
+  );
+
+  const openCreateModal = () => {
+    setEditingArticle(null);
+    form.resetFields();
+    form.setFieldsValue({
+      category: CATEGORY_OPTIONS[0]?.value,
+      tags: []
+    });
+    setIsEditorOpen(true);
   };
 
-  const renderArticleContent = (content) => {
-    return content.split('\n').map((paragraph, index) => (
-      <p key={index} style={{ marginBottom: '1em' }}>{paragraph}</p>
-    ));
+  const openEditModal = (article) => {
+    setEditingArticle(article);
+    form.setFieldsValue({
+      category: article.category,
+      title: article.title,
+      content: article.content,
+      tags: parseTags(article.tags)
+    });
+    setIsEditorOpen(true);
   };
+
+  const closeEditor = () => {
+    setIsEditorOpen(false);
+    setEditingArticle(null);
+    form.resetFields();
+  };
+
+  const handleSave = async (values) => {
+    const payload = {
+      title: values.title.trim(),
+      content: values.content.trim(),
+      category: values.category,
+      tags: (values.tags || []).join(',')
+    };
+
+    setSaving(true);
+    try {
+      if (editingArticle) {
+        await api.put(`/admin/knowledge-base/${editingArticle.id}`, {
+          ...payload,
+          is_published: true
+        });
+        message.success('Article updated successfully');
+      } else {
+        await api.post('/admin/knowledge-base', payload);
+        message.success('Article created successfully');
+      }
+
+      closeEditor();
+      fetchArticles();
+    } catch (error) {
+      console.error('Error saving knowledge base article:', error);
+      message.error(getApiErrorMessage(error, 'Failed to save article'));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleDelete = async (articleId) => {
+    try {
+      await api.delete(`/admin/knowledge-base/${articleId}`);
+      message.success('Article deleted successfully');
+      fetchArticles();
+    } catch (error) {
+      console.error('Error deleting article:', error);
+      message.error(getApiErrorMessage(error, 'Failed to delete article'));
+    }
+  };
+
+  const handleViewArticle = async (articleId) => {
+    try {
+      const response = await api.get(`/knowledge-base/${articleId}`);
+      setViewingArticle(response.data);
+      setViewModalOpen(true);
+      setArticles((previousArticles) => previousArticles.map((article) => (
+        article.id === articleId ? response.data : article
+      )));
+    } catch (error) {
+      console.error('Error loading article:', error);
+      message.error(getApiErrorMessage(error, 'Failed to load article'));
+    }
+  };
+
+  const categoryOptions = useMemo(() => {
+    const dynamicCategories = Array.from(new Set(articles.map((article) => article.category).filter(Boolean)));
+    const knownValues = new Set(CATEGORY_OPTIONS.map((option) => option.value));
+
+    return [
+      ...CATEGORY_OPTIONS,
+      ...dynamicCategories
+        .filter((category) => !knownValues.has(category))
+        .map((category) => ({
+          value: category,
+          label: formatCategoryLabel(category)
+        }))
+    ];
+  }, [articles]);
 
   return (
     <div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 24 }}>
-        <Title level={2}>Knowledge Base</Title>
-        <Button 
-          type="primary" 
-          icon={<PlusOutlined />} 
-          onClick={handleNewArticle}
-        >
+      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 16, flexWrap: 'wrap', marginBottom: 24 }}>
+        <div>
+          <Title level={2} style={{ marginBottom: 4 }}>Knowledge Base</Title>
+          <Text type="secondary">
+            Maintain help content for announcements, resources, school onboarding, support workflows, and platform troubleshooting.
+          </Text>
+        </div>
+        <Button type="primary" icon={<PlusOutlined />} onClick={openCreateModal}>
           New Article
         </Button>
       </div>
 
+      <Row gutter={[16, 16]} style={{ marginBottom: 24 }}>
+        <Col xs={24} sm={8}>
+          <Card>
+            <Statistic title="Published Articles" value={articles.length} prefix={<BookOutlined />} />
+          </Card>
+        </Col>
+        <Col xs={24} sm={8}>
+          <Card>
+            <Statistic title="Categories" value={Object.keys(groupedArticles).length} />
+          </Card>
+        </Col>
+        <Col xs={24} sm={8}>
+          <Card>
+            <Statistic title="Total Views" value={totalViews} prefix={<EyeOutlined />} />
+          </Card>
+        </Col>
+      </Row>
+
       <Card>
-        <div style={{ marginBottom: 24 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap', marginBottom: 20 }}>
           <Input
-            placeholder="Search the knowledge base..."
-            prefix={<SearchOutlined />}
-            value={searchQuery}
-            onChange={handleSearch}
-            style={{ maxWidth: 500 }}
             allowClear
+            value={searchQuery}
+            onChange={(event) => setSearchQuery(event.target.value)}
+            prefix={<SearchOutlined />}
+            placeholder="Search by title, content, category, or tag"
+            style={{ maxWidth: 420 }}
           />
+          <Space wrap>
+            {categoryCards.map((item) => (
+              <Tag key={item.category} color="blue" style={{ padding: '6px 10px' }}>
+                {item.label}: {item.count}
+              </Tag>
+            ))}
+          </Space>
         </div>
 
-        {isEditing ? (
-          <Card 
-            title={isNewArticle ? 'Create New Article' : 'Edit Article'}
-            style={{ marginBottom: 24 }}
-          >
-            <div style={{ marginBottom: 16 }}>
-              <div style={{ marginBottom: 8 }}>Category</div>
-              <Select 
-                value={formData.category}
-                onChange={(value) => setFormData({ ...formData, category: value })}
-                style={{ width: '100%', marginBottom: 16 }}
-              >
-                {categories.map(cat => (
-                  <Option key={cat.id} value={cat.id}>
-                    {cat.name}
-                  </Option>
-                ))}
-              </Select>
-
-              <div style={{ marginBottom: 8 }}>Title</div>
-              <Input
-                value={formData.title}
-                onChange={(e) => setFormData({ ...formData, title: e.target.value })}
-                style={{ marginBottom: 16 }}
-                placeholder="Enter article title"
-              />
-
-              <div style={{ marginBottom: 8 }}>Content</div>
-              <TextArea
-                value={formData.content}
-                onChange={(e) => setFormData({ ...formData, content: e.target.value })}
-                rows={10}
-                style={{ marginBottom: 16 }}
-                placeholder="Enter article content (supports markdown)"
-              />
-
-              <div style={{ marginBottom: 8 }}>Tags</div>
-              <div style={{ display: 'flex', marginBottom: 16, gap: 8, flexWrap: 'wrap' }}>
-                {formData.tags.map(tag => (
-                  <Tag 
-                    key={tag} 
-                    closable 
-                    onClose={() => handleRemoveTag(tag)}
-                  >
-                    {tag}
-                  </Tag>
-                ))}
-                <Input
-                  value={newTag}
-                  onChange={(e) => setNewTag(e.target.value)}
-                  onPressEnter={handleAddTag}
-                  onBlur={handleAddTag}
-                  placeholder="Add tag..."
-                  style={{ width: 120 }}
-                />
-              </div>
-            </div>
-
-            <div style={{ textAlign: 'right' }}>
-              <Button 
-                style={{ marginRight: 8 }} 
-                onClick={() => {
-                  setIsEditing(false);
-                  setFormData({
-                    category: '',
-                    title: '',
-                    content: '',
-                    tags: [],
-                  });
-                }}
-              >
-                Cancel
-              </Button>
-              <Button 
-                type="primary" 
-                onClick={handleSaveArticle}
-                disabled={!formData.category || !formData.title || !formData.content}
-              >
-                {isNewArticle ? 'Create Article' : 'Save Changes'}
-              </Button>
-            </div>
-          </Card>
+        {loading ? (
+          <div style={{ padding: '48px 0', textAlign: 'center' }}>
+            <Spin size="large" />
+          </div>
+        ) : Object.keys(groupedArticles).length === 0 ? (
+          <Empty
+            description={searchQuery ? 'No articles matched your search' : 'No knowledge base articles available'}
+            image={Empty.PRESENTED_IMAGE_SIMPLE}
+          />
         ) : (
-          <Collapse defaultActiveKey={['getting-started']}>
-            {filteredCategories.map(category => (
-              <Panel 
-                header={category.name} 
-                key={category.id}
-                extra={`${category.articles.length} articles`}
+          <div style={{ display: 'grid', gap: 18 }}>
+            {Object.entries(groupedArticles).map(([category, items]) => (
+              <Card
+                key={category}
+                title={formatCategoryLabel(category)}
+                extra={<Text type="secondary">{items.length} article{items.length === 1 ? '' : 's'}</Text>}
               >
                 <List
-                  itemLayout="horizontal"
-                  dataSource={category.articles}
-                  renderItem={article => (
+                  itemLayout="vertical"
+                  dataSource={items}
+                  renderItem={(article) => (
                     <List.Item
+                      key={article.id}
                       actions={[
-                        <Button 
-                          type="text" 
-                          icon={<EditOutlined />} 
-                          onClick={() => handleEditArticle(article, category.id)}
-                        />,
-                        <Button 
-                          type="text" 
-                          danger 
-                          icon={<DeleteOutlined />} 
-                          onClick={() => handleDeleteArticle(article.id)}
-                        />
+                        <Button key="view" type="link" icon={<EyeOutlined />} onClick={() => handleViewArticle(article.id)}>
+                          Read
+                        </Button>,
+                        <Button key="edit" type="link" icon={<EditOutlined />} onClick={() => openEditModal(article)}>
+                          Edit
+                        </Button>,
+                        <Popconfirm
+                          key="delete"
+                          title="Delete article"
+                          description="This article will be removed from the knowledge base."
+                          okText="Delete"
+                          cancelText="Cancel"
+                          onConfirm={() => handleDelete(article.id)}
+                        >
+                          <Button type="link" danger icon={<DeleteOutlined />}>
+                            Delete
+                          </Button>
+                        </Popconfirm>
                       ]}
                     >
                       <List.Item.Meta
-                        title={
-                          <div style={{ cursor: 'pointer' }}>
-                            {article.title}
-                          </div>
-                        }
-                        description={
-                          <div>
-                            <div style={{ marginBottom: 8 }}>
-                              {article.tags.map(tag => (
-                                <Tag key={tag} style={{ marginRight: 8, marginBottom: 4 }}>{tag}</Tag>
-                              ))}
-                            </div>
-                            <div style={{ color: 'rgba(0, 0, 0, 0.45)' }}>
-                              {article.content.substring(0, 150)}...
-                            </div>
-                          </div>
-                        }
+                        title={<span style={{ fontWeight: 700 }}>{article.title}</span>}
+                        description={(
+                          <Space size={[8, 8]} wrap>
+                            <Tag color="geekblue">{formatCategoryLabel(article.category)}</Tag>
+                            <Tag>{article.view_count || 0} views</Tag>
+                            <Text type="secondary">
+                              Updated {new Date(article.updated_at).toLocaleDateString()}
+                            </Text>
+                          </Space>
+                        )}
                       />
+                      <Paragraph ellipsis={{ rows: 3, expandable: false }} style={{ marginBottom: 10 }}>
+                        {article.content}
+                      </Paragraph>
+                      <Space size={[8, 8]} wrap>
+                        {parseTags(article.tags).map((tag) => (
+                          <Tag key={`${article.id}-${tag}`}>{tag}</Tag>
+                        ))}
+                      </Space>
                     </List.Item>
                   )}
                 />
-              </Panel>
+              </Card>
             ))}
-          </Collapse>
+          </div>
         )}
       </Card>
 
-      {!isEditing && (
-        <div style={{ marginTop: 24, textAlign: 'center' }}>
-          <Divider>Need more help?</Divider>
-          <p>Can't find what you're looking for? Contact our support team for assistance.</p>
-          <Button type="primary" onClick={() => console.log('Contact support')}>
-            Contact Support
-          </Button>
-        </div>
-      )}
+      <Modal
+        title={editingArticle ? 'Edit Article' : 'Create Article'}
+        open={isEditorOpen}
+        onCancel={closeEditor}
+        onOk={() => form.submit()}
+        okText={editingArticle ? 'Save Changes' : 'Create Article'}
+        confirmLoading={saving}
+        width={760}
+        destroyOnClose
+      >
+        <Form form={form} layout="vertical" onFinish={handleSave}>
+          <Form.Item
+            name="category"
+            label="Category"
+            rules={[{ required: true, message: 'Please select a category' }]}
+          >
+            <Select
+              options={categoryOptions}
+              placeholder="Select article category"
+            />
+          </Form.Item>
+
+          <Form.Item
+            name="title"
+            label="Title"
+            rules={[{ required: true, message: 'Please enter an article title' }]}
+          >
+            <Input placeholder="Example: Publishing announcements with attachments" />
+          </Form.Item>
+
+          <Form.Item
+            name="tags"
+            label="Tags"
+            extra="Press Enter after each tag"
+          >
+            <Select
+              mode="tags"
+              tokenSeparators={[',']}
+              placeholder="Add tags like announcements, attachments, login"
+            />
+          </Form.Item>
+
+          <Form.Item
+            name="content"
+            label="Content"
+            rules={[{ required: true, message: 'Please add article content' }]}
+          >
+            <TextArea
+              rows={12}
+              placeholder="Write the help article content here. Use plain paragraphs and step-by-step guidance where helpful."
+            />
+          </Form.Item>
+        </Form>
+      </Modal>
+
+      <Modal
+        title={viewingArticle?.title || 'Article'}
+        open={viewModalOpen}
+        onCancel={() => {
+          setViewModalOpen(false);
+          setViewingArticle(null);
+        }}
+        footer={null}
+        width={760}
+        destroyOnClose
+      >
+        {viewingArticle ? (
+          <div>
+            <Space size={[8, 8]} wrap style={{ marginBottom: 12 }}>
+              <Tag color="geekblue">{formatCategoryLabel(viewingArticle.category)}</Tag>
+              <Tag>{viewingArticle.view_count || 0} views</Tag>
+              <Text type="secondary">
+                Updated {new Date(viewingArticle.updated_at).toLocaleString()}
+              </Text>
+            </Space>
+
+            <div style={{ marginBottom: 16 }}>
+              <Space size={[8, 8]} wrap>
+                {parseTags(viewingArticle.tags).map((tag) => (
+                  <Tag key={`view-${tag}`}>{tag}</Tag>
+                ))}
+              </Space>
+            </div>
+
+            <Paragraph style={{ whiteSpace: 'pre-line', marginBottom: 0 }}>
+              {viewingArticle.content}
+            </Paragraph>
+          </div>
+        ) : null}
+      </Modal>
     </div>
   );
 };

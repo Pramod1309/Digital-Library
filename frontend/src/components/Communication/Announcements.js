@@ -14,6 +14,23 @@ const { TextArea } = Input;
 const { Option } = Select;
 const { Text } = Typography;
 
+const getApiErrorMessage = (error, fallbackMessage) => {
+  const detail = error?.response?.data?.detail;
+
+  if (Array.isArray(detail)) {
+    return detail
+      .map((item) => item?.msg || item?.message)
+      .filter(Boolean)
+      .join(', ') || fallbackMessage;
+  }
+
+  if (typeof detail === 'string' && detail.trim()) {
+    return detail;
+  }
+
+  return fallbackMessage;
+};
+
 const Announcements = () => {
   const [form] = Form.useForm();
   const [isModalVisible, setIsModalVisible] = useState(false);
@@ -72,15 +89,10 @@ const Announcements = () => {
       });
 
       if (editingAnnouncement) {
-        formData.append('id', editingAnnouncement.id);
-        await api.put(`/admin/announcements/${editingAnnouncement.id}`, formData, {
-          headers: { 'Content-Type': 'multipart/form-data' }
-        });
+        await api.put(`/admin/announcements/${editingAnnouncement.id}`, formData);
         message.success('Announcement updated successfully');
       } else {
-        await api.post('/admin/announcements', formData, {
-          headers: { 'Content-Type': 'multipart/form-data' }
-        });
+        await api.post('/admin/announcements', formData);
         message.success('Announcement created successfully');
       }
       
@@ -92,7 +104,7 @@ const Announcements = () => {
       fetchAnnouncements();
     } catch (error) {
       console.error('Error saving announcement:', error);
-      message.error('Failed to save announcement');
+      message.error(getApiErrorMessage(error, 'Failed to save announcement'));
     }
   };
 
@@ -125,7 +137,7 @@ const Announcements = () => {
       fetchAnnouncements();
     } catch (error) {
       console.error('Error deleting announcement:', error);
-      message.error('Failed to delete announcement');
+      message.error(getApiErrorMessage(error, 'Failed to delete announcement'));
     }
   };
 
@@ -206,27 +218,47 @@ const Announcements = () => {
       title: 'Attachments', 
       dataIndex: 'attachments', 
       key: 'attachments',
+      width: 260,
       render: (attachments) => {
         if (!attachments || attachments.length === 0) {
           return <Text type="secondary">No files</Text>;
         }
         return (
-          <Space direction="vertical" size="small">
-            {attachments.map((file, idx) => (
-              <Space key={idx}>
-                <FileOutlined />
-                <Text>{getAttachmentName(file)}</Text>
-                <Button 
-                  type="link" 
-                  size="small" 
+          <div style={{ display: 'grid', gap: 8 }}>
+            {attachments.map((file) => (
+              <div
+                key={file.id || file.url || getAttachmentName(file)}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 8,
+                  minWidth: 0
+                }}
+              >
+                <FileOutlined style={{ flexShrink: 0 }} />
+                <Text
+                  style={{
+                    flex: 1,
+                    minWidth: 0,
+                    whiteSpace: 'nowrap',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis'
+                  }}
+                  title={getAttachmentName(file)}
+                >
+                  {getAttachmentName(file)}
+                </Text>
+                <Button
+                  type="link"
+                  size="small"
                   icon={<EyeOutlined />}
                   onClick={() => handlePreview(file)}
                 >
                   Preview
                 </Button>
-              </Space>
+              </div>
             ))}
-          </Space>
+          </div>
         );
       }
     },

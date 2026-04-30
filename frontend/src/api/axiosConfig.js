@@ -7,14 +7,23 @@ const API = `${BACKEND_URL}/api`;
 // Create axios instance
 const api = axios.create({
   baseURL: API,
-  headers: {
-    'Content-Type': 'application/json',
-  },
 });
 
 // Add request interceptor to include auth token
 api.interceptors.request.use(
   (config) => {
+    const isFormData = typeof FormData !== 'undefined' && config.data instanceof FormData;
+
+    if (isFormData) {
+      if (typeof config.headers?.setContentType === 'function') {
+        config.headers.setContentType(undefined);
+      } else if (config.headers) {
+        delete config.headers['Content-Type'];
+      }
+    } else if (config.headers && !config.headers['Content-Type']) {
+      config.headers['Content-Type'] = 'application/json';
+    }
+
     const token = sessionStorage.getItem('token');
     if (token) {
       config.headers.Authorization = `Bearer ${token}`;

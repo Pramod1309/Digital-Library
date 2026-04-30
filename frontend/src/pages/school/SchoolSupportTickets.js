@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Card, Table, Button, Modal, Form, Input, Select, Tag, message, Upload, Space, Typography } from 'antd';
+import { Card, Table, Button, Modal, Form, Input, Select, Tag, message, Upload, Typography } from 'antd';
 import { PlusOutlined, FileTextOutlined, FileOutlined, EyeOutlined, UploadOutlined } from '@ant-design/icons';
 import { useSearchParams } from 'react-router-dom';
 import api from '../../api/axiosConfig';
@@ -88,11 +88,7 @@ const SchoolSupportTickets = ({ user }) => {
         }
       });
 
-      await api.post(`/school/support/tickets`, formData, {
-        headers: {
-          'Content-Type': 'multipart/form-data',
-        },
-      });
+      await api.post(`/school/support/tickets`, formData);
 
       message.success('Support ticket created successfully');
       handleCloseModal();
@@ -173,19 +169,42 @@ const SchoolSupportTickets = ({ user }) => {
         }
 
         return (
-          <Space direction="vertical" size="small">
+          <div style={{ display: 'grid', gap: 6 }}>
             {attachments.map((file) => (
-              <Button
-                key={file.id}
-                type="link"
-                icon={<EyeOutlined />}
-                onClick={() => handlePreview(file)}
-                style={{ padding: 0, height: 'auto' }}
+              <div
+                key={file.id || file.url || getAttachmentName(file)}
+                style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}
               >
-                {getAttachmentName(file)}
-              </Button>
+                <FileOutlined style={{ color: '#1890ff', flexShrink: 0 }} />
+                <Button
+                  type="link"
+                  icon={<EyeOutlined />}
+                  onClick={() => handlePreview(file)}
+                  style={{
+                    padding: 0,
+                    height: 'auto',
+                    minWidth: 0,
+                    maxWidth: '100%',
+                    justifyContent: 'flex-start'
+                  }}
+                >
+                  <span
+                    style={{
+                      display: 'inline-block',
+                      maxWidth: 170,
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      whiteSpace: 'nowrap',
+                      verticalAlign: 'bottom'
+                    }}
+                    title={getAttachmentName(file)}
+                  >
+                    {getAttachmentName(file)}
+                  </span>
+                </Button>
+              </div>
             ))}
-          </Space>
+          </div>
         );
       }
     },

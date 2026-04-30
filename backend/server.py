@@ -268,6 +268,13 @@ class KnowledgeArticleCreate(BaseModel):
     category: str
     tags: Optional[str] = None
 
+class KnowledgeArticleUpdate(BaseModel):
+    title: str
+    content: str
+    category: str
+    tags: Optional[str] = None
+    is_published: bool = True
+
 class KnowledgeArticleResponse(BaseModel):
     id: int
     title: str
@@ -884,6 +891,153 @@ def get_unread_announcement_entries(db: Session, school_id: str) -> List[Announc
         ).all()
     }
     return [announcement for announcement in announcements if announcement.id not in read_ids]
+
+def normalize_optional_csv_text(value: Optional[str]) -> Optional[str]:
+    if value is None:
+        return None
+    normalized = value.strip()
+    return normalized or None
+
+def iter_valid_uploads(files: Optional[List[UploadFile]]) -> List[UploadFile]:
+    return [
+        upload
+        for upload in (files or [])
+        if upload and getattr(upload, "filename", None)
+    ]
+
+def delete_file_if_present(file_path: Union[str, Path, None]) -> None:
+    if not file_path:
+        return
+
+    try:
+        Path(file_path).unlink(missing_ok=True)
+    except Exception as exc:
+        logger.warning("Could not delete file %s: %s", file_path, exc)
+
+def delete_announcement_attachments(db: Session, announcement_id: int) -> None:
+    attachments = db.query(AnnouncementAttachment).filter(
+        AnnouncementAttachment.announcement_id == announcement_id
+    ).all()
+
+    for attachment in attachments:
+        delete_file_if_present(attachment.file_path)
+        db.delete(attachment)
+
+def delete_support_ticket_attachments(db: Session, ticket_id: str) -> None:
+    attachments = db.query(SupportTicketAttachment).filter(
+        SupportTicketAttachment.ticket_id == ticket_id
+    ).all()
+
+    for attachment in attachments:
+        delete_file_if_present(attachment.file_path)
+        db.delete(attachment)
+
+DEFAULT_KNOWLEDGE_ARTICLES = [
+    {
+        "title": "Getting Started with Wonder Learning India",
+        "category": "onboarding",
+        "tags": "onboarding,login,school dashboard,admin dashboard",
+        "content": (
+            "Wonder Learning India connects admins and schools through one digital library workspace.\n\n"
+            "Admins can publish resources, send announcements, manage school uploads, review analytics, respond to chats, "
+            "and handle support tickets from the admin panel.\n\n"
+            "Schools can log in, browse categorized resources, download approved content, upload material for review, "
+            "read announcements, message admin support, and raise tickets when they need help."
+        ),
+    },
+    {
+        "title": "Managing School Accounts and Access",
+        "category": "account-access",
+        "tags": "school onboarding,password reset,login,credentials,admin",
+        "content": (
+            "Use the School Management section to add new schools, edit their details, and keep contact information accurate.\n\n"
+            "When a school logs in for the first time, the platform can send a welcome email with dashboard guidance.\n\n"
+            "If a school forgets its password, use the password reset flow and verify that the registered email and mobile "
+            "number are correct before troubleshooting OTP delivery."
+        ),
+    },
+    {
+        "title": "Publishing Announcements with Attachments",
+        "category": "communication",
+        "tags": "announcements,attachments,schools,communication",
+        "content": (
+            "Create announcements for all schools or target specific school IDs when the message should only reach selected branches.\n\n"
+            "Attach PDFs, images, office documents, audio, or video files when schools need supporting material.\n\n"
+            "After publishing, verify the attachment preview from both the admin list and the school announcement view to ensure the file opens correctly."
+        ),
+    },
+    {
+        "title": "Admin and School Chat Best Practices",
+        "category": "communication",
+        "tags": "chat,attachments,microphone,admin,school",
+        "content": (
+            "Use chat for quick operational follow-ups such as approval clarifications, missing file questions, or urgent updates.\n\n"
+            "You can send text together with files so context stays attached to the document, screenshot, or audio note.\n\n"
+            "If voice typing is used, review the generated text before sending and confirm that attachments preview correctly inside the conversation."
+        ),
+    },
+    {
+        "title": "Resource Management and Batch Watermark Workflow",
+        "category": "resources",
+        "tags": "resources,watermark,batch watermark,downloads,branding",
+        "content": (
+            "Upload resources under the correct category and subcategory so schools can discover them quickly.\n\n"
+            "Use watermark settings when you want files branded for school-safe distribution, especially for worksheets, posters, and print-ready material.\n\n"
+            "Batch watermark is best for larger content sets that need consistent branding before schools download them."
+        ),
+    },
+    {
+        "title": "Reviewing School Uploads and Attachment Issues",
+        "category": "resources",
+        "tags": "school uploads,approval,attachments,preview,documents",
+        "content": (
+            "School uploads should be reviewed for category fit, file integrity, and content quality before approval.\n\n"
+            "If a preview fails, check whether the file exists on the server, whether the browser supports in-browser preview for that format, "
+            "and whether the uploaded MIME type matches the real document type.\n\n"
+            "For office documents that do not preview inline, keep the download option available so admins can still inspect the file."
+        ),
+    },
+    {
+        "title": "Support Ticket Triage for Digital Library Operations",
+        "category": "support",
+        "tags": "support tickets,priority,attachments,troubleshooting",
+        "content": (
+            "Ask schools to choose the right category and priority so urgent classroom blockers can be separated from general questions.\n\n"
+            "Always review attachment evidence on incoming tickets, especially screenshots, PDFs, and recordings that explain the issue visually.\n\n"
+            "When a ticket is resolved, reply with the exact action taken so the school can learn the correct workflow for next time."
+        ),
+    },
+    {
+        "title": "Reading Dashboard Metrics and Usage Signals",
+        "category": "analytics",
+        "tags": "analytics,dashboard,downloads,engagement,reports",
+        "content": (
+            "The admin dashboard is designed to surface school activity, unread conversations, pending uploads, and resource consumption patterns.\n\n"
+            "Use these metrics to spot under-engaged schools, high-performing content categories, and operational bottlenecks that need follow-up.\n\n"
+            "School-side reports help branches understand what children and teachers are using most, which supports planning and curriculum alignment."
+        ),
+    },
+    {
+        "title": "Common Troubleshooting Checklist",
+        "category": "troubleshooting",
+        "tags": "troubleshooting,uploads,preview,cors,permissions",
+        "content": (
+            "If a form submits without a file, confirm the frontend field names match the backend route and that the request is multipart form data.\n\n"
+            "If delete or preview actions fail, inspect server logs for attachment cleanup errors, missing files, or permission problems in the uploads directory.\n\n"
+            "If the browser reports a CORS error on a request that worked before, check whether the backend actually returned an internal server error instead of a real cross-origin rejection."
+        ),
+    },
+]
+
+def ensure_default_knowledge_articles(db: Session) -> None:
+    has_articles = db.query(KnowledgeArticle.id).first()
+    if has_articles:
+        return
+
+    for article in DEFAULT_KNOWLEDGE_ARTICLES:
+        db.add(KnowledgeArticle(**article))
+
+    db.commit()
 
 def get_unread_school_ticket_updates(db: Session, school_id: str) -> List[SupportTicket]:
     tickets = db.query(SupportTicket).filter(
@@ -5065,43 +5219,37 @@ async def create_announcement(
         title=title,
         content=content,
         priority=priority,
-        target_schools=target_schools
+        target_schools=normalize_optional_csv_text(target_schools)
     )
     
     db.add(new_announcement)
     db.commit()
     db.refresh(new_announcement)
     
-    # Handle file attachments
-    if files:
-        for file in files:
-            # Generate unique filename
-            file_extension = file.filename.split('.')[-1] if '.' in file.filename else ''
-            unique_filename = f"announcement_{new_announcement.id}_{uuid.uuid4().hex[:8]}.{file_extension}"
-            
-            # Save file to uploads directory
-            upload_dir = ROOT_DIR / "uploads" / "announcements"
-            upload_dir.mkdir(parents=True, exist_ok=True)
-            file_path = upload_dir / unique_filename
-            
-            # Write file
-            with open(file_path, "wb") as buffer:
-                file_bytes = await file.read()
-                buffer.write(file_bytes)
-            
-            # Create attachment record
-            attachment = AnnouncementAttachment(
-                announcement_id=new_announcement.id,
-                filename=unique_filename,
-                original_name=file.filename,
-                file_path=str(file_path),
-                file_size=len(file_bytes),
-                file_type=file.content_type or 'application/octet-stream'
-            )
-            db.add(attachment)
-        
-        db.commit()
-        db.refresh(new_announcement)
+    upload_dir = ROOT_DIR / "uploads" / "announcements"
+    upload_dir.mkdir(parents=True, exist_ok=True)
+
+    for file in iter_valid_uploads(files):
+        file_extension = Path(file.filename).suffix
+        unique_filename = f"announcement_{new_announcement.id}_{uuid.uuid4().hex[:8]}{file_extension}"
+        file_path = upload_dir / unique_filename
+
+        with open(file_path, "wb") as buffer:
+            file_bytes = await file.read()
+            buffer.write(file_bytes)
+
+        attachment = AnnouncementAttachment(
+            announcement_id=new_announcement.id,
+            filename=unique_filename,
+            original_name=file.filename,
+            file_path=str(file_path),
+            file_size=len(file_bytes),
+            file_type=file.content_type or 'application/octet-stream'
+        )
+        db.add(attachment)
+
+    db.commit()
+    db.refresh(new_announcement)
 
     attachments = db.query(AnnouncementAttachment).filter(
         AnnouncementAttachment.announcement_id == new_announcement.id
@@ -5174,7 +5322,7 @@ async def update_announcement(
     content: str = Form(...),
     priority: str = Form('normal'),
     target_schools: Optional[str] = Form(None),
-    files: List[UploadFile] = File(default=[]),
+    files: Optional[List[UploadFile]] = File(None),
     db: Session = Depends(get_db)
 ):
     """Update announcement - Admin only"""
@@ -5186,33 +5334,29 @@ async def update_announcement(
     existing.title = title
     existing.content = content
     existing.priority = priority
-    existing.target_schools = target_schools
+    existing.target_schools = normalize_optional_csv_text(target_schools)
     existing.updated_at = datetime.utcnow()
 
-    if files:
-        upload_dir = ROOT_DIR / "uploads" / "announcements"
-        upload_dir.mkdir(parents=True, exist_ok=True)
+    upload_dir = ROOT_DIR / "uploads" / "announcements"
+    upload_dir.mkdir(parents=True, exist_ok=True)
 
-        for file in files:
-            if not file or not file.filename:
-                continue
+    for file in iter_valid_uploads(files):
+        file_extension = Path(file.filename).suffix
+        unique_filename = f"announcement_{existing.id}_{uuid.uuid4().hex[:8]}{file_extension}"
+        file_path = upload_dir / unique_filename
 
-            file_extension = file.filename.split('.')[-1] if '.' in file.filename else ''
-            unique_filename = f"announcement_{existing.id}_{uuid.uuid4().hex[:8]}.{file_extension}"
-            file_path = upload_dir / unique_filename
+        with open(file_path, "wb") as buffer:
+            file_bytes = await file.read()
+            buffer.write(file_bytes)
 
-            with open(file_path, "wb") as buffer:
-                file_bytes = await file.read()
-                buffer.write(file_bytes)
-
-            db.add(AnnouncementAttachment(
-                announcement_id=existing.id,
-                filename=unique_filename,
-                original_name=file.filename,
-                file_path=str(file_path),
-                file_size=len(file_bytes),
-                file_type=file.content_type or 'application/octet-stream'
-            ))
+        db.add(AnnouncementAttachment(
+            announcement_id=existing.id,
+            filename=unique_filename,
+            original_name=file.filename,
+            file_path=str(file_path),
+            file_size=len(file_bytes),
+            file_type=file.content_type or 'application/octet-stream'
+        ))
 
     db.query(AnnouncementRead).filter(
         AnnouncementRead.announcement_id == announcement_id
@@ -5260,6 +5404,8 @@ async def delete_announcement(announcement_id: int, db: Session = Depends(get_db
     db.query(AnnouncementRead).filter(
         AnnouncementRead.announcement_id == announcement_id
     ).delete()
+    delete_announcement_attachments(db, announcement_id)
+    db.flush()
     db.delete(announcement)
     db.commit()
     
@@ -5375,7 +5521,7 @@ async def create_support_ticket(
     priority: str = Form(...),
     school_id: str = Form(...),
     school_name: str = Form(...),
-    files: List[UploadFile] = File(default=[]),
+    files: Optional[List[UploadFile]] = File(None),
     db: Session = Depends(get_db)
 ):
     """Create support ticket - School"""
@@ -5399,27 +5545,24 @@ async def create_support_ticket(
     upload_dir = ROOT_DIR / "uploads" / "support_tickets"
     upload_dir.mkdir(parents=True, exist_ok=True)
     
-    for file in files:
-        if file and file.filename:
-            # Generate unique filename
-            file_extension = Path(file.filename).suffix
-            unique_filename = f"ticket_{new_ticket.id}_{uuid.uuid4()}{file_extension}"
-            file_path = upload_dir / unique_filename
-            
-            # Save file
-            with open(file_path, "wb") as buffer:
-                shutil.copyfileobj(file.file, buffer)
-            
-            # Create attachment record
-            attachment = SupportTicketAttachment(
-                ticket_id=new_ticket.ticket_id,
-                filename=unique_filename,
-                original_name=file.filename,
-                file_path=str(file_path),
-                file_size=file.size or 0,
-                file_type=file.content_type or "application/octet-stream"
-            )
-            db.add(attachment)
+    for file in iter_valid_uploads(files):
+        file_extension = Path(file.filename).suffix
+        unique_filename = f"ticket_{new_ticket.id}_{uuid.uuid4()}{file_extension}"
+        file_path = upload_dir / unique_filename
+
+        file_bytes = await file.read()
+        with open(file_path, "wb") as buffer:
+            buffer.write(file_bytes)
+
+        attachment = SupportTicketAttachment(
+            ticket_id=new_ticket.ticket_id,
+            filename=unique_filename,
+            original_name=file.filename,
+            file_path=str(file_path),
+            file_size=len(file_bytes),
+            file_type=file.content_type or "application/octet-stream"
+        )
+        db.add(attachment)
     
     record_activity(
         db,
@@ -5622,6 +5765,8 @@ async def delete_ticket(
         raise HTTPException(status_code=404, detail="Ticket not found")
     
     print(f"Deleting ticket: {ticket.ticket_id} - {ticket.subject}")
+    delete_support_ticket_attachments(db, ticket.ticket_id)
+    db.flush()
     db.delete(ticket)
     db.commit()
     
@@ -5656,27 +5801,24 @@ async def send_chat_message(
     upload_dir = ROOT_DIR / "uploads" / "chat_attachments"
     upload_dir.mkdir(parents=True, exist_ok=True)
     
-    for file in files:
-        if file and file.filename:
-            # Generate unique filename
-            file_extension = Path(file.filename).suffix
-            unique_filename = f"{uuid.uuid4()}{file_extension}"
-            file_path = upload_dir / unique_filename
-            
-            # Save file
-            with open(file_path, "wb") as buffer:
-                shutil.copyfileobj(file.file, buffer)
-            
-            # Create attachment record
-            attachment = ChatAttachment(
-                message_id=new_message.id,
-                filename=unique_filename,
-                original_name=file.filename,
-                file_path=str(file_path),
-                file_size=file.size or 0,
-                file_type=file.content_type or "application/octet-stream"
-            )
-            db.add(attachment)
+    for file in iter_valid_uploads(files):
+        file_extension = Path(file.filename).suffix
+        unique_filename = f"{uuid.uuid4()}{file_extension}"
+        file_path = upload_dir / unique_filename
+
+        file_bytes = await file.read()
+        with open(file_path, "wb") as buffer:
+            buffer.write(file_bytes)
+
+        attachment = ChatAttachment(
+            message_id=new_message.id,
+            filename=unique_filename,
+            original_name=file.filename,
+            file_path=str(file_path),
+            file_size=len(file_bytes),
+            file_type=file.content_type or "application/octet-stream"
+        )
+        db.add(attachment)
     
     if sender_type == "school":
         record_activity(
@@ -5826,10 +5968,10 @@ async def mark_messages_read(
 async def create_article(article: KnowledgeArticleCreate, db: Session = Depends(get_db)):
     """Create knowledge base article - Admin"""
     new_article = KnowledgeArticle(
-        title=article.title,
-        content=article.content,
-        category=article.category,
-        tags=article.tags
+        title=article.title.strip(),
+        content=article.content.strip(),
+        category=article.category.strip(),
+        tags=normalize_optional_csv_text(article.tags)
     )
     
     db.add(new_article)
@@ -5838,9 +5980,35 @@ async def create_article(article: KnowledgeArticleCreate, db: Session = Depends(
     
     return new_article
 
+@api_router.put("/admin/knowledge-base/{article_id}", response_model=KnowledgeArticleResponse)
+async def update_article(
+    article_id: int,
+    article: KnowledgeArticleUpdate,
+    db: Session = Depends(get_db)
+):
+    """Update knowledge base article - Admin"""
+    existing = db.query(KnowledgeArticle).filter(KnowledgeArticle.id == article_id).first()
+
+    if not existing:
+        raise HTTPException(status_code=404, detail="Article not found")
+
+    existing.title = article.title.strip()
+    existing.content = article.content.strip()
+    existing.category = article.category.strip()
+    existing.tags = normalize_optional_csv_text(article.tags)
+    existing.is_published = article.is_published
+    existing.updated_at = datetime.utcnow()
+
+    db.commit()
+    db.refresh(existing)
+
+    return existing
+
 @api_router.get("/knowledge-base", response_model=List[KnowledgeArticleResponse])
 async def get_articles(category: Optional[str] = None, db: Session = Depends(get_db)):
     """Get knowledge base articles"""
+    ensure_default_knowledge_articles(db)
+
     query = db.query(KnowledgeArticle).filter(KnowledgeArticle.is_published == True)
     
     if category:

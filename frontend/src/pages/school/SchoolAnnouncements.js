@@ -1,9 +1,11 @@
 import React, { useState, useEffect } from 'react';
-import { Card, List, Tag, Empty, Spin, Space, Button } from 'antd';
+import { Card, List, Tag, Empty, Spin, Button, Typography } from 'antd';
 import { NotificationOutlined, ClockCircleOutlined, FileOutlined, EyeOutlined } from '@ant-design/icons';
 import api from '../../api/axiosConfig';
 import AttachmentPreviewModal from '../../components/shared/AttachmentPreviewModal';
 import { getAttachmentName } from '../../utils/attachments';
+
+const { Text } = Typography;
 
 const SchoolAnnouncements = ({ user }) => {
   const [announcements, setAnnouncements] = useState([]);
@@ -103,27 +105,45 @@ const SchoolAnnouncements = ({ user }) => {
                     <div style={{ fontSize: '14px', fontWeight: 'bold', marginBottom: '8px', color: '#666' }}>
                       Attachments:
                     </div>
-                    <Space direction="vertical" size="small" style={{ width: '100%' }}>
-                      {item.attachments.map((file, idx) => (
-                        <Space key={idx} style={{ 
-                          padding: '8px 12px', 
-                          background: '#f5f5f5', 
-                          borderRadius: '6px',
-                          border: '1px solid #d9d9d9'
-                        }}>
-                          <FileOutlined style={{ color: '#1890ff' }} />
-                          <span style={{ fontSize: '14px' }}>{getAttachmentName(file)}</span>
-                          <Button 
-                            type="link" 
-                            size="small" 
+                    <div style={{ display: 'grid', gap: 8 }}>
+                      {item.attachments.map((file) => (
+                        <div
+                          key={file.id || file.url || getAttachmentName(file)}
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: 8,
+                            minWidth: 0,
+                            padding: '8px 12px',
+                            background: '#f5f5f5',
+                            borderRadius: '6px',
+                            border: '1px solid #d9d9d9'
+                          }}
+                        >
+                          <FileOutlined style={{ color: '#1890ff', flexShrink: 0 }} />
+                          <Text
+                            style={{
+                              flex: 1,
+                              minWidth: 0,
+                              whiteSpace: 'nowrap',
+                              overflow: 'hidden',
+                              textOverflow: 'ellipsis'
+                            }}
+                            title={getAttachmentName(file)}
+                          >
+                            {getAttachmentName(file)}
+                          </Text>
+                          <Button
+                            type="link"
+                            size="small"
                             icon={<EyeOutlined />}
                             onClick={() => handlePreview(file)}
                           >
                             Preview
                           </Button>
-                        </Space>
+                        </div>
                       ))}
-                    </Space>
+                    </div>
                   </div>
                 )}
               </List.Item>
