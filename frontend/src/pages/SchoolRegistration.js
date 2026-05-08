@@ -12,6 +12,8 @@ const SchoolRegistration = () => {
     school_name: '',
     email: '',
     contact_number: '',
+    region: '',
+    sub_region: '',
     password: '',
     confirmPassword: '',
     logo: null
@@ -78,6 +80,8 @@ const SchoolRegistration = () => {
       formDataToSend.append('school_name', formData.school_name);
       formDataToSend.append('email', formData.email);
       formDataToSend.append('contact_number', formData.contact_number);
+      formDataToSend.append('region', formData.region);
+      formDataToSend.append('sub_region', formData.sub_region);
       formDataToSend.append('password', formData.password);
       if (formData.logo) {
         formDataToSend.append('logo', formData.logo);
@@ -95,6 +99,8 @@ const SchoolRegistration = () => {
         school_name: '',
         email: '',
         contact_number: '',
+        region: '',
+        sub_region: '',
         password: '',
         confirmPassword: '',
         logo: null
@@ -185,6 +191,30 @@ const SchoolRegistration = () => {
               value={formData.contact_number}
               onChange={handleInputChange}
               placeholder="e.g., +91 1234567890"
+            />
+          </div>
+
+          <div className="form-group">
+            <label htmlFor="region">Region</label>
+            <input
+              type="text"
+              id="region"
+              name="region"
+              value={formData.region}
+              onChange={handleInputChange}
+              placeholder="e.g., North Zone"
+            />
+          </div>
+
+          <div className="form-group">
+            <label htmlFor="sub_region">Sub-Region</label>
+            <input
+              type="text"
+              id="sub_region"
+              name="sub_region"
+              value={formData.sub_region}
+              onChange={handleInputChange}
+              placeholder="e.g., Delhi NCR"
             />
           </div>
 

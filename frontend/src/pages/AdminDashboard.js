@@ -68,6 +68,8 @@ const AdminDashboard = ({ user, setUser }) => {
     school_name: '',
     email: '',
     contact_number: '',
+    region: '',
+    sub_region: '',
     password: '',
     logo: null
   });
@@ -109,7 +111,9 @@ const AdminDashboard = ({ user, setUser }) => {
         school.school_id?.toString().toLowerCase().includes(searchLower) ||
         school.school_name?.toLowerCase().includes(searchLower) ||
         school.email?.toLowerCase().includes(searchLower) ||
-        school.contact_number?.toLowerCase().includes(searchLower)
+        school.contact_number?.toLowerCase().includes(searchLower) ||
+        school.region?.toLowerCase().includes(searchLower) ||
+        school.sub_region?.toLowerCase().includes(searchLower)
       );
     });
     
@@ -147,6 +151,8 @@ const AdminDashboard = ({ user, setUser }) => {
       formDataToSend.append('school_name', formData.school_name);
       formDataToSend.append('email', formData.email);
       formDataToSend.append('contact_number', formData.contact_number);
+      formDataToSend.append('region', formData.region);
+      formDataToSend.append('sub_region', formData.sub_region);
       formDataToSend.append('password', formData.password);
       if (formData.logo) {
         formDataToSend.append('logo', formData.logo);
@@ -164,6 +170,8 @@ const AdminDashboard = ({ user, setUser }) => {
         school_name: '',
         email: '',
         contact_number: '',
+        region: '',
+        sub_region: '',
         password: '',
         logo: null
       });
@@ -185,6 +193,8 @@ const AdminDashboard = ({ user, setUser }) => {
       if (formData.school_name) formDataToSend.append('school_name', formData.school_name);
       if (formData.email) formDataToSend.append('email', formData.email);
       if (formData.contact_number !== undefined) formDataToSend.append('contact_number', formData.contact_number);
+      if (formData.region !== undefined) formDataToSend.append('region', formData.region);
+      if (formData.sub_region !== undefined) formDataToSend.append('sub_region', formData.sub_region);
       if (formData.password) formDataToSend.append('password', formData.password);
       if (formData.logo) formDataToSend.append('logo', formData.logo);
 
@@ -200,6 +210,8 @@ const AdminDashboard = ({ user, setUser }) => {
         school_name: '',
         email: '',
         contact_number: '',
+        region: '',
+        sub_region: '',
         password: '',
         logo: null
       });
@@ -246,6 +258,8 @@ const AdminDashboard = ({ user, setUser }) => {
       school_name: school.school_name,
       email: school.email,
       contact_number: school.contact_number || '',
+      region: school.region || '',
+      sub_region: school.sub_region || '',
       password: '',
       logo: null
     });
@@ -258,7 +272,7 @@ const AdminDashboard = ({ user, setUser }) => {
         <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
           <input
             type="text"
-            placeholder="Search by ID, name, email, or phone..."
+            placeholder="Search by ID, name, email, phone, region, or sub-region..."
             value={searchTerm}
             onChange={handleSearchChange}
             style={{
@@ -314,6 +328,11 @@ const AdminDashboard = ({ user, setUser }) => {
                 {school.contact_number && (
                   <p className="school-contact" data-testid={`school-contact-${school.school_id}`}>
                     📞 {school.contact_number}
+                  </p>
+                )}
+                {(school.region || school.sub_region) && (
+                  <p className="school-contact">
+                    Region: {[school.region, school.sub_region].filter(Boolean).join(' / ')}
                   </p>
                 )}
                 <div className="folder-actions">
@@ -399,6 +418,28 @@ const AdminDashboard = ({ user, setUser }) => {
               </div>
 
               <div className="form-group">
+                <label>Region (optional)</label>
+                <input
+                  type="text"
+                  name="region"
+                  value={formData.region}
+                  onChange={handleInputChange}
+                  placeholder="e.g., North Zone"
+                />
+              </div>
+
+              <div className="form-group">
+                <label>Sub-Region (optional)</label>
+                <input
+                  type="text"
+                  name="sub_region"
+                  value={formData.sub_region}
+                  onChange={handleInputChange}
+                  placeholder="e.g., Delhi NCR"
+                />
+              </div>
+
+              <div className="form-group">
                 <label data-testid="school-password-label">Password {editingSchool && '(leave blank to keep current)'}</label>
                 <input
                   type="password"
@@ -437,6 +478,8 @@ const AdminDashboard = ({ user, setUser }) => {
                       school_name: '',
                       email: '',
                       contact_number: '',
+                      region: '',
+                      sub_region: '',
                       password: '',
                       logo: null
                     });

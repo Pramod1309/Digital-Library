@@ -44,7 +44,7 @@ from database import (
     get_db, Admin, School, PasswordResetToken, SchoolPasswordResetOTP, ActivityLog, Resource, 
     Announcement, AnnouncementRead, AnnouncementAttachment, SupportTicket, ChatMessage, ChatAttachment, ResourceDownload, 
     KnowledgeArticle, SchoolLogoPosition, SchoolWatermarkText, engine, Base, AdminResourceWatermark,
-    AdminBatchWatermarkTemplate, SchoolSearchLog, SupportTicketAttachment, PlatformSetting,
+    AdminBatchWatermarkOverride, AdminBatchWatermarkTemplate, SchoolSearchLog, SupportTicketAttachment, PlatformSetting,
     ContentEntry, SchoolPreference
 )
 from init_db import init_database
@@ -153,6 +153,8 @@ class SchoolUpdate(BaseModel):
     school_name: Optional[str] = None
     email: Optional[EmailStr] = None
     contact_number: Optional[str] = None  # ADDED
+    region: Optional[str] = None
+    sub_region: Optional[str] = None
     password: Optional[str] = None
 
 class SchoolResponse(BaseModel):
@@ -161,6 +163,8 @@ class SchoolResponse(BaseModel):
     school_name: str
     email: str
     contact_number: Optional[str] = None  # ADDED
+    region: Optional[str] = None
+    sub_region: Optional[str] = None
     logo_path: Optional[str] = None
     created_at: datetime
     updated_at: datetime
@@ -299,6 +303,8 @@ class ResourceResponse(BaseModel):
     id: int
     resource_id: str
     name: str
+    display_title: Optional[str] = None
+    original_filename: Optional[str] = None
     description: Optional[str] = None
     category: str
     file_path: str
@@ -471,6 +477,11 @@ class AdminBatchWatermarkTemplateRequest(BaseModel):
     resource_id: str
     template: Dict[str, Any]
 
+class AdminBatchWatermarkOverrideRequest(BaseModel):
+    school_id: str
+    resource_id: str
+    template: Dict[str, Any]
+
 class AdminBatchWatermarkApplyGroupRequest(BaseModel):
     source_resource_id: str
     target_resource_ids: List[str]
@@ -480,6 +491,7 @@ class AdminBatchWatermarkGenerateRequest(BaseModel):
     school_ids: List[str]
     resource_ids: List[str]
     templates: Dict[str, Dict[str, Any]] = {}
+    school_overrides: Dict[str, Dict[str, Dict[str, Any]]] = {}
 
 class SchoolAnalyticsEventRequest(BaseModel):
     school_id: str
@@ -1039,6 +1051,33 @@ def normalize_optional_string(value: Optional[str]) -> Optional[str]:
     normalized = str(value).strip()
     return normalized or None
 
+def normalize_list_label(value: Optional[str]) -> Optional[str]:
+    normalized = normalize_optional_string(value)
+    if not normalized:
+        return None
+    normalized = re.sub(r"\s+", " ", normalized)
+    return normalized
+
+def normalize_label_key(value: Optional[str]) -> str:
+    normalized = normalize_list_label(value) or ""
+    return re.sub(r"[^a-z0-9]+", "", normalized.lower())
+
+def merge_unique_labels(items: List[Optional[str]]) -> List[str]:
+    merged: List[str] = []
+    seen = set()
+
+    for item in items:
+        normalized = normalize_list_label(item)
+        if not normalized:
+            continue
+        key = normalize_label_key(normalized)
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        merged.append(normalized)
+
+    return merged
+
 def normalize_csv_input(value: Optional[Union[str, List[str]]]) -> Optional[str]:
     if value is None:
         return None
@@ -1089,6 +1128,61 @@ def delete_chat_attachments(db: Session, message_id: int) -> None:
     for attachment in attachments:
         delete_file_if_present(attachment.file_path)
         db.delete(attachment)
+
+def delete_resource_file_if_local(resource: Resource) -> None:
+    file_path = (resource.file_path or "").strip()
+    if not file_path or re.match(r"^https?://", file_path, re.IGNORECASE):
+        return
+    delete_file_if_present(ROOT_DIR / file_path.lstrip("/"))
+
+def delete_resource_related_records(db: Session, resource_id: str) -> None:
+    db.query(ResourceDownload).filter(ResourceDownload.resource_id == resource_id).delete(synchronize_session=False)
+    db.query(SchoolLogoPosition).filter(SchoolLogoPosition.resource_id == resource_id).delete(synchronize_session=False)
+    db.query(SchoolWatermarkText).filter(SchoolWatermarkText.resource_id == resource_id).delete(synchronize_session=False)
+    db.query(AdminResourceWatermark).filter(AdminResourceWatermark.resource_id == resource_id).delete(synchronize_session=False)
+    db.query(AdminBatchWatermarkTemplate).filter(AdminBatchWatermarkTemplate.resource_id == resource_id).delete(synchronize_session=False)
+    db.query(AdminBatchWatermarkOverride).filter(AdminBatchWatermarkOverride.resource_id == resource_id).delete(synchronize_session=False)
+
+def delete_resource_record(db: Session, resource: Resource) -> None:
+    delete_resource_file_if_local(resource)
+    delete_resource_related_records(db, resource.resource_id)
+    db.delete(resource)
+
+def delete_school_related_records(db: Session, school: School) -> None:
+    school_id = school.school_id
+    school_email = school.email
+
+    uploaded_resources = db.query(Resource).filter(
+        Resource.uploaded_by_type == "school",
+        Resource.uploaded_by_id == school_id
+    ).all()
+    for resource in uploaded_resources:
+        delete_resource_record(db, resource)
+
+    chat_messages = db.query(ChatMessage).filter(ChatMessage.school_id == school_id).all()
+    for chat_message in chat_messages:
+        delete_chat_attachments(db, chat_message.id)
+        db.delete(chat_message)
+
+    support_tickets = db.query(SupportTicket).filter(SupportTicket.school_id == school_id).all()
+    for support_ticket in support_tickets:
+        delete_support_ticket_attachments(db, support_ticket.ticket_id)
+        db.delete(support_ticket)
+
+    db.query(ActivityLog).filter(ActivityLog.school_id == school_id).delete(synchronize_session=False)
+    db.query(SchoolSearchLog).filter(SchoolSearchLog.school_id == school_id).delete(synchronize_session=False)
+    db.query(ResourceDownload).filter(ResourceDownload.school_id == school_id).delete(synchronize_session=False)
+    db.query(AnnouncementRead).filter(AnnouncementRead.school_id == school_id).delete(synchronize_session=False)
+    db.query(SchoolLogoPosition).filter(SchoolLogoPosition.school_id == school_id).delete(synchronize_session=False)
+    db.query(SchoolWatermarkText).filter(SchoolWatermarkText.school_id == school_id).delete(synchronize_session=False)
+    db.query(AdminResourceWatermark).filter(AdminResourceWatermark.school_id == school_id).delete(synchronize_session=False)
+    db.query(AdminBatchWatermarkOverride).filter(AdminBatchWatermarkOverride.school_id == school_id).delete(synchronize_session=False)
+    db.query(SchoolPreference).filter(SchoolPreference.school_id == school_id).delete(synchronize_session=False)
+    db.query(PasswordResetToken).filter(PasswordResetToken.email == school_email).delete(synchronize_session=False)
+    db.query(SchoolPasswordResetOTP).filter(
+        (SchoolPasswordResetOTP.school_id == school_id) |
+        (SchoolPasswordResetOTP.email == school_email)
+    ).delete(synchronize_session=False)
 
 DEFAULT_KNOWLEDGE_ARTICLES = [
     {
@@ -1249,6 +1343,73 @@ def upsert_platform_setting(db: Session, setting_key: str, value: Dict[str, Any]
     record.updated_at = datetime.utcnow()
     return record
 
+def get_resource_taxonomy_value(db: Session) -> Dict[str, List[str]]:
+    stored = get_platform_setting_value(db, "resource_taxonomy", DEFAULT_RESOURCE_TAXONOMY)
+    programs = merge_unique_labels(
+        list(DEFAULT_RESOURCE_TAXONOMY["programs"])
+        + list(stored.get("programs", []))
+        + [value[0] for value in db.query(Resource.class_level).filter(Resource.class_level.isnot(None)).distinct().all()]
+    )
+    subjects = merge_unique_labels(
+        list(DEFAULT_RESOURCE_TAXONOMY["subjects"])
+        + list(stored.get("subjects", []))
+        + [value[0] for value in db.query(Resource.subject).filter(Resource.subject.isnot(None)).distinct().all()]
+    )
+    return {
+        "programs": programs,
+        "subjects": subjects
+    }
+
+def sync_resource_taxonomy_value(
+    db: Session,
+    programs: Optional[List[str]] = None,
+    subjects: Optional[List[str]] = None,
+    updated_by: Optional[str] = None
+) -> Dict[str, List[str]]:
+    current = get_resource_taxonomy_value(db)
+    next_value = {
+        "programs": merge_unique_labels((programs or []) + current["programs"]),
+        "subjects": merge_unique_labels((subjects or []) + current["subjects"])
+    }
+    upsert_platform_setting(db, "resource_taxonomy", next_value, updated_by)
+    return next_value
+
+def get_next_school_numeric_id(db: Session) -> str:
+    sequence = get_platform_setting_value(db, "school_id_sequence", DEFAULT_SCHOOL_ID_SEQUENCE)
+    last_issued = int(sequence.get("last_issued_numeric_id") or 0)
+
+    numeric_school_ids = []
+    for row in db.query(School.school_id).all():
+        try:
+            numeric_school_ids.append(int(row.school_id))
+        except Exception:
+            continue
+
+    next_id = max([last_issued] + numeric_school_ids) + 1
+    upsert_platform_setting(
+        db,
+        "school_id_sequence",
+        {"last_issued_numeric_id": next_id},
+        "system"
+    )
+    return str(next_id)
+
+def sync_school_id_sequence_if_numeric(db: Session, school_id: str, updated_by: Optional[str] = "system") -> None:
+    try:
+        numeric_id = int(str(school_id).strip())
+    except Exception:
+        return
+
+    sequence = get_platform_setting_value(db, "school_id_sequence", DEFAULT_SCHOOL_ID_SEQUENCE)
+    last_issued = int(sequence.get("last_issued_numeric_id") or 0)
+    if numeric_id > last_issued:
+        upsert_platform_setting(
+            db,
+            "school_id_sequence",
+            {"last_issued_numeric_id": numeric_id},
+            updated_by
+        )
+
 DEFAULT_BRANDING_SETTINGS = {
     "site_name": "Wonder Learning India Digital Library",
     "tagline": "Empowering preschools with a digital treasure trove",
@@ -1268,6 +1429,15 @@ DEFAULT_SECURITY_SETTINGS = {
     "enable_brute_force": True,
     "allow_school_profile_edits": True,
     "require_strong_passwords": True
+}
+
+DEFAULT_RESOURCE_TAXONOMY = {
+    "programs": ["Playgroup", "Nursery", "LKG", "UKG"],
+    "subjects": ["English", "Maths", "EVS", "Hindi", "Arts & Crafts", "Music", "Physical Education"]
+}
+
+DEFAULT_SCHOOL_ID_SEQUENCE = {
+    "last_issued_numeric_id": 0
 }
 
 DEFAULT_CMS_ENTRIES = [
@@ -1815,6 +1985,46 @@ def admin_batch_template_to_dict(template: Optional[AdminBatchWatermarkTemplate]
         "address": template.address or ""
     })
 
+def admin_batch_override_to_dict(template: Optional[AdminBatchWatermarkOverride]) -> Dict[str, Any]:
+    if not template:
+        return get_batch_watermark_default_template()
+    return normalize_batch_watermark_template({
+        "show_logo": template.show_logo,
+        "logo_x": template.logo_x,
+        "logo_y": template.logo_y,
+        "logo_width": template.logo_width,
+        "logo_opacity": template.logo_opacity,
+        "logo_rotation": template.logo_rotation,
+        "name_x": template.name_x,
+        "name_y": template.name_y,
+        "name_size": template.name_size,
+        "name_opacity": template.name_opacity,
+        "name_rotation": template.name_rotation,
+        "name_font": template.name_font,
+        "name_style": template.name_style,
+        "name_color": template.name_color,
+        "show_name": template.show_name,
+        "contact_x": template.contact_x,
+        "contact_y": template.contact_y,
+        "contact_size": template.contact_size,
+        "contact_opacity": template.contact_opacity,
+        "contact_rotation": template.contact_rotation,
+        "contact_font": template.contact_font,
+        "contact_style": template.contact_style,
+        "contact_color": template.contact_color,
+        "show_contact": template.show_contact,
+        "address_x": template.address_x,
+        "address_y": template.address_y,
+        "address_size": template.address_size,
+        "address_opacity": template.address_opacity,
+        "address_rotation": template.address_rotation,
+        "address_font": template.address_font,
+        "address_style": template.address_style,
+        "address_color": template.address_color,
+        "show_address": template.show_address,
+        "address": template.address or ""
+    })
+
 def upsert_admin_batch_template(
     db: Session,
     admin_email: str,
@@ -1831,6 +2041,67 @@ def upsert_admin_batch_template(
     if not record:
         record = AdminBatchWatermarkTemplate(
             admin_email=admin_email,
+            resource_id=resource_id
+        )
+        db.add(record)
+
+    record.show_logo = normalized["show_logo"]
+    record.logo_x = normalized["logo_x"]
+    record.logo_y = normalized["logo_y"]
+    record.logo_width = normalized["logo_width"]
+    record.logo_opacity = normalized["logo_opacity"]
+    record.logo_rotation = normalized["logo_rotation"]
+    record.name_x = normalized["name_x"]
+    record.name_y = normalized["name_y"]
+    record.name_size = normalized["name_size"]
+    record.name_opacity = normalized["name_opacity"]
+    record.name_rotation = normalized["name_rotation"]
+    record.name_font = normalized["name_font"]
+    record.name_style = normalized["name_style"]
+    record.name_color = normalized["name_color"]
+    record.show_name = normalized["show_name"]
+    record.contact_x = normalized["contact_x"]
+    record.contact_y = normalized["contact_y"]
+    record.contact_size = normalized["contact_size"]
+    record.contact_opacity = normalized["contact_opacity"]
+    record.contact_rotation = normalized["contact_rotation"]
+    record.contact_font = normalized["contact_font"]
+    record.contact_style = normalized["contact_style"]
+    record.contact_color = normalized["contact_color"]
+    record.show_contact = normalized["show_contact"]
+    record.address_x = normalized["address_x"]
+    record.address_y = normalized["address_y"]
+    record.address_size = normalized["address_size"]
+    record.address_opacity = normalized["address_opacity"]
+    record.address_rotation = normalized["address_rotation"]
+    record.address_font = normalized["address_font"]
+    record.address_style = normalized["address_style"]
+    record.address_color = normalized["address_color"]
+    record.show_address = normalized["show_address"]
+    record.address = normalized["address"]
+    record.updated_at = datetime.utcnow()
+
+    return record
+
+def upsert_admin_batch_override(
+    db: Session,
+    admin_email: str,
+    school_id: str,
+    resource_id: str,
+    template_data: Dict[str, Any]
+) -> AdminBatchWatermarkOverride:
+    normalized = normalize_batch_watermark_template(template_data)
+
+    record = db.query(AdminBatchWatermarkOverride).filter(
+        AdminBatchWatermarkOverride.admin_email == admin_email,
+        AdminBatchWatermarkOverride.school_id == school_id,
+        AdminBatchWatermarkOverride.resource_id == resource_id
+    ).first()
+
+    if not record:
+        record = AdminBatchWatermarkOverride(
+            admin_email=admin_email,
+            school_id=school_id,
             resource_id=resource_id
         )
         db.add(record)
@@ -1930,12 +2201,7 @@ def get_batch_watermark_resource_kind(resource: Optional[Resource]) -> Optional[
 
     file_type = (resource.file_type or "").lower()
     file_path = (resource.file_path or "").lower()
-    category = (resource.category or "").lower()
-
-    if category == "multimedia" or resource.is_video_link:
-        return None
-
-    if "audio" in file_type or "video" in file_type:
+    if resource.is_video_link or re.match(r"^https?://", file_path):
         return None
 
     if ("pdf" in file_type) or file_path.endswith(".pdf"):
@@ -1948,10 +2214,27 @@ def get_batch_watermark_resource_kind(resource: Optional[Resource]) -> Optional[
     if is_raster_image:
         return "image"
 
-    return None
+    return "other"
 
 def is_supported_batch_watermark_resource(resource: Resource) -> bool:
-    return get_batch_watermark_resource_kind(resource) in {"pdf", "image"}
+    return get_batch_watermark_resource_kind(resource) in {"pdf", "image", "other"}
+
+def requires_packaged_branding(resource: Resource) -> bool:
+    return get_batch_watermark_resource_kind(resource) == "other"
+
+def get_resource_display_name(resource: Resource) -> str:
+    return (resource.display_title or resource.name or resource.resource_id or "Resource").strip()
+
+def get_resource_original_name(resource: Resource, source_path: Optional[str] = None) -> str:
+    if resource.original_filename:
+        return resource.original_filename
+    if source_path:
+        return os.path.basename(source_path)
+    resource_name = (resource.name or resource.resource_id or "resource").strip()
+    resource_ext = os.path.splitext(resource.file_path or "")[1]
+    if resource_ext and not resource_name.lower().endswith(resource_ext.lower()):
+        return f"{resource_name}{resource_ext}"
+    return resource_name
 
 def sanitize_batch_name(value: str, fallback: str) -> str:
     cleaned = re.sub(r'[<>:"/\\\\|?*]+', "_", (value or "").strip())
@@ -1979,6 +2262,139 @@ def get_batch_resource_extension(resource: Resource, source_path: str) -> str:
     if "webp" in file_type:
         return ".webp"
     return ".bin"
+
+def create_brand_package_base_image(resource: Resource, school: School, output_path: str) -> str:
+    width = 1600
+    height = 900
+    background = Image.new("RGB", (width, height), "#f4f7fb")
+    draw = ImageDraw.Draw(background)
+
+    try:
+        title_font = ImageFont.truetype("arial.ttf", 46)
+        sub_font = ImageFont.truetype("arial.ttf", 26)
+        body_font = ImageFont.truetype("arial.ttf", 22)
+        badge_font = ImageFont.truetype("arial.ttf", 20)
+    except Exception:
+        title_font = ImageFont.load_default()
+        sub_font = ImageFont.load_default()
+        body_font = ImageFont.load_default()
+        badge_font = ImageFont.load_default()
+
+    kind = get_batch_watermark_resource_kind(resource) or "other"
+    extension = Path(get_resource_original_name(resource)).suffix.upper().lstrip(".") or "FILE"
+    display_name = get_resource_display_name(resource)
+    original_name = get_resource_original_name(resource)
+
+    for offset, color in enumerate(["#f4f7fb", "#eef4fb", "#e6eef9", "#dee8f6"]):
+        draw.rectangle([0, int(height * offset / 4), width, int(height * (offset + 1) / 4)], fill=color)
+
+    draw.rounded_rectangle([80, 80, width - 80, height - 80], radius=32, fill="#ffffff", outline="#d7e3f2", width=3)
+    draw.rounded_rectangle([120, 150, width - 120, height - 180], radius=28, fill="#f8fbff", outline="#d9e7f7", width=2)
+    draw.rounded_rectangle([132, 162, width - 132, 250], radius=18, fill="#0f3d6e")
+    draw.text((170, 186), "School Branded Resource Package", font=sub_font, fill="#ffffff")
+    draw.text((170, 270), display_name, font=title_font, fill="#102a43")
+
+    if display_name != (resource.name or "").strip() and resource.name:
+        draw.text((170, 338), f"Original resource name: {resource.name}", font=sub_font, fill="#486581")
+
+    draw.text((170, 386), f"School: {school.school_name}", font=body_font, fill="#243b53")
+    if school.region or school.sub_region:
+        location_text = " / ".join([value for value in [school.region, school.sub_region] if value])
+        draw.text((170, 424), f"Region: {location_text}", font=body_font, fill="#486581")
+
+    draw.rounded_rectangle([170, 500, width - 170, height - 240], radius=24, fill="#ffffff", outline="#c8d7eb", width=3)
+    draw.rounded_rectangle([210, 540, 390, 620], radius=40, fill="#0f6ab4")
+    draw.text((244, 566), extension, font=badge_font, fill="#ffffff")
+    draw.text((170, 648), f"Package includes the original file plus this branded preview sheet.", font=body_font, fill="#334e68")
+    draw.text((170, 690), f"Original file: {original_name}", font=body_font, fill="#486581")
+    draw.text((170, 732), f"Category: {(resource.category or 'resource').title()}", font=body_font, fill="#486581")
+
+    kind_label = {
+        "pdf": "PDF",
+        "image": "Image",
+        "other": "Video / Document / File"
+    }.get(kind, "File")
+    draw.text((170, 774), f"Branding mode: {kind_label}", font=body_font, fill="#486581")
+
+    background.save(output_path, format="PNG")
+    return output_path
+
+def write_branding_details_file(resource: Resource, school: School, output_path: str) -> str:
+    details = [
+        "Wonder Learning India - School Branded Resource Package",
+        "=" * 64,
+        f"Generated At: {datetime.utcnow().isoformat()} UTC",
+        f"School ID: {school.school_id}",
+        f"School Name: {school.school_name}",
+        f"School Email: {school.email}",
+        f"School Contact: {school.contact_number or ''}",
+        f"Region: {school.region or ''}",
+        f"Sub-Region: {school.sub_region or ''}",
+        "",
+        f"Resource Title: {get_resource_display_name(resource)}",
+        f"Resource Name: {resource.name}",
+        f"Original Filename: {get_resource_original_name(resource)}",
+        f"Category: {resource.category}",
+        f"File Type: {resource.file_type}",
+        "",
+        "This package contains:",
+        "1. The original uploaded file",
+        "2. A branded preview sheet showing the school logo/details layout",
+    ]
+    with open(output_path, "w", encoding="utf-8") as details_file:
+        details_file.write("\n".join(details))
+    return output_path
+
+def create_branded_resource_package(
+    resource: Resource,
+    school: School,
+    logo_path: Optional[str],
+    watermark_position: WatermarkPosition,
+    text_position: Dict[str, Any],
+    output_path: str,
+    source_path: Optional[str] = None
+) -> str:
+    source_path = source_path or get_full_file_path(resource.file_path)
+    package_output = str(output_path)
+    if not package_output.lower().endswith(".zip"):
+        package_output = f"{package_output}.zip"
+
+    school_info = {
+        "school_name": school.school_name,
+        "email": school.email,
+        "contact_number": school.contact_number
+    }
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        base_preview_path = os.path.join(temp_dir, "brand_preview_base.png")
+        preview_path = os.path.join(temp_dir, "brand_preview.png")
+        details_path = os.path.join(temp_dir, "branding_details.txt")
+
+        create_brand_package_base_image(resource, school, base_preview_path)
+        preview_result = add_logo_and_text_to_image(
+            base_preview_path,
+            logo_path,
+            watermark_position,
+            "image/png",
+            school_info,
+            text_position,
+            preview_path
+        )
+        if not preview_result or not os.path.exists(preview_result):
+            preview_result = base_preview_path
+
+        write_branding_details_file(resource, school, details_path)
+
+        original_name = sanitize_batch_name(get_resource_original_name(resource, source_path), resource.resource_id)
+        preview_name = "branding_preview.png"
+        details_name = "branding_details.txt"
+
+        with zipfile.ZipFile(package_output, "w", zipfile.ZIP_DEFLATED) as package_zip:
+            package_zip.write(source_path, arcname=original_name)
+            package_zip.write(preview_result, arcname=preview_name)
+            package_zip.write(details_path, arcname=details_name)
+
+    return package_output
 
 def get_batch_job_path(job_id: str) -> Path:
     safe_job_id = re.sub(r"[^a-zA-Z0-9_-]", "", job_id or "")
@@ -2032,6 +2448,17 @@ def generate_batch_watermarked_output(
             school_info,
             text_position,
             str(output_path)
+        )
+
+    if requires_packaged_branding(resource):
+        return create_branded_resource_package(
+            resource,
+            school,
+            logo_path,
+            watermark_position,
+            text_position,
+            str(output_path),
+            source_path
         )
 
     return add_logo_and_text_to_image(
@@ -3398,7 +3825,7 @@ async def get_admin_batch_watermark_template(
     if not resource:
         raise HTTPException(status_code=404, detail="Resource not found")
     if not is_supported_batch_watermark_resource(resource):
-        raise HTTPException(status_code=400, detail="Only PDF and image resources are supported in batch watermark")
+        raise HTTPException(status_code=400, detail="This resource cannot be used in batch watermark")
 
     record = db.query(AdminBatchWatermarkTemplate).filter(
         AdminBatchWatermarkTemplate.admin_email == current_admin.get("sub"),
@@ -3407,7 +3834,39 @@ async def get_admin_batch_watermark_template(
 
     return {
         "resource_id": resource_id,
+        "resource_kind": get_batch_watermark_resource_kind(resource),
         "template": admin_batch_template_to_dict(record),
+        "is_default": record is None,
+        "updated_at": record.updated_at.isoformat() if record and record.updated_at else None
+    }
+
+@api_router.get("/admin/batch-watermark/template/{resource_id}/override/{school_id}")
+async def get_admin_batch_watermark_override(
+    resource_id: str,
+    school_id: str,
+    current_admin: dict = Depends(get_current_admin),
+    db: Session = Depends(get_db)
+):
+    resource = db.query(Resource).filter(Resource.resource_id == resource_id).first()
+    if not resource:
+        raise HTTPException(status_code=404, detail="Resource not found")
+    school = db.query(School).filter(School.school_id == school_id).first()
+    if not school:
+        raise HTTPException(status_code=404, detail="School not found")
+    if not is_supported_batch_watermark_resource(resource):
+        raise HTTPException(status_code=400, detail="This resource cannot be used in batch watermark")
+
+    record = db.query(AdminBatchWatermarkOverride).filter(
+        AdminBatchWatermarkOverride.admin_email == current_admin.get("sub"),
+        AdminBatchWatermarkOverride.resource_id == resource_id,
+        AdminBatchWatermarkOverride.school_id == school_id
+    ).first()
+
+    return {
+        "resource_id": resource_id,
+        "school_id": school_id,
+        "resource_kind": get_batch_watermark_resource_kind(resource),
+        "template": admin_batch_override_to_dict(record),
         "is_default": record is None,
         "updated_at": record.updated_at.isoformat() if record and record.updated_at else None
     }
@@ -3422,7 +3881,7 @@ async def save_admin_batch_watermark_template(
     if not resource:
         raise HTTPException(status_code=404, detail="Resource not found")
     if not is_supported_batch_watermark_resource(resource):
-        raise HTTPException(status_code=400, detail="Only PDF and image resources are supported in batch watermark")
+        raise HTTPException(status_code=400, detail="This resource cannot be used in batch watermark")
 
     try:
         record = upsert_admin_batch_template(
@@ -3447,6 +3906,66 @@ async def save_admin_batch_watermark_template(
         print(f"Error saving admin batch template: {e}")
         raise HTTPException(status_code=500, detail="Failed to save batch watermark layout")
 
+@api_router.post("/admin/batch-watermark/template/override")
+async def save_admin_batch_watermark_override(
+    request: AdminBatchWatermarkOverrideRequest,
+    current_admin: dict = Depends(get_current_admin),
+    db: Session = Depends(get_db)
+):
+    resource = db.query(Resource).filter(Resource.resource_id == request.resource_id).first()
+    if not resource:
+        raise HTTPException(status_code=404, detail="Resource not found")
+    school = db.query(School).filter(School.school_id == request.school_id).first()
+    if not school:
+        raise HTTPException(status_code=404, detail="School not found")
+    if not is_supported_batch_watermark_resource(resource):
+        raise HTTPException(status_code=400, detail="This resource cannot be used in batch watermark")
+
+    try:
+        record = upsert_admin_batch_override(
+            db,
+            current_admin.get("sub"),
+            request.school_id,
+            request.resource_id,
+            request.template
+        )
+        db.commit()
+
+        return {
+            "message": "School-specific layout saved successfully",
+            "resource_id": request.resource_id,
+            "school_id": request.school_id,
+            "template": admin_batch_override_to_dict(record),
+            "updated_at": record.updated_at.isoformat() if record.updated_at else None
+        }
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception as e:
+        db.rollback()
+        print(f"Error saving admin batch override: {e}")
+        raise HTTPException(status_code=500, detail="Failed to save school-specific layout")
+
+@api_router.delete("/admin/batch-watermark/template/override/{resource_id}/{school_id}")
+async def delete_admin_batch_watermark_override(
+    resource_id: str,
+    school_id: str,
+    current_admin: dict = Depends(get_current_admin),
+    db: Session = Depends(get_db)
+):
+    record = db.query(AdminBatchWatermarkOverride).filter(
+        AdminBatchWatermarkOverride.admin_email == current_admin.get("sub"),
+        AdminBatchWatermarkOverride.resource_id == resource_id,
+        AdminBatchWatermarkOverride.school_id == school_id
+    ).first()
+
+    if not record:
+        return {"message": "School-specific layout reset to shared template"}
+
+    db.delete(record)
+    db.commit()
+    return {"message": "School-specific layout reset to shared template"}
+
 @api_router.post("/admin/batch-watermark/template/apply-group")
 async def apply_admin_batch_watermark_template_to_group(
     request: AdminBatchWatermarkApplyGroupRequest,
@@ -3458,8 +3977,8 @@ async def apply_admin_batch_watermark_template_to_group(
         raise HTTPException(status_code=404, detail="Source resource not found")
 
     source_kind = get_batch_watermark_resource_kind(source_resource)
-    if source_kind not in {"pdf", "image"}:
-        raise HTTPException(status_code=400, detail="Only PDF and image resources can be used for batch watermark layouts")
+    if source_kind not in {"pdf", "image", "other"}:
+        raise HTTPException(status_code=400, detail="This resource type cannot be used for batch watermark layouts")
 
     target_resource_ids = []
     seen_resource_ids = set()
@@ -3550,7 +4069,7 @@ async def generate_admin_batch_watermark_bundle(
     if unsupported_resources:
         raise HTTPException(
             status_code=400,
-            detail=f"Batch watermark supports only PDF and image resources. Unsupported selection: {', '.join(unsupported_resources)}"
+            detail=f"These selected resources cannot be branded in batch watermark: {', '.join(unsupported_resources)}"
         )
 
     try:
@@ -3562,6 +4081,19 @@ async def generate_admin_batch_watermark_bundle(
                 resource.resource_id,
                 request.templates.get(resource.resource_id, get_batch_watermark_default_template())
             )
+        for school_id, resource_template_map in (request.school_overrides or {}).items():
+            if school_id not in school_map:
+                continue
+            for resource_id, override_template in (resource_template_map or {}).items():
+                if resource_id not in resource_map:
+                    continue
+                upsert_admin_batch_override(
+                    db,
+                    current_admin.get("sub"),
+                    school_id,
+                    resource_id,
+                    override_template
+                )
         db.commit()
     except Exception as e:
         db.rollback()
@@ -3594,7 +4126,8 @@ async def generate_admin_batch_watermark_bundle(
 
             for resource in ordered_resources:
                 source_path = get_full_file_path(resource.file_path)
-                resource_ext = get_batch_resource_extension(resource, source_path)
+                resource_kind = get_batch_watermark_resource_kind(resource)
+                resource_ext = ".zip" if resource_kind == "other" else get_batch_resource_extension(resource, source_path)
                 resource_label = sanitize_batch_name(
                     Path(resource.name).stem if Path(resource.name).suffix else resource.name,
                     resource.resource_id
@@ -3605,10 +4138,14 @@ async def generate_admin_batch_watermark_bundle(
                 used_output_names.add(output_name)
 
                 output_path = school_dir / output_name
+                effective_template = (
+                    request.school_overrides.get(school.school_id, {}).get(resource.resource_id)
+                    if request.school_overrides else None
+                ) or request.templates.get(resource.resource_id, get_batch_watermark_default_template())
                 result_path = generate_batch_watermarked_output(
                     resource,
                     school,
-                    request.templates.get(resource.resource_id, get_batch_watermark_default_template()),
+                    effective_template,
                     output_path
                 )
 
@@ -4349,6 +4886,8 @@ async def create_school(
     school_name: str = Form(...),
     email: str = Form(...),
     contact_number: Optional[str] = Form(None),  # ADDED
+    region: Optional[str] = Form(None),
+    sub_region: Optional[str] = Form(None),
     password: str = Form(...),
     logo: Optional[UploadFile] = File(None),
     db: Session = Depends(get_db)
@@ -4389,11 +4928,14 @@ async def create_school(
         school_name=school_name,
         email=email,
         contact_number=contact_number,  # ADDED
+        region=normalize_optional_string(region),
+        sub_region=normalize_optional_string(sub_region),
         password_hash=password_hash,
         logo_path=logo_path
     )
     
     db.add(new_school)
+    sync_school_id_sequence_if_numeric(db, school_id)
     db.commit()
     db.refresh(new_school)
     
@@ -4405,6 +4947,8 @@ async def update_school(
     school_name: Optional[str] = Form(None),
     email: Optional[str] = Form(None),
     contact_number: Optional[str] = Form(None),  # ADDED
+    region: Optional[str] = Form(None),
+    sub_region: Optional[str] = Form(None),
     password: Optional[str] = Form(None),
     logo: Optional[UploadFile] = File(None),
     db: Session = Depends(get_db)
@@ -4435,6 +4979,10 @@ async def update_school(
         school.email = email
     if contact_number is not None:  # ADDED
         school.contact_number = contact_number
+    if region is not None:
+        school.region = normalize_optional_string(region)
+    if sub_region is not None:
+        school.sub_region = normalize_optional_string(sub_region)
     if password:
         school.password_hash = get_password_hash(password)
     
@@ -4473,7 +5021,14 @@ async def delete_school(school_id: str, db: Session = Depends(get_db)):
     school_folder = UPLOAD_DIR / school_id
     if school_folder.exists():
         shutil.rmtree(school_folder)
+
+    school_resource_folder = RESOURCES_UPLOAD_DIR
+    if school_resource_folder.exists():
+        for upload_folder in school_resource_folder.glob(f"*/school_uploads/{school_id}"):
+            if upload_folder.exists():
+                shutil.rmtree(upload_folder, ignore_errors=True)
     
+    delete_school_related_records(db, school)
     db.delete(school)
     db.commit()
     
@@ -4482,31 +5037,8 @@ async def delete_school(school_id: str, db: Session = Depends(get_db)):
 # ==================== QR CODE REGISTRATION ====================
 
 def get_next_available_school_id(db: Session) -> str:
-    """Get the next available school ID (finds gaps in sequence)"""
-    # Get all existing school IDs as integers
-    existing_schools = db.query(School.school_id).all()
-    existing_ids = []
-    
-    for school in existing_schools:
-        try:
-            existing_ids.append(int(school.school_id))
-        except ValueError:
-            # Skip non-numeric IDs if any exist
-            continue
-    
-    if not existing_ids:
-        return "1"
-    
-    # Sort the IDs
-    existing_ids.sort()
-    
-    # Find the first missing ID
-    for i, id in enumerate(existing_ids, 1):
-        if i != id:
-            return str(i)
-    
-    # If no gaps found, return next ID
-    return str(existing_ids[-1] + 1)
+    """Get the next numeric school ID without reusing deleted IDs."""
+    return get_next_school_numeric_id(db)
 
 @api_router.post("/admin/generate-qr")
 async def generate_qr_code(request: Request, db: Session = Depends(get_db)):
@@ -4565,6 +5097,8 @@ async def register_school_via_qr(
     school_name: str = Form(...),
     email: str = Form(...),
     contact_number: Optional[str] = Form(None),
+    region: Optional[str] = Form(None),
+    sub_region: Optional[str] = Form(None),
     password: str = Form(...),
     logo: Optional[UploadFile] = File(None),
     db: Session = Depends(get_db)
@@ -4606,6 +5140,8 @@ async def register_school_via_qr(
         school_name=school_name,
         email=email,
         contact_number=contact_number,
+        region=normalize_optional_string(region),
+        sub_region=normalize_optional_string(sub_region),
         password_hash=password_hash,
         logo_path=logo_path
     )
@@ -4729,6 +5265,11 @@ async def get_all_activities(db: Session = Depends(get_db)):
         "description": build_activity_description(activity.activity_type, parse_activity_details(activity.details))
     } for activity in activities]
 
+@api_router.get("/resource-taxonomy")
+async def get_resource_taxonomy(db: Session = Depends(get_db)):
+    """Return dynamic program and subject options used across resource forms and filters."""
+    return get_resource_taxonomy_value(db)
+
 # ==================== RESOURCE MANAGEMENT ROUTES ====================
 
 @api_router.post("/admin/resources/upload", response_model=List[ResourceResponse])
@@ -4747,6 +5288,9 @@ async def upload_resource(
     """Admin upload resource(s) - supports single or multiple files"""
     # Validate file size (100MB limit per file)
     MAX_FILE_SIZE = 100 * 1024 * 1024  # 100MB in bytes
+    normalized_display_title = normalize_optional_string(name) or "Untitled Resource"
+    normalized_class_level = normalize_list_label(class_level)
+    normalized_subject = normalize_list_label(subject)
     
     uploaded_resources = []
     
@@ -4782,7 +5326,7 @@ async def upload_resource(
         file_path = f"/uploads/resources/{category}/{safe_filename}"
         
         # Handle resource naming based on naming option
-        resource_name = name
+        resource_name = normalized_display_title
         if len(files) > 1:
             if naming_option == "original":
                 # Use original filename without extension
@@ -4795,12 +5339,12 @@ async def upload_resource(
                         resource_name = original_name
                 else:
                     # Fallback to indexed naming if no filename
-                    resource_name = f"{name} {index + 1}"
+                    resource_name = f"{normalized_display_title} {index + 1}"
             else:
                 # Auto-number files (default behavior)
                 # Extract base name and number if already numbered
                 import re
-                match = re.match(r'(.+?)(\d+)$', name.strip())
+                match = re.match(r'(.+?)(\d+)$', normalized_display_title.strip())
                 if match:
                     base_name = match.group(1)
                     start_num = int(match.group(2))
@@ -4808,22 +5352,26 @@ async def upload_resource(
                 else:
                     # If no number at end, add numbering
                     if index == 0:
-                        resource_name = name
+                        resource_name = normalized_display_title
                     else:
-                        resource_name = f"{name} {index + 1}"
+                        resource_name = f"{normalized_display_title} {index + 1}"
+
+        resource_display_title = normalized_display_title if (len(files) > 1 and naming_option == "original") else resource_name
         
         # Create resource record
         new_resource = Resource(
             resource_id=resource_id,
             name=resource_name,
+            display_title=resource_display_title,
+            original_filename=file.filename,
             description=description,
             category=category,
             sub_category=sub_category,
             file_path=file_path,
             file_type=file.content_type or f"application/{file_extension}",
             file_size=file_size,
-            class_level=class_level,
-            subject=subject,
+            class_level=normalized_class_level,
+            subject=normalized_subject,
             tags=tags,
             uploaded_by_type='admin',
             approval_status='approved',
@@ -4833,6 +5381,13 @@ async def upload_resource(
         db.add(new_resource)
         uploaded_resources.append(new_resource)
     
+    sync_resource_taxonomy_value(
+        db,
+        programs=[normalized_class_level] if normalized_class_level else [],
+        subjects=[normalized_subject] if normalized_subject else [],
+        updated_by="system"
+    )
+
     # Commit all resources at once
     db.commit()
     
@@ -4881,14 +5436,16 @@ async def upload_video_link(
         new_resource = Resource(
             resource_id=resource_id,
             name=name,
+            display_title=normalize_optional_string(name) or name,
+            original_filename=None,
             description=description,
             category=category,
             sub_category=sub_category,
             file_path=file_path,
             file_type=file_type,
             file_size=file_size,
-            class_level=class_level,
-            subject=subject,
+            class_level=normalize_list_label(class_level),
+            subject=normalize_list_label(subject),
             tags=tags,
             uploaded_by_type='admin',
             approval_status='approved',
@@ -4896,6 +5453,12 @@ async def upload_video_link(
         )
         
         db.add(new_resource)
+        sync_resource_taxonomy_value(
+            db,
+            programs=[normalize_list_label(class_level)] if normalize_list_label(class_level) else [],
+            subjects=[normalize_list_label(subject)] if normalize_list_label(subject) else [],
+            updated_by=current_admin.get("sub")
+        )
         db.commit()
         db.refresh(new_resource)
         
@@ -4940,7 +5503,9 @@ async def get_all_resources(
     
     if search:
         query = query.filter(
+            Resource.display_title.ilike(f"%{search}%") |
             Resource.name.ilike(f"%{search}%") |
+            Resource.original_filename.ilike(f"%{search}%") |
             Resource.description.ilike(f"%{search}%") |
             Resource.uploaded_by_name.ilike(f"%{search}%")
         )
@@ -4999,17 +5564,8 @@ async def bulk_delete_resources(
             if not resource:
                 errors.append(f"Resource {resource_id} not found")
                 continue
-            
-            # Delete file from disk
-            try:
-                file_path = ROOT_DIR / resource.file_path.lstrip('/')
-                if file_path.exists():
-                    file_path.unlink()
-            except Exception as e:
-                print(f"Error deleting file for resource {resource_id}: {e}")
-            
-            # Delete from database
-            db.delete(resource)
+
+            delete_resource_record(db, resource)
             deleted_count += 1
             
         except Exception as e:
@@ -5045,16 +5601,7 @@ async def delete_all_resources(
     
     for resource in resources:
         try:
-            # Delete file from disk
-            try:
-                file_path = ROOT_DIR / resource.file_path.lstrip('/')
-                if file_path.exists():
-                    file_path.unlink()
-            except Exception as e:
-                print(f"Error deleting file for resource {resource.resource_id}: {e}")
-            
-            # Delete from database
-            db.delete(resource)
+            delete_resource_record(db, resource)
             deleted_count += 1
             
         except Exception as e:
@@ -5076,12 +5623,7 @@ async def delete_resource(resource_id: str, db: Session = Depends(get_db)):
     if not resource:
         raise HTTPException(status_code=404, detail="Resource not found")
     
-    # Delete file from disk
-    file_path = ROOT_DIR / resource.file_path.lstrip('/')
-    if file_path.exists():
-        file_path.unlink()
-    
-    db.delete(resource)
+    delete_resource_record(db, resource)
     db.commit()
     
     return {"message": "Resource deleted successfully"}
@@ -5090,8 +5632,10 @@ async def delete_resource(resource_id: str, db: Session = Depends(get_db)):
 async def update_resource(
     resource_id: str,
     name: Optional[str] = Form(None),
+    display_title: Optional[str] = Form(None),
     description: Optional[str] = Form(None),
     class_level: Optional[str] = Form(None),
+    subject: Optional[str] = Form(None),
     sub_category: Optional[str] = Form(None),
     tags: Optional[str] = Form(None),
     file: Optional[UploadFile] = File(None),
@@ -5104,10 +5648,14 @@ async def update_resource(
 
     if name is not None:
         resource.name = name
+    if display_title is not None:
+        resource.display_title = normalize_optional_string(display_title)
     if description is not None:
         resource.description = description
     if class_level is not None:
-        resource.class_level = class_level
+        resource.class_level = normalize_list_label(class_level)
+    if subject is not None:
+        resource.subject = normalize_list_label(subject)
     if sub_category is not None:
         resource.sub_category = sub_category
     if tags is not None:
@@ -5142,8 +5690,15 @@ async def update_resource(
         resource.file_path = f"/uploads/resources/{resource.category}/{safe_filename}"
         resource.file_type = file.content_type or f"application/{file_extension}"
         resource.file_size = file_size
+        resource.original_filename = file.filename
         resource.is_video_link = False
 
+    sync_resource_taxonomy_value(
+        db,
+        programs=[resource.class_level] if resource.class_level else [],
+        subjects=[resource.subject] if resource.subject else [],
+        updated_by="system"
+    )
     resource.updated_at = datetime.utcnow()
     db.commit()
     db.refresh(resource)
@@ -5246,13 +5801,15 @@ async def school_upload_resource(
     new_resource = Resource(
         resource_id=resource_id,
         name=name,
+        display_title=normalize_optional_string(name) or name,
+        original_filename=file.filename,
         description=description,
         category=category,
         file_path=file_path,
         file_type=file.content_type or f"application/{file_extension}",
         file_size=file_size,
-        class_level=class_level,
-        subject=subject,
+        class_level=normalize_list_label(class_level),
+        subject=normalize_list_label(subject),
         sub_category=sub_category,
         consent_to_share=consent_to_share,
         tags=tags or "",
@@ -5264,6 +5821,12 @@ async def school_upload_resource(
     )
     
     db.add(new_resource)
+    sync_resource_taxonomy_value(
+        db,
+        programs=[normalize_list_label(class_level)] if normalize_list_label(class_level) else [],
+        subjects=[normalize_list_label(subject)] if normalize_list_label(subject) else [],
+        updated_by=school_id
+    )
     record_activity(
         db,
         school_id,
@@ -6829,6 +7392,8 @@ async def update_school_settings_profile(
     school_name: str = Form(...),
     email: EmailStr = Form(...),
     contact_number: Optional[str] = Form(None),
+    region: Optional[str] = Form(None),
+    sub_region: Optional[str] = Form(None),
     password: Optional[str] = Form(None),
     logo: Optional[UploadFile] = File(None),
     current_user: dict = Depends(get_current_user),
@@ -6853,6 +7418,8 @@ async def update_school_settings_profile(
     school.school_name = normalize_optional_string(school_name) or school.school_name
     school.email = normalized_email
     school.contact_number = normalize_optional_string(contact_number)
+    school.region = normalize_optional_string(region)
+    school.sub_region = normalize_optional_string(sub_region)
 
     if password:
         if security_settings.get("require_strong_passwords") and not is_strong_password(password):
@@ -8101,6 +8668,20 @@ async def download_resource_with_logo(
                     None  # Will create temp file
                 )
                 print(f"Image watermark result: {watermarked_file}")
+            elif requires_packaged_branding(resource):
+                print("Processing branded package for non-PDF/image resource...")
+                temp_file = tempfile.NamedTemporaryFile(suffix='.zip', delete=False)
+                temp_file.close()
+                watermarked_file = create_branded_resource_package(
+                    resource,
+                    school,
+                    logo_path,
+                    watermark_positions,
+                    text_position_data,
+                    temp_file.name,
+                    full_file_path
+                )
+                print(f"Branded package result: {watermarked_file}")
             else:
                 print(f"Unsupported file type for watermarking: {file_type_lower}")
             
@@ -8159,8 +8740,8 @@ async def download_resource_with_logo(
             # Default: read file content as-is
             with open(final_file_path, 'rb') as f:
                 file_content = f.read()
-            media_type = resource.file_type or 'application/octet-stream'
-            forced_extension = None
+            media_type = "application/zip" if final_file_path.lower().endswith(".zip") else (resource.file_type or 'application/octet-stream')
+            forced_extension = ".zip" if final_file_path.lower().endswith(".zip") else None
         
         # Clean up temp watermarked file if created
         if watermarked_file and watermarked_file != full_file_path and os.path.exists(watermarked_file):
@@ -9814,6 +10395,8 @@ async def get_school_info(school_id: str, db: Session = Depends(get_db)):
         "school_name": school.school_name,
         "email": school.email,
         "contact_number": school.contact_number,
+        "region": school.region,
+        "sub_region": school.sub_region,
         "logo_path": logo_path
     }
 

@@ -52,6 +52,8 @@ const SchoolSettings = ({ user, setUser }) => {
         school_name: profileResponse.data.school_name,
         email: profileResponse.data.email,
         contact_number: profileResponse.data.contact_number || '',
+        region: profileResponse.data.region || '',
+        sub_region: profileResponse.data.sub_region || '',
         password: '',
         confirm_password: ''
       });
@@ -70,6 +72,8 @@ const SchoolSettings = ({ user, setUser }) => {
       payload.append('school_name', values.school_name);
       payload.append('email', values.email);
       payload.append('contact_number', values.contact_number || '');
+      payload.append('region', values.region || '');
+      payload.append('sub_region', values.sub_region || '');
       if (values.password) {
         payload.append('password', values.password);
       }
@@ -96,6 +100,8 @@ const SchoolSettings = ({ user, setUser }) => {
         school_name: response.data.school_name,
         email: response.data.email,
         contact_number: response.data.contact_number || '',
+        region: response.data.region || '',
+        sub_region: response.data.sub_region || '',
         password: '',
         confirm_password: ''
       });
@@ -192,6 +198,19 @@ const SchoolSettings = ({ user, setUser }) => {
                     <Form.Item name="contact_number" label="Contact Number">
                       <Input prefix={<PhoneOutlined />} placeholder="Contact number" />
                     </Form.Item>
+
+                    <Row gutter={16}>
+                      <Col xs={24} md={12}>
+                        <Form.Item name="region" label="Region">
+                          <Input placeholder="Region" />
+                        </Form.Item>
+                      </Col>
+                      <Col xs={24} md={12}>
+                        <Form.Item name="sub_region" label="Sub-Region">
+                          <Input placeholder="Sub-region" />
+                        </Form.Item>
+                      </Col>
+                    </Row>
 
                     <Form.Item label="School Logo">
                       <Upload

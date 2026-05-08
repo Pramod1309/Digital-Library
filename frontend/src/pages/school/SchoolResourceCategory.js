@@ -22,6 +22,10 @@ const BACKEND_URL = config.apiBaseUrl;
 const API = `${BACKEND_URL}/api`;
 const VIDEO_LINK_DOMAINS = ['youtube.com', 'youtu.be', 'vimeo.com', 'dailymotion.com', 'bilibili.com'];
 const VIDEO_FILE_EXTENSIONS = ['mp4', 'webm', 'ogg', 'mov', 'avi', 'mkv'];
+const DEFAULT_RESOURCE_TAXONOMY = {
+  programs: ['Playgroup', 'Nursery', 'LKG', 'UKG'],
+  subjects: ['English', 'Maths', 'EVS', 'Hindi', 'Arts & Crafts', 'Music', 'Physical Education']
+};
 
 // Update this helper function at the top of your file:
 const getStaticFileUrl = (path) => {
@@ -51,6 +55,26 @@ const isVideoLinkResource = (resource) => {
   if (!resource) return false;
   return resource.is_video_link === true || resource.is_video_link === 'true' || isKnownVideoLink(resource.file_path);
 };
+
+const dedupeLabels = (values = []) => {
+  const seen = new Set();
+  const labels = [];
+
+  values.forEach((value) => {
+    const label = value?.toString().trim();
+    const key = normalizeToken(label);
+    if (!label || !key || seen.has(key)) return;
+    seen.add(key);
+    labels.push(label);
+  });
+
+  return labels;
+};
+
+const buildTaxonomyOptions = (values = [], allLabel) => ([
+  { value: 'all', label: allLabel },
+  ...dedupeLabels(values).map((value) => ({ value, label: value }))
+]);
 
 const getVideoLinkMeta = (videoUrl = '') => {
   const youtubeMatch = videoUrl.match(/(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/)([^&\n?#]+)/);
@@ -503,6 +527,33 @@ const getClassLabel = (value) => CLASS_LABELS[normalizeClassValue(value)] || val
 
 const getSubjectLabel = (value) => SUBJECT_LABELS[normalizeSubjectValue(value)] || value || SUBJECT_LABELS.all;
 
+const getResourceDisplayTitle = (resource) => (
+  resource?.display_title?.trim() || resource?.name || 'Untitled Resource'
+);
+
+const getResourceSecondaryTitle = (resource) => {
+  if (!resource) return '';
+
+  const displayTitleKey = normalizeToken(getResourceDisplayTitle(resource));
+  const nameKey = normalizeToken(resource.name);
+  const secondaryParts = [];
+
+  if (nameKey && nameKey !== displayTitleKey) {
+    secondaryParts.push(`Original title: ${resource.name}`);
+  }
+
+  if (resource.original_filename) {
+    const originalKey = normalizeToken(resource.original_filename);
+    const originalBaseKey = normalizeToken(resource.original_filename.replace(/\.[^.]+$/, ''));
+
+    if (originalKey !== displayTitleKey && originalBaseKey !== nameKey) {
+      secondaryParts.push(`File: ${resource.original_filename}`);
+    }
+  }
+
+  return secondaryParts.join(' | ');
+};
+
 const getSubCategoryLabel = (value, category) => {
   if (!value) return '-';
 
@@ -825,6 +876,7 @@ const LogoOverlay = ({
 const SchoolResourceCategory = ({ user }) => {
   const { category: urlCategory, subcategory: urlSubCategory } = useParams();
   const [resources, setResources] = useState([]);
+  const [resourceTaxonomy, setResourceTaxonomy] = useState(DEFAULT_RESOURCE_TAXONOMY);
   const [loading, setLoading] = useState(false);
   const [isModalVisible, setIsModalVisible] = useState(false);
   const [isPreviewModalVisible, setIsPreviewModalVisible] = useState(false);
@@ -932,6 +984,28 @@ const SchoolResourceCategory = ({ user }) => {
   useEffect(() => {
     fetchSchoolInfo();
   }, [user.school_id]);
+
+  useEffect(() => {
+    fetchResourceTaxonomy();
+  }, []);
+
+  const fetchResourceTaxonomy = async () => {
+    try {
+      const response = await api.get('/resource-taxonomy');
+      setResourceTaxonomy({
+        programs: dedupeLabels([
+          ...DEFAULT_RESOURCE_TAXONOMY.programs,
+          ...(response.data?.programs || [])
+        ]),
+        subjects: dedupeLabels([
+          ...DEFAULT_RESOURCE_TAXONOMY.subjects,
+          ...(response.data?.subjects || [])
+        ])
+      });
+    } catch (error) {
+      console.error('Error fetching school resource taxonomy:', error);
+    }
+  };
 
   const fetchResources = async () => {
     setLoading(true);
@@ -1060,6 +1134,9 @@ const SchoolResourceCategory = ({ user }) => {
     { key: 'all', label: 'All Categories', onClick: () => handleCategoryChange('all') }
   ];
 
+  const programFilterOptions = buildTaxonomyOptions(resourceTaxonomy.programs, 'All Programs');
+  const subjectFilterOptions = buildTaxonomyOptions(resourceTaxonomy.subjects, 'All Subjects');
+
   const handleUpload = async () => {
     if (fileList.length === 0) {
       message.warning('Please select a file to upload');
@@ -1100,7 +1177,8 @@ const SchoolResourceCategory = ({ user }) => {
   };
 
   const fetchLogoPosition = async (resourceId) => {
-  if (!resourceId || categoryFilter === 'multimedia') return;
+  const resource = resources.find((item) => item.resource_id === resourceId);
+  if (!resourceId || !supportsBrandCustomization(resource)) return;
   
   try {
     setPositionLoading(true);
@@ -1135,7 +1213,8 @@ const SchoolResourceCategory = ({ user }) => {
 };
 
   const fetchTextPosition = async (resourceId) => {
-    if (!resourceId || categoryFilter === 'multimedia') return;
+    const resource = resources.find((item) => item.resource_id === resourceId);
+    if (!resourceId || !supportsBrandCustomization(resource)) return;
     
     try {
       const response = await api.get(`/school/text-watermark/${resourceId}`, {
@@ -1198,7 +1277,7 @@ const SchoolResourceCategory = ({ user }) => {
   };
 
   const saveLogoPosition = async () => {
-    if (!previewResource || categoryFilter === 'multimedia') return;
+    if (!previewResource || !supportsBrandCustomization(previewResource)) return;
     
     try {
       const roundedPosition = {
@@ -1231,7 +1310,7 @@ const SchoolResourceCategory = ({ user }) => {
   };
 
   const saveTextPosition = async () => {
-    if (!previewResource || categoryFilter === 'multimedia') return;
+    if (!previewResource || !supportsBrandCustomization(previewResource)) return;
     
     try {
       const nameOpacityValue = parseFloat(Math.max(0.1, textPosition.name_opacity).toFixed(2));
@@ -1286,7 +1365,7 @@ const SchoolResourceCategory = ({ user }) => {
   };
 
   const resetLogoPosition = async () => {
-    if (!previewResource || categoryFilter === 'multimedia') return;
+    if (!previewResource || !supportsBrandCustomization(previewResource)) return;
     
     try {
       await api.delete(`/school/logo-position/${previewResource.resource_id}`, {
@@ -1304,7 +1383,7 @@ const SchoolResourceCategory = ({ user }) => {
   };
 
   const resetTextPosition = async () => {
-    if (!previewResource || categoryFilter === 'multimedia') return;
+    if (!previewResource || !supportsBrandCustomization(previewResource)) return;
     
     try {
       setTextPosition({
@@ -1522,7 +1601,7 @@ const SchoolResourceCategory = ({ user }) => {
     videoRefs.current[record.resource_id].currentTime = 0;
   }
 
-  if (categoryFilter !== 'multimedia') {
+  if (supportsBrandCustomization(record)) {
     await fetchLogoPosition(record.resource_id);
     await fetchTextPosition(record.resource_id);
   }
@@ -1551,6 +1630,16 @@ const SchoolResourceCategory = ({ user }) => {
     const path = (record.file_path || '').toLowerCase();
     return type.includes('pdf') || path.endsWith('.pdf');
   };
+
+  const isLocalVideoResource = (record) => {
+    if (!record || isVideoLinkResource(record)) return false;
+    const type = (record.file_type || '').toLowerCase();
+    const path = (record.file_path || '').toLowerCase();
+    const extension = path.split('.').pop()?.split('?')[0] || '';
+    return type.includes('video') || VIDEO_FILE_EXTENSIONS.includes(extension);
+  };
+
+  const supportsBrandCustomization = (record) => Boolean(record) && !isVideoLinkResource(record);
 
   const getPdfPageRef = (index) => {
     if (!pdfPageRefs.current[index]) {
@@ -1706,7 +1795,7 @@ const SchoolResourceCategory = ({ user }) => {
     return [
       {
         key: 'original',
-        label: 'Download Branded',
+        label: isImageResource(record) || isPdfResource(record) ? 'Download Branded' : 'Download Branded Package',
         onClick: () => handleDownload(record, 'image')
       },
       {
@@ -1724,6 +1813,8 @@ const SchoolResourceCategory = ({ user }) => {
     const fileType = previewResource.file_type ? previewResource.file_type.toLowerCase() : '';
     const fileExtension = previewResource.file_path?.split('.').pop()?.split('?')[0]?.toLowerCase() || '';
     const isVideoLink = isVideoLinkResource(previewResource);
+    const allowBrandOverlay = supportsBrandCustomization(previewResource);
+    const schoolTextAvailable = schoolInfo.school_name || schoolInfo.email || schoolInfo.contact_number || address;
     const getPreviewUrl = () => {
       if (isVideoLink) {
         return previewResource.file_path;
@@ -1805,7 +1896,7 @@ const SchoolResourceCategory = ({ user }) => {
               message.error('Failed to load image preview');
             }}
           />
-          {categoryFilter !== 'multimedia' && logoUrl && showLogo && (
+          {allowBrandOverlay && logoUrl && showLogo && (
             <LogoOverlay
               logoUrl={logoUrl}
               logoPosition={logoPosition}
@@ -1815,7 +1906,7 @@ const SchoolResourceCategory = ({ user }) => {
               showLogo={showLogo}
             />
           )}
-          {categoryFilter !== 'multimedia' && (schoolInfo.school_name || schoolInfo.email || schoolInfo.contact_number || address) && (
+          {allowBrandOverlay && schoolTextAvailable && (
             <TextOverlay
               schoolInfo={schoolInfo}
               textPosition={textPosition}
@@ -1894,7 +1985,7 @@ const SchoolResourceCategory = ({ user }) => {
                     message.error('Failed to load PDF page preview');
                   }}
                 />
-                {categoryFilter !== 'multimedia' && logoUrl && showLogo && (
+                {allowBrandOverlay && logoUrl && showLogo && (
                   <LogoOverlay
                     logoUrl={logoUrl}
                     logoPosition={logoPosition}
@@ -1904,7 +1995,7 @@ const SchoolResourceCategory = ({ user }) => {
                     showLogo={showLogo}
                   />
                 )}
-                {categoryFilter !== 'multimedia' && (schoolInfo.school_name || schoolInfo.email || schoolInfo.contact_number || address) && (
+                {allowBrandOverlay && schoolTextAvailable && (
                   <TextOverlay
                     schoolInfo={schoolInfo}
                     textPosition={textPosition}
@@ -1957,34 +2048,108 @@ const SchoolResourceCategory = ({ user }) => {
       }
 
       const videoContent = (
-        <video
-          ref={el => { if (el && previewResource) videoRefs.current[previewResource.resource_id] = el; }}
-          controls
-          preload="metadata"
-          style={{ width: '100%', maxHeight: '100%', borderRadius: '8px' }}
-          onLoadedMetadata={() => setPreviewLoading(false)}
-          onError={() => {
-            setPreviewLoading(false);
-            message.error('Failed to load video preview');
+        <div
+          ref={imageContainerRef}
+          style={{
+            position: 'relative',
+            display: 'inline-block',
+            width: '100%',
+            maxWidth: '100%',
+            maxHeight: '100%'
           }}
         >
-          <source src={videoSrc} type={previewResource.file_type || 'video/mp4'} />
-        </video>
+          <video
+            ref={el => { if (el && previewResource) videoRefs.current[previewResource.resource_id] = el; }}
+            controls
+            preload="metadata"
+            style={{ width: '100%', maxHeight: '100%', borderRadius: '8px' }}
+            onLoadedMetadata={() => setPreviewLoading(false)}
+            onError={() => {
+              setPreviewLoading(false);
+              message.error('Failed to load video preview');
+            }}
+          >
+            <source src={videoSrc} type={previewResource.file_type || 'video/mp4'} />
+          </video>
+          {allowBrandOverlay && logoUrl && showLogo && (
+            <LogoOverlay
+              logoUrl={logoUrl}
+              logoPosition={logoPosition}
+              isEditingLogo={isEditingLogo}
+              onStartLogoDrag={startLogoDrag}
+              containerRef={imageContainerRef}
+              showLogo={showLogo}
+            />
+          )}
+          {allowBrandOverlay && schoolTextAvailable && (
+            <TextOverlay
+              schoolInfo={schoolInfo}
+              textPosition={textPosition}
+              isEditingText={isEditingText}
+              isDraggingText={isDraggingText}
+              onStartTextDrag={startTextDrag}
+              containerRef={imageContainerRef}
+              textElements={textElements}
+              address={address}
+            />
+          )}
+        </div>
       );
       return wrapWithHeaderFooter(videoContent);
     }
 
     // Default fallback
     const fallbackContent = (
-      <div style={{ textAlign: 'center', padding: '40px', width: '100%' }}>
-        {getFileIcon(previewResource.file_type, 64)}
-        <h3 style={{ marginTop: '16px' }}>{previewResource.name}</h3>
-        <p>Preview not available for this file type. Please download to view.</p>
-        <Dropdown menu={{ items: getDownloadMenuItems(previewResource) }} trigger={['click']}>
-          <Button type="primary" icon={<DownloadOutlined />}>
-            Download File
-          </Button>
-        </Dropdown>
+      <div
+        ref={imageContainerRef}
+        style={{
+          position: 'relative',
+          width: '100%',
+          maxWidth: '780px',
+          minHeight: '420px',
+          borderRadius: '16px',
+          overflow: 'hidden',
+          background: 'linear-gradient(135deg, #ffffff 0%, #edf4ff 100%)',
+          border: '1px solid #d9e6ff'
+        }}
+      >
+        <div style={{ textAlign: 'center', padding: '40px 32px' }}>
+          {getFileIcon(previewResource.file_type, 64)}
+          <h3 style={{ marginTop: '16px' }}>{getResourceDisplayTitle(previewResource)}</h3>
+          {getResourceSecondaryTitle(previewResource) && (
+            <p style={{ color: '#666', marginBottom: '8px' }}>{getResourceSecondaryTitle(previewResource)}</p>
+          )}
+          <p>
+            A branded download package will be created for this file so the original resource and the school branding stay together.
+          </p>
+          <Dropdown menu={{ items: getDownloadMenuItems(previewResource) }} trigger={['click']}>
+            <Button type="primary" icon={<DownloadOutlined />}>
+              Download File
+            </Button>
+          </Dropdown>
+        </div>
+        {allowBrandOverlay && logoUrl && showLogo && (
+          <LogoOverlay
+            logoUrl={logoUrl}
+            logoPosition={logoPosition}
+            isEditingLogo={isEditingLogo}
+            onStartLogoDrag={startLogoDrag}
+            containerRef={imageContainerRef}
+            showLogo={showLogo}
+          />
+        )}
+        {allowBrandOverlay && schoolTextAvailable && (
+          <TextOverlay
+            schoolInfo={schoolInfo}
+            textPosition={textPosition}
+            isEditingText={isEditingText}
+            isDraggingText={isDraggingText}
+            onStartTextDrag={startTextDrag}
+            containerRef={imageContainerRef}
+            textElements={textElements}
+            address={address}
+          />
+        )}
       </div>
     );
     return wrapWithHeaderFooter(fallbackContent);
@@ -2004,12 +2169,14 @@ const SchoolResourceCategory = ({ user }) => {
   };
 
   const filteredResources = resources.filter(resource => {
-    const normalizedSearchText = searchText.trim().toLowerCase();
+    const normalizedSearchText = normalizeToken(searchText);
     const matchesSearch = !normalizedSearchText ||
-      resource.name?.toLowerCase().includes(normalizedSearchText) ||
-      resource.description?.toLowerCase().includes(normalizedSearchText);
-    const matchesClass = selectedClass === 'all' || resource.normalized_class_level === selectedClass;
-    const matchesSubject = subjectFilter === 'all' || resource.normalized_subject === subjectFilter;
+      normalizeToken(getResourceDisplayTitle(resource)).includes(normalizedSearchText) ||
+      normalizeToken(resource.name).includes(normalizedSearchText) ||
+      normalizeToken(resource.original_filename).includes(normalizedSearchText) ||
+      normalizeToken(resource.description).includes(normalizedSearchText);
+    const matchesClass = selectedClass === 'all' || normalizeToken(resource.class_level) === normalizeToken(selectedClass);
+    const matchesSubject = subjectFilter === 'all' || normalizeToken(resource.subject) === normalizeToken(subjectFilter);
     const matchesSubCategory = subCategoryFilter === 'all' || resource.normalized_sub_category === subCategoryFilter;
     const matchesStatus = selectedStatus === 'all' || resource.normalized_status === selectedStatus;
 
@@ -2244,7 +2411,12 @@ const SchoolResourceCategory = ({ user }) => {
         <Space>
           {getFileIcon(record.file_type, 24)}
           <div>
-            <div>{text}</div>
+            <div>{getResourceDisplayTitle(record)}</div>
+            {getResourceSecondaryTitle(record) && (
+              <div style={{ fontSize: '11px', color: '#666', marginTop: '2px' }}>
+                {getResourceSecondaryTitle(record)}
+              </div>
+            )}
             {record.sub_category && (
               <div style={{ fontSize: '11px', color: '#1890ff', marginTop: '2px' }}>
                 📁 {getSubCategoryLabel(record.sub_category, record.category)}
@@ -2422,11 +2594,16 @@ const SchoolResourceCategory = ({ user }) => {
               ]}
             >
               <div>
-                <Tooltip title={resource.name}>
+                <Tooltip title={getResourceDisplayTitle(resource)}>
                   <div style={{ fontSize: '14px', fontWeight: 'bold', marginBottom: '8px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                    {resource.name}
+                    {getResourceDisplayTitle(resource)}
                   </div>
                 </Tooltip>
+                {getResourceSecondaryTitle(resource) && (
+                  <div style={{ fontSize: '11px', color: '#666', marginBottom: '8px' }}>
+                    {getResourceSecondaryTitle(resource)}
+                  </div>
+                )}
                 <div style={{ fontSize: '12px', color: '#666', marginBottom: '8px', height: '36px', overflow: 'hidden' }}>
                   {resource.description || 'No description provided'}
                 </div>
@@ -2501,9 +2678,9 @@ const SchoolResourceCategory = ({ user }) => {
               value={selectedClass}
               onChange={setSelectedClass}
               style={{ width: 150 }}
-              placeholder="Filter by class"
+              placeholder="Filter by program"
             >
-              {classOptions.map(option => (
+              {programFilterOptions.map(option => (
                 <Option key={option.value} value={option.value}>
                   {option.label}
                 </Option>
@@ -2517,7 +2694,7 @@ const SchoolResourceCategory = ({ user }) => {
               style={{ width: 150 }}
               placeholder="Filter by subject"
             >
-              {subjectOptions.map(option => (
+              {subjectFilterOptions.map(option => (
                 <Option key={option.value} value={option.value}>
                   {option.label}
                 </Option>
@@ -2589,7 +2766,12 @@ const SchoolResourceCategory = ({ user }) => {
       <Modal
         title={
           <div>
-            {previewResource?.name}
+            {getResourceDisplayTitle(previewResource)}
+            {getResourceSecondaryTitle(previewResource) && (
+              <div style={{ fontSize: '12px', color: '#666', fontWeight: 'normal' }}>
+                {getResourceSecondaryTitle(previewResource)}
+              </div>
+            )}
             <div style={{ fontSize: '12px', color: '#666', fontWeight: 'normal' }}>
               {previewResource?.file_type} • 
               {previewResource?.file_size < 1024 * 1024
@@ -2615,7 +2797,7 @@ const SchoolResourceCategory = ({ user }) => {
         }}
         footer={[
           <Button key="close" onClick={() => setIsPreviewModalVisible(false)}>Close</Button>,
-          categoryFilter !== 'multimedia' && (
+          supportsBrandCustomization(previewResource) && (
             <>
               {isEditingLogo ? (
                 <>
@@ -2633,7 +2815,7 @@ const SchoolResourceCategory = ({ user }) => {
               )}
             </>
           ),
-          categoryFilter !== 'multimedia' && (schoolInfo.school_name || schoolInfo.email || schoolInfo.contact_number) && (
+          supportsBrandCustomization(previewResource) && (schoolInfo.school_name || schoolInfo.email || schoolInfo.contact_number || address) && (
             <>
               {isEditingText ? (
                 <>

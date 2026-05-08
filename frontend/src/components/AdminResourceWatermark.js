@@ -20,8 +20,14 @@ import {
 import {
   DownloadOutlined,
   EditOutlined,
+  FileExcelOutlined,
   FileImageOutlined,
   FilePdfOutlined,
+  FilePptOutlined,
+  FileTextOutlined,
+  FileWordOutlined,
+  FileZipOutlined,
+  VideoCameraOutlined,
   LeftOutlined,
   MailOutlined,
   MinusOutlined,
@@ -39,6 +45,8 @@ const { Text } = Typography;
 
 const BACKEND_URL = config.apiBaseUrl;
 const API = `${BACKEND_URL}/api`;
+const VIDEO_LINK_DOMAINS = ['youtube.com', 'youtu.be', 'vimeo.com', 'dailymotion.com', 'bilibili.com'];
+const VIDEO_FILE_EXTENSIONS = ['mp4', 'webm', 'ogg', 'mov', 'avi', 'mkv'];
 const FONT_OPTIONS = ['Arial', 'Times New Roman', 'Georgia', 'Verdana', 'Courier New'];
 const STYLE_OPTIONS = ['normal', 'bold', 'italic', 'bold italic'];
 const DEFAULT_EMAIL_SUBJECT = 'Your Customized Watermarked Resources Are Ready for {{school_name}} 📚✨';
@@ -70,6 +78,54 @@ const getStaticFileUrl = (path) => {
   return `${BACKEND_URL}/uploads/${cleanPath}`;
 };
 
+const normalizeLabelKey = (value = '') => (
+  value
+    .toString()
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+);
+
+const getResourceDisplayTitle = (resource) => (
+  resource?.display_title?.trim() || resource?.name || 'Untitled Resource'
+);
+
+const getResourceSecondaryTitle = (resource) => {
+  if (!resource) return '';
+
+  const displayTitleKey = normalizeLabelKey(getResourceDisplayTitle(resource));
+  const name = resource.name?.trim() || '';
+  const originalFilename = resource.original_filename?.trim() || '';
+  const details = [];
+
+  if (name && normalizeLabelKey(name) !== displayTitleKey) {
+    details.push(`Original title: ${name}`);
+  }
+
+  if (originalFilename) {
+    const originalFilenameKey = normalizeLabelKey(originalFilename);
+    const originalBaseKey = normalizeLabelKey(originalFilename.replace(/\.[^.]+$/, ''));
+
+    if (
+      originalFilenameKey !== displayTitleKey &&
+      originalBaseKey !== normalizeLabelKey(name)
+    ) {
+      details.push(`File: ${originalFilename}`);
+    }
+  }
+
+  return details.join(' | ');
+};
+
+const isKnownVideoLink = (path = '') => {
+  const normalizedPath = (path || '').toLowerCase();
+  return VIDEO_LINK_DOMAINS.some((domain) => normalizedPath.includes(domain));
+};
+
+const isVideoLinkResource = (resource) => (
+  Boolean(resource) && (resource.is_video_link === true || resource.is_video_link === 'true' || isKnownVideoLink(resource.file_path))
+);
+
 const isPdfResource = (resource) => {
   const fileType = (resource?.file_type || '').toLowerCase();
   const filePath = (resource?.file_path || '').toLowerCase();
@@ -87,19 +143,29 @@ const isRasterImageResource = (resource) => {
 
 const isSupportedBatchResource = (resource) => {
   if (!resource) return false;
-  if ((resource.category || '').toLowerCase() === 'multimedia') return false;
-  if (resource.is_video_link) return false;
-
-  const fileType = (resource.file_type || '').toLowerCase();
-  if (fileType.includes('video') || fileType.includes('audio')) return false;
-
-  return isPdfResource(resource) || isRasterImageResource(resource);
+  if (isVideoLinkResource(resource)) return false;
+  return Boolean(resource.file_path);
 };
 
 const getBatchResourceKind = (resource) => {
   if (isPdfResource(resource)) return 'pdf';
   if (isRasterImageResource(resource)) return 'image';
-  return null;
+  return isSupportedBatchResource(resource) ? 'other' : null;
+};
+
+const getBatchResourceIcon = (resource) => {
+  const fileType = (resource?.file_type || '').toLowerCase();
+
+  if (isPdfResource(resource)) return <FilePdfOutlined style={{ color: '#ff4d4f' }} />;
+  if (isRasterImageResource(resource)) return <FileImageOutlined style={{ color: '#1677ff' }} />;
+  if (fileType.includes('word') || fileType.includes('doc')) return <FileWordOutlined style={{ color: '#1890ff' }} />;
+  if (fileType.includes('powerpoint') || fileType.includes('ppt')) return <FilePptOutlined style={{ color: '#fa8c16' }} />;
+  if (fileType.includes('excel') || fileType.includes('xls')) return <FileExcelOutlined style={{ color: '#52c41a' }} />;
+  if (fileType.includes('video') || VIDEO_FILE_EXTENSIONS.some((extension) => (resource?.file_path || '').toLowerCase().includes(`.${extension}`))) {
+    return <VideoCameraOutlined style={{ color: '#13c2c2' }} />;
+  }
+  if (fileType.includes('zip') || fileType.includes('rar')) return <FileZipOutlined style={{ color: '#722ed1' }} />;
+  return <FileTextOutlined style={{ color: '#8c8c8c' }} />;
 };
 
 const createDefaultTemplate = () => ({
@@ -533,7 +599,10 @@ const AdminResourceWatermark = () => {
   const [activeResourceId, setActiveResourceId] = useState(null);
   const [previewSchoolId, setPreviewSchoolId] = useState(null);
   const [templatesByResource, setTemplatesByResource] = useState({});
+  const [overrideTemplatesBySchoolResource, setOverrideTemplatesBySchoolResource] = useState({});
+  const [editingScope, setEditingScope] = useState('shared');
   const [templateLoading, setTemplateLoading] = useState(false);
+  const [overrideLoading, setOverrideLoading] = useState(false);
   const [savingTemplate, setSavingTemplate] = useState(false);
   const [bulkApplyLoadingType, setBulkApplyLoadingType] = useState(null);
   const [generating, setGenerating] = useState(false);
@@ -560,6 +629,7 @@ const AdminResourceWatermark = () => {
   const pdfPageRefs = useRef([]);
   const dragStateRef = useRef({ container: null, element: null });
   const loadedTemplateIdsRef = useRef(new Set());
+  const loadedOverrideIdsRef = useRef(new Set());
 
   const filteredSchools = useMemo(() => {
     const searchText = schoolSearch.trim().toLowerCase();
@@ -569,7 +639,9 @@ const AdminResourceWatermark = () => {
       school.school_id?.toLowerCase().includes(searchText) ||
       school.school_name?.toLowerCase().includes(searchText) ||
       school.email?.toLowerCase().includes(searchText) ||
-      (school.contact_number || '').toLowerCase().includes(searchText)
+      (school.contact_number || '').toLowerCase().includes(searchText) ||
+      (school.region || '').toLowerCase().includes(searchText) ||
+      (school.sub_region || '').toLowerCase().includes(searchText)
     ));
   }, [schools, schoolSearch]);
 
@@ -582,7 +654,9 @@ const AdminResourceWatermark = () => {
     if (!searchText) return eligibleResources;
 
     return eligibleResources.filter((resource) => (
+      getResourceDisplayTitle(resource).toLowerCase().includes(searchText) ||
       resource.name?.toLowerCase().includes(searchText) ||
+      (resource.original_filename || '').toLowerCase().includes(searchText) ||
       resource.category?.toLowerCase().includes(searchText) ||
       resource.sub_category?.toLowerCase().includes(searchText) ||
       resource.description?.toLowerCase().includes(searchText)
@@ -613,15 +687,34 @@ const AdminResourceWatermark = () => {
     })
   ), [resources, selectedResourceIds]);
 
+  const selectedOtherResourceIds = useMemo(() => (
+    selectedResourceIds.filter((resourceId) => {
+      const resource = resources.find((item) => item.resource_id === resourceId);
+      return getBatchResourceKind(resource) === 'other';
+    })
+  ), [resources, selectedResourceIds]);
+
   const previewSchool = useMemo(() => (
     schools.find((school) => school.school_id === previewSchoolId) || null
   ), [schools, previewSchoolId]);
 
   const activeResourceKind = useMemo(() => getBatchResourceKind(activeResource), [activeResource]);
 
-  const currentTemplate = activeResourceId
-    ? (templatesByResource[activeResourceId] || createDefaultTemplate())
-    : createDefaultTemplate();
+  const getOverrideKey = (schoolId, resourceId) => `${schoolId || ''}::${resourceId || ''}`;
+
+  const getSharedTemplate = (resourceId) => (
+    resourceId ? (templatesByResource[resourceId] || createDefaultTemplate()) : createDefaultTemplate()
+  );
+
+  const getOverrideTemplate = (schoolId, resourceId) => (
+    schoolId && resourceId ? overrideTemplatesBySchoolResource[schoolId]?.[resourceId] : null
+  );
+
+  const currentTemplate = (
+    editingScope === 'individual' && previewSchoolId && activeResourceId
+      ? (getOverrideTemplate(previewSchoolId, activeResourceId) || getSharedTemplate(activeResourceId))
+      : getSharedTemplate(activeResourceId)
+  );
 
   const clearGeneratedState = () => {
     setGeneratedJob(null);
@@ -629,6 +722,18 @@ const AdminResourceWatermark = () => {
     setEmailDrafts([]);
     setSelectedEmailDraftIds([]);
     setEditingDraft(null);
+  };
+
+  const upsertOverrideTemplateState = (schoolId, resourceId, template) => {
+    if (!schoolId || !resourceId || !template) return;
+
+    setOverrideTemplatesBySchoolResource((previous) => ({
+      ...previous,
+      [schoolId]: {
+        ...(previous[schoolId] || {}),
+        [resourceId]: cloneTemplate(template)
+      }
+    }));
   };
 
   useEffect(() => {
@@ -708,6 +813,49 @@ const AdminResourceWatermark = () => {
   }, [activeResourceId]);
 
   useEffect(() => {
+    if (editingScope !== 'individual' || !activeResourceId || !previewSchoolId) return undefined;
+
+    const overrideKey = getOverrideKey(previewSchoolId, activeResourceId);
+    const fallbackTemplate = getSharedTemplate(activeResourceId);
+
+    if (!getOverrideTemplate(previewSchoolId, activeResourceId)) {
+      upsertOverrideTemplateState(previewSchoolId, activeResourceId, fallbackTemplate);
+    }
+
+    if (loadedOverrideIdsRef.current.has(overrideKey)) return undefined;
+
+    loadedOverrideIdsRef.current.add(overrideKey);
+    let cancelled = false;
+
+    const loadOverride = async () => {
+      try {
+        setOverrideLoading(true);
+        const response = await api.get(`/admin/batch-watermark/template/${activeResourceId}/override/${previewSchoolId}`);
+        if (cancelled) return;
+
+        if (response.data?.template) {
+          upsertOverrideTemplateState(previewSchoolId, activeResourceId, deserializeTemplate(response.data.template));
+        } else {
+          upsertOverrideTemplateState(previewSchoolId, activeResourceId, fallbackTemplate);
+        }
+      } catch (error) {
+        if (cancelled) return;
+        console.error('Error loading school-specific batch watermark layout:', error);
+        upsertOverrideTemplateState(previewSchoolId, activeResourceId, fallbackTemplate);
+      } finally {
+        if (!cancelled) {
+          setOverrideLoading(false);
+        }
+      }
+    };
+
+    loadOverride();
+    return () => {
+      cancelled = true;
+    };
+  }, [editingScope, activeResourceId, previewSchoolId, templatesByResource]);
+
+  useEffect(() => {
     if (!activeResource) {
       setPdfPages([]);
       setPreviewLoading(false);
@@ -716,9 +864,12 @@ const AdminResourceWatermark = () => {
 
     if (isPdfResource(activeResource)) {
       loadPdfPages(activeResource);
-    } else {
+    } else if (isRasterImageResource(activeResource)) {
       setPdfPages([]);
       setPreviewLoading(true);
+    } else {
+      setPdfPages([]);
+      setPreviewLoading(false);
     }
   }, [activeResourceId]);
 
@@ -758,9 +909,11 @@ const AdminResourceWatermark = () => {
       setSchools(schoolsResponse.data || []);
       setResources(
         [...(resourcesResponse.data || [])].sort((left, right) => (
-          (left.name || '').localeCompare(right.name || '')
+          getResourceDisplayTitle(left).localeCompare(getResourceDisplayTitle(right))
         ))
       );
+      loadedTemplateIdsRef.current = new Set();
+      loadedOverrideIdsRef.current = new Set();
     } catch (error) {
       console.error('Error loading batch watermark data:', error);
       message.error('Failed to load schools and resources');
@@ -772,14 +925,31 @@ const AdminResourceWatermark = () => {
   const updateActiveTemplate = (updater) => {
     if (!activeResourceId) return;
 
-    setTemplatesByResource((previous) => {
-      const current = previous[activeResourceId] ? cloneTemplate(previous[activeResourceId]) : createDefaultTemplate();
-      const next = updater(current);
-      return {
-        ...previous,
-        [activeResourceId]: next
-      };
-    });
+    if (editingScope === 'individual' && previewSchoolId) {
+      setOverrideTemplatesBySchoolResource((previous) => {
+        const current = previous[previewSchoolId]?.[activeResourceId]
+          ? cloneTemplate(previous[previewSchoolId][activeResourceId])
+          : cloneTemplate(getSharedTemplate(activeResourceId));
+        const next = updater(current);
+
+        return {
+          ...previous,
+          [previewSchoolId]: {
+            ...(previous[previewSchoolId] || {}),
+            [activeResourceId]: next
+          }
+        };
+      });
+    } else {
+      setTemplatesByResource((previous) => {
+        const current = previous[activeResourceId] ? cloneTemplate(previous[activeResourceId]) : createDefaultTemplate();
+        const next = updater(current);
+        return {
+          ...previous,
+          [activeResourceId]: next
+        };
+      });
+    }
 
     clearGeneratedState();
   };
@@ -893,22 +1063,70 @@ const AdminResourceWatermark = () => {
       message.warning('Select a resource preview first');
       return;
     }
+    if (editingScope === 'individual' && !previewSchoolId) {
+      message.warning('Select a preview school before saving an individual override');
+      return;
+    }
 
     try {
       setSavingTemplate(true);
-      const response = await api.post('/admin/batch-watermark/template', {
+      const payload = {
         resource_id: activeResourceId,
         template: serializeTemplate(currentTemplate)
-      });
+      };
 
-      setTemplatesByResource((previous) => ({
-        ...previous,
-        [activeResourceId]: deserializeTemplate(response.data?.template)
-      }));
-      message.success('Watermark layout saved for this resource');
+      if (editingScope === 'individual') {
+        const response = await api.post('/admin/batch-watermark/template/override', {
+          ...payload,
+          school_id: previewSchoolId
+        });
+
+        upsertOverrideTemplateState(previewSchoolId, activeResourceId, deserializeTemplate(response.data?.template || payload.template));
+        message.success('School-specific layout saved for this resource');
+      } else {
+        const response = await api.post('/admin/batch-watermark/template', payload);
+
+        setTemplatesByResource((previous) => ({
+          ...previous,
+          [activeResourceId]: deserializeTemplate(response.data?.template)
+        }));
+        message.success('Shared watermark layout saved for this resource');
+      }
     } catch (error) {
       console.error('Error saving batch watermark template:', error);
       message.error(error.response?.data?.detail || 'Failed to save watermark layout');
+    } finally {
+      setSavingTemplate(false);
+    }
+  };
+
+  const handleResetIndividualOverride = async () => {
+    if (!activeResourceId || !previewSchoolId) {
+      message.warning('Select a resource and preview school first');
+      return;
+    }
+
+    try {
+      setSavingTemplate(true);
+      await api.delete(`/admin/batch-watermark/template/override/${activeResourceId}/${previewSchoolId}`);
+
+      setOverrideTemplatesBySchoolResource((previous) => {
+        const nextSchoolTemplates = { ...(previous[previewSchoolId] || {}) };
+        delete nextSchoolTemplates[activeResourceId];
+
+        const nextState = { ...previous };
+        if (Object.keys(nextSchoolTemplates).length === 0) {
+          delete nextState[previewSchoolId];
+        } else {
+          nextState[previewSchoolId] = nextSchoolTemplates;
+        }
+        return nextState;
+      });
+
+      message.success('School-specific override reset to the shared layout');
+    } catch (error) {
+      console.error('Error resetting school-specific override:', error);
+      message.error(error.response?.data?.detail || 'Failed to reset school-specific override');
     } finally {
       setSavingTemplate(false);
     }
@@ -919,13 +1137,21 @@ const AdminResourceWatermark = () => {
       message.warning('Select a resource preview first');
       return;
     }
+    if (editingScope === 'individual') {
+      message.warning('Switch to shared mode to apply one layout to every selected resource of the same type');
+      return;
+    }
 
     if (activeResourceKind !== resourceType) {
       message.warning(`Open a ${resourceType.toUpperCase()} resource preview before applying its layout to all ${resourceType.toUpperCase()} files`);
       return;
     }
 
-    const targetResourceIds = resourceType === 'pdf' ? selectedPdfResourceIds : selectedImageResourceIds;
+    const targetResourceIds = resourceType === 'pdf'
+      ? selectedPdfResourceIds
+      : resourceType === 'image'
+        ? selectedImageResourceIds
+        : selectedOtherResourceIds;
     if (!targetResourceIds.length) {
       message.warning(`No ${resourceType.toUpperCase()} resources are selected`);
       return;
@@ -979,10 +1205,27 @@ const AdminResourceWatermark = () => {
         return accumulator;
       }, {});
 
+      const schoolOverridePayload = selectedSchoolIds.reduce((accumulator, schoolId) => {
+        const overrideEntries = selectedResourceIds.reduce((resourceAccumulator, resourceId) => {
+          const overrideTemplate = overrideTemplatesBySchoolResource[schoolId]?.[resourceId];
+          if (overrideTemplate) {
+            resourceAccumulator[resourceId] = serializeTemplate(overrideTemplate);
+          }
+          return resourceAccumulator;
+        }, {});
+
+        if (Object.keys(overrideEntries).length) {
+          accumulator[schoolId] = overrideEntries;
+        }
+
+        return accumulator;
+      }, {});
+
       const response = await api.post('/admin/batch-watermark/generate', {
         school_ids: selectedSchoolIds,
         resource_ids: selectedResourceIds,
-        templates: templatePayload
+        templates: templatePayload,
+        school_overrides: schoolOverridePayload
       });
 
       setGeneratedJob(response.data);
@@ -1258,6 +1501,9 @@ const AdminResourceWatermark = () => {
 
     const previewLogoUrl = getStaticFileUrl(previewSchool.logo_path);
     const previewUrl = `${API}/resources/${activeResource.resource_id}/preview`;
+    const activeFileType = (activeResource.file_type || '').toLowerCase();
+    const activeFilePath = (activeResource.file_path || '').toLowerCase();
+    const isLocalVideo = activeFileType.includes('video') || VIDEO_FILE_EXTENSIONS.some((extension) => activeFilePath.endsWith(`.${extension}`));
 
     if (isRasterImageResource(activeResource)) {
       return (
@@ -1385,7 +1631,94 @@ const AdminResourceWatermark = () => {
       );
     }
 
-    return <Empty description="Only PDF and image resources can be previewed here" />;
+    if (isLocalVideo) {
+      return (
+        <div
+          ref={imageContainerRef}
+          style={{
+            position: 'relative',
+            display: 'inline-block',
+            maxWidth: '100%',
+            backgroundColor: '#f5f5f5',
+            borderRadius: 8,
+            overflow: 'hidden'
+          }}
+        >
+          <video
+            controls
+            preload="metadata"
+            style={{
+              display: 'block',
+              maxWidth: '100%',
+              maxHeight: '72vh',
+              borderRadius: 8
+            }}
+            onLoadedMetadata={() => setPreviewLoading(false)}
+            onError={() => {
+              setPreviewLoading(false);
+              message.error('Failed to load resource preview');
+            }}
+          >
+            <source src={previewUrl} type={activeResource.file_type || 'video/mp4'} />
+          </video>
+          <LogoOverlay
+            logoUrl={previewLogoUrl}
+            template={currentTemplate}
+            isEditingLogo={isEditingLogo}
+            containerRef={imageContainerRef}
+            onStartLogoDrag={startLogoDrag}
+          />
+          <TextOverlay
+            school={previewSchool}
+            template={currentTemplate}
+            isEditingText={isEditingText}
+            containerRef={imageContainerRef}
+            onStartTextDrag={startTextDrag}
+          />
+        </div>
+      );
+    }
+
+    return (
+      <div
+        ref={imageContainerRef}
+        style={{
+          position: 'relative',
+          width: '100%',
+          maxWidth: 820,
+          minHeight: 420,
+          borderRadius: 12,
+          overflow: 'hidden',
+          background: 'linear-gradient(135deg, #ffffff 0%, #eef4ff 100%)',
+          border: '1px solid #d9e6ff'
+        }}
+      >
+        <div style={{ padding: 36, textAlign: 'center' }}>
+          <div style={{ fontSize: 32, marginBottom: 12 }}>{getBatchResourceIcon(activeResource)}</div>
+          <div style={{ fontSize: 20, fontWeight: 600 }}>{getResourceDisplayTitle(activeResource)}</div>
+          {getResourceSecondaryTitle(activeResource) && (
+            <div style={{ marginTop: 8, color: '#666' }}>{getResourceSecondaryTitle(activeResource)}</div>
+          )}
+          <div style={{ marginTop: 14, color: '#666' }}>
+            This file will be delivered as a branded package with the original resource, preview sheet, and school details.
+          </div>
+        </div>
+        <LogoOverlay
+          logoUrl={previewLogoUrl}
+          template={currentTemplate}
+          isEditingLogo={isEditingLogo}
+          containerRef={imageContainerRef}
+          onStartLogoDrag={startLogoDrag}
+        />
+        <TextOverlay
+          school={previewSchool}
+          template={currentTemplate}
+          isEditingText={isEditingText}
+          containerRef={imageContainerRef}
+          onStartTextDrag={startTextDrag}
+        />
+      </div>
+    );
   };
 
   const schoolColumns = [
@@ -1413,6 +1746,11 @@ const AdminResourceWatermark = () => {
       dataIndex: 'contact_number',
       key: 'contact_number',
       render: (value) => value || '-'
+    },
+    {
+      title: 'Region',
+      key: 'region',
+      render: (_, record) => [record.region, record.sub_region].filter(Boolean).join(' / ') || '-'
     }
   ];
 
@@ -1423,9 +1761,12 @@ const AdminResourceWatermark = () => {
       key: 'name',
       render: (value, record) => (
         <Space>
-          {isPdfResource(record) ? <FilePdfOutlined style={{ color: '#ff4d4f' }} /> : <FileImageOutlined style={{ color: '#1677ff' }} />}
+          {getBatchResourceIcon(record)}
           <div>
-            <div>{value}</div>
+            <div>{getResourceDisplayTitle(record)}</div>
+            {getResourceSecondaryTitle(record) && (
+              <Text type="secondary">{getResourceSecondaryTitle(record)}</Text>
+            )}
             {record.sub_category && (
               <Text type="secondary">{record.sub_category}</Text>
             )}
@@ -1444,8 +1785,8 @@ const AdminResourceWatermark = () => {
       dataIndex: 'file_type',
       key: 'file_type',
       render: (_, record) => (
-        <Tag color={isPdfResource(record) ? 'red' : 'green'}>
-          {isPdfResource(record) ? 'PDF' : 'Image'}
+        <Tag color={getBatchResourceKind(record) === 'pdf' ? 'red' : getBatchResourceKind(record) === 'image' ? 'green' : 'purple'}>
+          {getBatchResourceKind(record) === 'pdf' ? 'PDF' : getBatchResourceKind(record) === 'image' ? 'Image' : 'Other / Package'}
         </Tag>
       )
     }
@@ -1589,8 +1930,8 @@ const AdminResourceWatermark = () => {
               type="info"
               showIcon
               style={{ marginBottom: 16 }}
-              message="Only PDF and image resources are shown here."
-              description="Multimedia, video, audio, and unsupported file types are hidden to keep bulk generation reliable."
+              message="PDF, image, video, PPT, DOCX, Excel, and other uploaded files can be branded here."
+              description="Video links are excluded because they cannot be packaged with school branding, but local uploads can use either direct watermarking or branded download packages."
             />
 
             <Space style={{ width: '100%', justifyContent: 'space-between', marginBottom: 16 }} wrap>
@@ -1639,9 +1980,18 @@ const AdminResourceWatermark = () => {
                 <Col xs={24} xl={15}>
                   <Card
                     size="small"
-                    title={activeResource ? activeResource.name : 'Preview'}
+                    title={activeResource ? getResourceDisplayTitle(activeResource) : 'Preview'}
                     extra={(
                       <Space wrap>
+                        <Select
+                          value={editingScope}
+                          onChange={setEditingScope}
+                          style={{ minWidth: 240 }}
+                          options={[
+                            { value: 'shared', label: 'Shared Resource Settings' },
+                            { value: 'individual', label: 'Individual Resource Settings' }
+                          ]}
+                        />
                         <Select
                           value={previewSchoolId}
                           onChange={setPreviewSchoolId}
@@ -1662,7 +2012,13 @@ const AdminResourceWatermark = () => {
                         <Tag color="blue">{`Preview School: ${previewSchool?.school_name || '-'}`}</Tag>
                         <Tag color="purple">{`Resources Selected: ${selectedResourceIds.length}`}</Tag>
                         <Tag color="cyan">{`Schools Selected: ${selectedSchoolIds.length}`}</Tag>
+                        <Tag color={editingScope === 'individual' ? 'orange' : 'green'}>
+                          {editingScope === 'individual' ? 'Editing Individual Override' : 'Editing Shared Layout'}
+                        </Tag>
                       </Space>
+                      {activeResource && getResourceSecondaryTitle(activeResource) && (
+                        <div style={{ marginTop: 8, color: '#666' }}>{getResourceSecondaryTitle(activeResource)}</div>
+                      )}
                     </div>
 
                     <div
@@ -1677,7 +2033,7 @@ const AdminResourceWatermark = () => {
                         padding: 12
                       }}
                     >
-                      {(previewLoading || templateLoading) && (
+                      {(previewLoading || templateLoading || overrideLoading) && (
                         <div
                           style={{
                             position: 'absolute',
@@ -1727,14 +2083,16 @@ const AdminResourceWatermark = () => {
                         type="info"
                         showIcon
                         message="Drag watermark items directly on the preview."
-                        description="Coordinates are saved per resource and reused for every selected school during generation."
+                        description={editingScope === 'individual'
+                          ? 'You are editing only the selected school and resource combination. Use this when one school logo or text needs a different fit.'
+                          : 'Coordinates are saved per resource and reused for every selected school during generation.'}
                       />
 
                       <Alert
                         type="success"
                         showIcon
                         message="Bulk apply shortcuts"
-                        description={`Selected queue: ${selectedPdfResourceIds.length} PDF resource(s) and ${selectedImageResourceIds.length} image resource(s). Open one PDF or one image, adjust it once, then apply that layout to every selected file of the same type.`}
+                        description={`Selected queue: ${selectedPdfResourceIds.length} PDF resource(s), ${selectedImageResourceIds.length} image resource(s), and ${selectedOtherResourceIds.length} other resource(s). Open one file, adjust it once, then apply that shared layout to every selected file of the same type.`}
                       />
 
                       <Card
@@ -1904,13 +2262,23 @@ const AdminResourceWatermark = () => {
                           loading={savingTemplate}
                           block
                         >
-                          Save Current Resource Layout
+                          {editingScope === 'individual' ? 'Save School-Specific Layout' : 'Save Shared Resource Layout'}
                         </Button>
+                        {editingScope === 'individual' && (
+                          <Button
+                            icon={<UndoOutlined />}
+                            onClick={handleResetIndividualOverride}
+                            loading={savingTemplate}
+                            block
+                          >
+                            Reset School Override to Shared Layout
+                          </Button>
+                        )}
                         <Button
                           icon={<FilePdfOutlined />}
                           onClick={() => handleApplyTemplateToGroup('pdf')}
                           loading={bulkApplyLoadingType === 'pdf'}
-                          disabled={activeResourceKind !== 'pdf' || selectedPdfResourceIds.length === 0}
+                          disabled={editingScope === 'individual' || activeResourceKind !== 'pdf' || selectedPdfResourceIds.length === 0}
                           block
                         >
                           {selectedPdfResourceIds.length > 0
@@ -1921,12 +2289,23 @@ const AdminResourceWatermark = () => {
                           icon={<FileImageOutlined />}
                           onClick={() => handleApplyTemplateToGroup('image')}
                           loading={bulkApplyLoadingType === 'image'}
-                          disabled={activeResourceKind !== 'image' || selectedImageResourceIds.length === 0}
+                          disabled={editingScope === 'individual' || activeResourceKind !== 'image' || selectedImageResourceIds.length === 0}
                           block
                         >
                           {selectedImageResourceIds.length > 0
                             ? `Apply Current Image Layout to All ${selectedImageResourceIds.length} Selected Images`
                             : 'Apply Current Image Layout to All Selected Images'}
+                        </Button>
+                        <Button
+                          icon={<FileZipOutlined />}
+                          onClick={() => handleApplyTemplateToGroup('other')}
+                          loading={bulkApplyLoadingType === 'other'}
+                          disabled={editingScope === 'individual' || activeResourceKind !== 'other' || selectedOtherResourceIds.length === 0}
+                          block
+                        >
+                          {selectedOtherResourceIds.length > 0
+                            ? `Apply Current Other Layout to All ${selectedOtherResourceIds.length} Selected Files`
+                            : 'Apply Current Other Layout to All Selected Files'}
                         </Button>
                         <Button
                           type="primary"

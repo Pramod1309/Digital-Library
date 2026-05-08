@@ -36,10 +36,11 @@ import {
   FilePdfOutlined,
   FileWordOutlined,
   FileExcelOutlined,
-  FilePowerpointOutlined,
+  FilePptOutlined,
   FileZipOutlined,
   FileTextOutlined,
   FileImageOutlined,
+  AudioOutlined,
   PlayCircleOutlined,
   PauseCircleOutlined,
   ReloadOutlined,
@@ -48,7 +49,9 @@ import {
   FileUnknownOutlined,
   AppstoreOutlined,
   UnorderedListOutlined,
-  LoadingOutlined
+  LoadingOutlined,
+  CheckOutlined,
+  CloseOutlined
 } from '@ant-design/icons';
 
 import axios from 'axios';
@@ -58,9 +61,81 @@ import config from '../../config';
 const BACKEND_URL = config.apiBaseUrl;
 const API = `${BACKEND_URL}/api`;
 const VIDEO_LINK_DOMAINS = ['youtube.com', 'youtu.be', 'vimeo.com', 'dailymotion.com', 'bilibili.com'];
+const DEFAULT_RESOURCE_TAXONOMY = {
+  programs: ['Playgroup', 'Nursery', 'LKG', 'UKG'],
+  subjects: ['English', 'Maths', 'EVS', 'Hindi', 'Arts & Crafts', 'Music', 'Physical Education']
+};
 
 const { Option } = Select;
 const { TextArea } = Input;
+
+const normalizeLabelKey = (value = '') => (
+  value
+    .toString()
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+);
+
+const dedupeLabels = (values = []) => {
+  const seen = new Set();
+  const labels = [];
+
+  values.forEach((value) => {
+    const label = value?.toString().trim();
+    const key = normalizeLabelKey(label);
+    if (!label || !key || seen.has(key)) return;
+    seen.add(key);
+    labels.push(label);
+  });
+
+  return labels;
+};
+
+const buildSelectOptions = (values = [], allLabel) => ([
+  { value: 'all', label: allLabel },
+  ...dedupeLabels(values).map((value) => ({ value, label: value }))
+]);
+
+const pickSingleSelectValue = (value) => {
+  if (Array.isArray(value)) {
+    return value.map((item) => item?.toString().trim()).find(Boolean) || '';
+  }
+  return value?.toString().trim() || '';
+};
+
+const stripFileExtension = (value = '') => value.replace(/\.[^.]+$/, '');
+
+const getResourceDisplayTitle = (resource) => (
+  resource?.display_title?.trim() || resource?.name || 'Untitled Resource'
+);
+
+const getResourceSecondaryTitle = (resource) => {
+  if (!resource) return '';
+
+  const displayTitleKey = normalizeLabelKey(getResourceDisplayTitle(resource));
+  const name = resource.name?.trim() || '';
+  const originalFilename = resource.original_filename?.trim() || '';
+  const pieces = [];
+
+  if (name && normalizeLabelKey(name) !== displayTitleKey) {
+    pieces.push(`Original title: ${name}`);
+  }
+
+  if (originalFilename) {
+    const originalFilenameKey = normalizeLabelKey(originalFilename);
+    const originalBaseKey = normalizeLabelKey(stripFileExtension(originalFilename));
+
+    if (
+      originalFilenameKey !== displayTitleKey &&
+      originalBaseKey !== normalizeLabelKey(name)
+    ) {
+      pieces.push(`File: ${originalFilename}`);
+    }
+  }
+
+  return pieces.join(' | ');
+};
 
 const isKnownVideoLink = (filePath = '') => {
   if (!filePath) return false;
@@ -405,6 +480,7 @@ const AdminResourceCategory = ({ category, subCategory, title, description }) =>
   const [videoLink, setVideoLink] = useState('');
   const [selectedClass, setSelectedClass] = useState('all');
   const [selectedSubject, setSelectedSubject] = useState('all');
+  const [resourceTaxonomy, setResourceTaxonomy] = useState(DEFAULT_RESOURCE_TAXONOMY);
   const [viewMode, setViewMode] = useState('list');
   const [namingOption, setNamingOption] = useState('auto'); // 'auto' or 'original'
   const [categoryFilter, setCategoryFilter] = useState(category || 'all');
@@ -424,8 +500,30 @@ const AdminResourceCategory = ({ category, subCategory, title, description }) =>
   }, [category, subCategory]);
 
   useEffect(() => {
+    fetchResourceTaxonomy();
+  }, []);
+
+  useEffect(() => {
     fetchResources();
   }, [categoryFilter, subCategoryFilter, selectedClass, selectedSubject, statusFilter]);
+
+  const fetchResourceTaxonomy = async () => {
+    try {
+      const response = await api.get('/resource-taxonomy');
+      setResourceTaxonomy({
+        programs: dedupeLabels([
+          ...DEFAULT_RESOURCE_TAXONOMY.programs,
+          ...(response.data?.programs || [])
+        ]),
+        subjects: dedupeLabels([
+          ...DEFAULT_RESOURCE_TAXONOMY.subjects,
+          ...(response.data?.subjects || [])
+        ])
+      });
+    } catch (error) {
+      console.error('Error fetching resource taxonomy:', error);
+    }
+  };
 
   const fetchResources = async () => {
     setLoading(true);
@@ -536,16 +634,8 @@ const AdminResourceCategory = ({ category, subCategory, title, description }) =>
 
   const categoryInfo = getCategoryInfo();
 
-  const subjectOptions = [
-    { value: 'all', label: 'All Subjects' },
-    { value: 'english', label: 'English' },
-    { value: 'maths', label: 'Maths' },
-    { value: 'evs', label: 'EVS' },
-    { value: 'hindi', label: 'Hindi' },
-    { value: 'arts', label: 'Arts & Crafts' },
-    { value: 'music', label: 'Music' },
-    { value: 'pe', label: 'Physical Education' }
-  ];
+  const programOptions = buildSelectOptions(resourceTaxonomy.programs, 'All Programs');
+  const subjectOptions = buildSelectOptions(resourceTaxonomy.subjects, 'All Subjects');
 
   // Create sub-category filter dropdown items
   const subCategoryFilterItems = Object.entries(categoryInfo.subcategories || {}).map(([key, label]) => ({
@@ -586,8 +676,8 @@ const AdminResourceCategory = ({ category, subCategory, title, description }) =>
         formData.append('category', categoryFilter);
         formData.append('sub_category', values.sub_category || '');
         formData.append('description', values.description || '');
-        formData.append('class_level', values.class_level || '');
-        formData.append('subject', values.subject || '');
+        formData.append('class_level', pickSingleSelectValue(values.class_level));
+        formData.append('subject', pickSingleSelectValue(values.subject));
         formData.append('tags', values.tags ? values.tags.join(',') : '');
         formData.append('naming_option', namingOption);
 
@@ -600,6 +690,7 @@ const AdminResourceCategory = ({ category, subCategory, title, description }) =>
 
         const uploadedCount = response.data.length;
         message.success(`${uploadedCount} resource(s) uploaded successfully!`);
+        fetchResourceTaxonomy();
       } else {
         // Handle video link upload - send as form data
         const formData = new FormData();
@@ -607,8 +698,8 @@ const AdminResourceCategory = ({ category, subCategory, title, description }) =>
         formData.append('category', categoryFilter);
         formData.append('sub_category', values.sub_category || '');
         formData.append('description', values.description || '');
-        formData.append('class_level', values.class_level || '');
-        formData.append('subject', values.subject || '');
+        formData.append('class_level', pickSingleSelectValue(values.class_level));
+        formData.append('subject', pickSingleSelectValue(values.subject));
         formData.append('tags', values.tags ? values.tags.join(',') : '');
         formData.append('file_path', videoLink);
         formData.append('file_type', 'video/mp4'); // Default video type for links
@@ -622,6 +713,7 @@ const AdminResourceCategory = ({ category, subCategory, title, description }) =>
           },
         });
         message.success('Video link uploaded successfully!');
+        fetchResourceTaxonomy();
       }
 
       form.resetFields();
@@ -661,6 +753,7 @@ const AdminResourceCategory = ({ category, subCategory, title, description }) =>
     try {
       await api.delete(`/admin/resources/${resourceId}`);
       message.success('Resource deleted successfully');
+      fetchResourceTaxonomy();
       fetchResources();
     } catch (error) {
       console.error('Error deleting resource:', error);
@@ -698,6 +791,7 @@ const AdminResourceCategory = ({ category, subCategory, title, description }) =>
           }
           
           setSelectedRowKeys([]);
+          fetchResourceTaxonomy();
           fetchResources();
         } catch (error) {
           console.error('Error bulk deleting resources:', error);
@@ -742,6 +836,7 @@ const AdminResourceCategory = ({ category, subCategory, title, description }) =>
           }
           
           setSelectedRowKeys([]);
+          fetchResourceTaxonomy();
           fetchResources();
         } catch (error) {
           console.error('Error deleting all resources:', error);
@@ -921,10 +1016,11 @@ const AdminResourceCategory = ({ category, subCategory, title, description }) =>
     setEditingResource(resource);
     setIsEditModalVisible(true);
     editForm.setFieldsValue({
-      name: resource.name || '',
+      display_title: getResourceDisplayTitle(resource),
       description: resource.description || '',
       sub_category: resource.sub_category || undefined,
-      class_level: resource.class_level || undefined,
+      class_level: resource.class_level ? [resource.class_level] : undefined,
+      subject: resource.subject ? [resource.subject] : undefined,
       tags: resource.tags ? resource.tags.split(',').map(tag => tag.trim()).filter(Boolean) : [],
     });
     setEditFileList([]);
@@ -948,9 +1044,18 @@ const AdminResourceCategory = ({ category, subCategory, title, description }) =>
       const values = await editForm.validateFields();
 
       const formData = new FormData();
-      if (values.name !== undefined) formData.append('name', values.name);
+      const nextDisplayTitle = values.display_title?.trim() || '';
+      const hasSeparateOriginalTitle = normalizeLabelKey(editingResource.display_title || editingResource.name) !== normalizeLabelKey(editingResource.name);
+
+      if (values.display_title !== undefined) {
+        formData.append('display_title', nextDisplayTitle);
+        if (!hasSeparateOriginalTitle) {
+          formData.append('name', nextDisplayTitle);
+        }
+      }
       if (values.description !== undefined) formData.append('description', values.description || '');
-      if (values.class_level !== undefined) formData.append('class_level', values.class_level || '');
+      if (values.class_level !== undefined) formData.append('class_level', pickSingleSelectValue(values.class_level));
+      if (values.subject !== undefined) formData.append('subject', pickSingleSelectValue(values.subject));
       if (values.sub_category !== undefined) formData.append('sub_category', values.sub_category || '');
       if (values.tags !== undefined) {
         formData.append('tags', Array.isArray(values.tags) ? values.tags.join(',') : values.tags || '');
@@ -967,6 +1072,7 @@ const AdminResourceCategory = ({ category, subCategory, title, description }) =>
 
       message.success('Resource updated successfully');
       handleEditCancel();
+      fetchResourceTaxonomy();
       fetchResources();
     } catch (error) {
       console.error('Error updating resource:', error);
@@ -1544,13 +1650,14 @@ const AdminResourceCategory = ({ category, subCategory, title, description }) =>
   };
 
   const filteredResources = resources.filter(resource => {
-    const matchesSearch = resource.name?.toLowerCase().includes(searchText.toLowerCase()) ||
+    const matchesSearch = getResourceDisplayTitle(resource).toLowerCase().includes(searchText.toLowerCase()) ||
+      resource.name?.toLowerCase().includes(searchText.toLowerCase()) ||
+      resource.original_filename?.toLowerCase().includes(searchText.toLowerCase()) ||
       resource.description?.toLowerCase().includes(searchText.toLowerCase()) ||
       resource.tags?.toLowerCase().includes(searchText.toLowerCase());
-    const matchesClass = selectedClass === 'all' || resource.class_level === selectedClass;
+    const matchesClass = selectedClass === 'all' || normalizeLabelKey(resource.class_level) === normalizeLabelKey(selectedClass);
     const matchesStatus = statusFilter === 'all' || resource.approval_status === statusFilter;
-    const resourceSubject = (resource.subject || '').toLowerCase();
-    const matchesSubject = selectedSubject === 'all' || resourceSubject === selectedSubject;
+    const matchesSubject = selectedSubject === 'all' || normalizeLabelKey(resource.subject) === normalizeLabelKey(selectedSubject);
     
     // Filter by sub-category
     let matchesSubCategory = true;
@@ -1581,15 +1688,20 @@ const AdminResourceCategory = ({ category, subCategory, title, description }) =>
           {getFileIcon(record.file_type, 24)}
           <div>
             <div style={{ display: 'flex', alignItems: 'center' }}>
-              <Tooltip title={text}>
+              <Tooltip title={getResourceDisplayTitle(record)}>
                 <span style={{ maxWidth: '200px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                  {text}
+                  {getResourceDisplayTitle(record)}
                 </span>
               </Tooltip>
               {record.uploaded_by_type === 'school' && (
                 <Tag color="blue" style={{ marginLeft: 8 }}>School Upload</Tag>
               )}
             </div>
+            {getResourceSecondaryTitle(record) && (
+              <div style={{ fontSize: '11px', color: '#666' }}>
+                {getResourceSecondaryTitle(record)}
+              </div>
+            )}
             {record.uploaded_by_type === 'school' && (
               <div style={{ fontSize: '12px', color: '#666' }}>
                 School: {record.uploaded_by_name || 'N/A'}
@@ -1650,8 +1762,7 @@ const AdminResourceCategory = ({ category, subCategory, title, description }) =>
       key: 'subject',
       render: (subject) => {
         if (!subject) return <Tag>-</Tag>;
-        const subjectLabel = subjectOptions.find(opt => opt.value === subject)?.label || subject;
-        return <Tag color="green">{subjectLabel}</Tag>;
+        return <Tag color="green">{subject}</Tag>;
       },
       width: '10%',
     },
@@ -1840,7 +1951,7 @@ const AdminResourceCategory = ({ category, subCategory, title, description }) =>
                   e.stopPropagation();
                   Modal.confirm({
                     title: 'Delete Resource',
-                    content: `Are you sure you want to delete "${resource.name}"?`,
+                    content: `Are you sure you want to delete "${getResourceDisplayTitle(resource)}"?`,
                     okText: 'Yes, Delete',
                     okType: 'danger',
                     cancelText: 'Cancel',
@@ -1852,7 +1963,7 @@ const AdminResourceCategory = ({ category, subCategory, title, description }) =>
           ]}
         >
           <div style={{ flex: 1 }}>
-            <Tooltip title={resource.name}>
+            <Tooltip title={getResourceDisplayTitle(resource)}>
               <div style={{
                 fontSize: '14px',
                 fontWeight: 'bold',
@@ -1861,9 +1972,15 @@ const AdminResourceCategory = ({ category, subCategory, title, description }) =>
                 textOverflow: 'ellipsis',
                 whiteSpace: 'nowrap'
               }}>
-                {resource.name}
+                {getResourceDisplayTitle(resource)}
               </div>
             </Tooltip>
+
+            {getResourceSecondaryTitle(resource) && (
+              <div style={{ fontSize: '11px', color: '#666', marginBottom: '8px' }}>
+                {getResourceSecondaryTitle(resource)}
+              </div>
+            )}
 
             <div style={{ fontSize: '12px', color: '#666', marginBottom: '8px', height: '36px', overflow: 'hidden' }}>
               {resource.description || 'No description provided'}
@@ -1938,13 +2055,13 @@ const AdminResourceCategory = ({ category, subCategory, title, description }) =>
               value={selectedClass}
               onChange={setSelectedClass}
               style={{ width: 150, marginRight: 8 }}
-              placeholder="Filter by class"
+              placeholder="Filter by program"
             >
-              <Option value="all">All Classes</Option>
-              <Option value="Playgroup">Playgroup</Option>
-              <Option value="Nursery">Nursery</Option>
-              <Option value="LKG">LKG</Option>
-              <Option value="UKG">UKG</Option>
+              {programOptions.map(option => (
+                <Option key={option.value} value={option.value}>
+                  {option.label}
+                </Option>
+              ))}
             </Select>
             <Select
               value={selectedSubject}
@@ -2080,11 +2197,17 @@ const AdminResourceCategory = ({ category, subCategory, title, description }) =>
             name="class_level"
             label="All Programs"
           >
-            <Select placeholder="Select program (optional)" allowClear>
-              <Option value="Playgroup">Playgroup</Option>
-              <Option value="Nursery">Nursery</Option>
-              <Option value="LKG">LKG</Option>
-              <Option value="UKG">UKG</Option>
+            <Select
+              mode="tags"
+              maxCount={1}
+              placeholder="Select or type a new program"
+              allowClear
+            >
+              {resourceTaxonomy.programs.map((program) => (
+                <Option key={program} value={program}>
+                  {program}
+                </Option>
+              ))}
             </Select>
           </Form.Item>
 
@@ -2092,10 +2215,15 @@ const AdminResourceCategory = ({ category, subCategory, title, description }) =>
             name="subject"
             label="Subjects"
           >
-            <Select placeholder="Select subject (optional)" allowClear>
-              {subjectOptions.map(option => (
-                <Option key={option.value} value={option.value}>
-                  {option.label}
+            <Select
+              mode="tags"
+              maxCount={1}
+              placeholder="Select or type a new subject"
+              allowClear
+            >
+              {resourceTaxonomy.subjects.map((subject) => (
+                <Option key={subject} value={subject}>
+                  {subject}
                 </Option>
               ))}
             </Select>
@@ -2125,6 +2253,12 @@ const AdminResourceCategory = ({ category, subCategory, title, description }) =>
           >
             <Input placeholder="Enter resource name" />
           </Form.Item>
+
+          {uploadType === 'file' && fileList.length > 1 && namingOption === 'original' && (
+            <div style={{ marginTop: '-8px', marginBottom: '16px', fontSize: '12px', color: '#666' }}>
+              The typed title will stay visible for every file, and each resource will also keep its original filename.
+            </div>
+          )}
 
           {uploadType === 'file' && fileList.length > 0 && (
             <Form.Item
@@ -2274,7 +2408,12 @@ const AdminResourceCategory = ({ category, subCategory, title, description }) =>
       <Modal
         title={
           <div>
-            {previewResource?.name}
+            {getResourceDisplayTitle(previewResource)}
+            {getResourceSecondaryTitle(previewResource) && (
+              <div style={{ fontSize: '12px', color: '#666', fontWeight: 'normal' }}>
+                {getResourceSecondaryTitle(previewResource)}
+              </div>
+            )}
             <div style={{ fontSize: '12px', color: '#666', fontWeight: 'normal' }}>
               {previewResource?.file_type} •
               {previewResource?.file_size < 1024 * 1024
@@ -2355,11 +2494,17 @@ const AdminResourceCategory = ({ category, subCategory, title, description }) =>
             name="class_level"
             label="All Programs"
           >
-            <Select placeholder="Select program (optional)" allowClear>
-              <Option value="playgroup">Playgroup</Option>
-              <Option value="nursery">Nursery</Option>
-              <Option value="lkg">LKG</Option>
-              <Option value="ukg">UKG</Option>
+            <Select
+              mode="tags"
+              maxCount={1}
+              placeholder="Select or type a new program"
+              allowClear
+            >
+              {resourceTaxonomy.programs.map((program) => (
+                <Option key={program} value={program}>
+                  {program}
+                </Option>
+              ))}
             </Select>
           </Form.Item>
           
@@ -2367,10 +2512,15 @@ const AdminResourceCategory = ({ category, subCategory, title, description }) =>
             name="subject"
             label="Subjects"
           >
-            <Select placeholder="Select subject (optional)" allowClear>
-              {subjectOptions.map(option => (
-                <Option key={option.value} value={option.value}>
-                  {option.label}
+            <Select
+              mode="tags"
+              maxCount={1}
+              placeholder="Select or type a new subject"
+              allowClear
+            >
+              {resourceTaxonomy.subjects.map((subject) => (
+                <Option key={subject} value={subject}>
+                  {subject}
                 </Option>
               ))}
             </Select>
@@ -2388,12 +2538,18 @@ const AdminResourceCategory = ({ category, subCategory, title, description }) =>
           </Form.Item>
           
           <Form.Item
-            name="name"
+            name="display_title"
             label="Title"
             rules={[{ required: true, message: 'Please enter resource name' }]}
           >
             <Input placeholder="Enter resource name" />
           </Form.Item>
+
+          {editingResource && getResourceSecondaryTitle(editingResource) && (
+            <div style={{ marginTop: '-8px', marginBottom: '16px', fontSize: '12px', color: '#666' }}>
+              {getResourceSecondaryTitle(editingResource)}
+            </div>
+          )}
           
           <Form.Item
             name="tags"

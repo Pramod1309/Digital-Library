@@ -9,6 +9,7 @@ from database import (
     Base,
     engine,
     Admin,
+    AdminBatchWatermarkOverride,
     SessionLocal,
     SchoolPasswordResetOTP,
     SchoolWatermarkText,
@@ -59,6 +60,8 @@ def migrate_database():
         school_column_defs = [
             ("contact_number", "VARCHAR(20)"),
             ("logo_path", "VARCHAR(500)"),
+            ("region", "VARCHAR(255)"),
+            ("sub_region", "VARCHAR(255)"),
             ("welcome_email_sent_at", "DATETIME"),
         ]
         for col_name, col_def in school_column_defs:
@@ -132,6 +135,8 @@ def migrate_database():
         else:
             resource_columns = [col['name'] for col in inspector.get_columns('resources')]
             resource_column_defs = [
+                ("display_title", "VARCHAR(500)"),
+                ("original_filename", "VARCHAR(500)"),
                 ("class_level", "VARCHAR(100)"),
                 ("subject", "VARCHAR(100)"),
                 ("sub_category", "VARCHAR(255)"),
@@ -245,6 +250,11 @@ def migrate_database():
             print("Creating school_preferences table...")
             SchoolPreference.__table__.create(bind=engine)
             print("Created school_preferences table")
+
+        if 'admin_batch_watermark_overrides' not in table_names:
+            print("Creating admin_batch_watermark_overrides table...")
+            AdminBatchWatermarkOverride.__table__.create(bind=engine)
+            print("Created admin_batch_watermark_overrides table")
 
         print("Database migration completed successfully!")
 

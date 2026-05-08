@@ -57,6 +57,8 @@ class School(Base):
     logo_path = Column(String(500), nullable=True)
     email = Column(String(255), unique=True, index=True, nullable=False)
     contact_number = Column(String(20), nullable=True)  # NEW: Added contact number field
+    region = Column(String(255), nullable=True)
+    sub_region = Column(String(255), nullable=True)
     password_hash = Column(String(255), nullable=False)
     welcome_email_sent_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
@@ -125,6 +127,8 @@ class Resource(Base):
     id = Column(Integer, primary_key=True, index=True)
     resource_id = Column(String(100), unique=True, nullable=False)
     name = Column(String(500), nullable=False)
+    display_title = Column(String(500), nullable=True)
+    original_filename = Column(String(500), nullable=True)
     description = Column(Text, nullable=True)
     category = Column(String(100), nullable=False, index=True)  # 'academic', 'marketing', etc.
     file_path = Column(String(1000), nullable=False)
@@ -396,6 +400,59 @@ class AdminBatchWatermarkTemplate(Base):
 
     __table_args__ = (
         UniqueConstraint('admin_email', 'resource_id', name='unique_admin_batch_resource_template'),
+    )
+
+class AdminBatchWatermarkOverride(Base):
+    __tablename__ = "admin_batch_watermark_overrides"
+
+    id = Column(Integer, primary_key=True, index=True)
+    admin_email = Column(String(255), nullable=False, index=True)
+    school_id = Column(String(100), nullable=False, index=True)
+    resource_id = Column(String(100), nullable=False, index=True)
+
+    show_logo = Column(Boolean, default=True)
+    logo_x = Column(Integer, default=50)
+    logo_y = Column(Integer, default=10)
+    logo_width = Column(Integer, default=20)
+    logo_opacity = Column(Float, default=0.7)
+    logo_rotation = Column(Integer, default=0)
+
+    name_x = Column(Integer, default=50)
+    name_y = Column(Integer, default=25)
+    name_size = Column(Integer, default=20)
+    name_opacity = Column(Float, default=0.8)
+    name_rotation = Column(Integer, default=0)
+    name_font = Column(String(100), default="Arial")
+    name_style = Column(String(50), default="normal")
+    name_color = Column(String(20), default="#000000")
+    show_name = Column(Boolean, default=True)
+
+    contact_x = Column(Integer, default=50)
+    contact_y = Column(Integer, default=90)
+    contact_size = Column(Integer, default=12)
+    contact_opacity = Column(Float, default=0.7)
+    contact_rotation = Column(Integer, default=0)
+    contact_font = Column(String(100), default="Arial")
+    contact_style = Column(String(50), default="normal")
+    contact_color = Column(String(20), default="#000000")
+    show_contact = Column(Boolean, default=True)
+
+    address_x = Column(Integer, default=50)
+    address_y = Column(Integer, default=85)
+    address_size = Column(Integer, default=10)
+    address_opacity = Column(Float, default=1.0)
+    address_rotation = Column(Integer, default=0)
+    address_font = Column(String(100), default="Arial")
+    address_style = Column(String(50), default="normal")
+    address_color = Column(String(20), default="#000000")
+    show_address = Column(Boolean, default=False)
+    address = Column(Text, nullable=True)
+
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint('admin_email', 'school_id', 'resource_id', name='unique_admin_batch_school_resource_override'),
     )
 
 # School Watermark Text Model - NEW TABLE
