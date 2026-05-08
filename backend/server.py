@@ -2,6 +2,7 @@ from fastapi import FastAPI, APIRouter, Depends, HTTPException, UploadFile, File
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, StreamingResponse, JSONResponse
 from fastapi.security import OAuth2PasswordBearer
+from fastapi.middleware.gzip import GZipMiddleware
 from dotenv import load_dotenv
 import os
 from starlette.middleware.cors import CORSMiddleware
@@ -10485,7 +10486,6 @@ if __name__ == "__main__":
     from fastapi import Request
     from fastapi.middleware.trustedhost import TrustedHostMiddleware
     from fastapi.middleware.cors import CORSMiddleware
-    from fastapi.middleware.gzip import GZipMiddleware
     
     # Configure upload limits and middleware
     uvicorn.run(
