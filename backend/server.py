@@ -5285,31 +5285,45 @@ async def upload_resource(
     files: List[UploadFile] = File(...),
     db: Session = Depends(get_db)
 ):
-    """Admin upload resource(s) - supports single or multiple files"""
-    # Validate file size (100MB limit per file)
-    MAX_FILE_SIZE = 100 * 1024 * 1024  # 100MB in bytes
+    """Admin upload resource(s) - supports single or multiple files (100+ files supported)"""
+    # Increased file size limit (500MB per file for large resources)
+    MAX_FILE_SIZE = 500 * 1024 * 1024  # 500MB in bytes
+    MAX_FILES = 200  # Maximum files per upload
     normalized_display_title = normalize_optional_string(name) or "Untitled Resource"
     normalized_class_level = normalize_list_label(class_level)
     normalized_subject = normalize_list_label(subject)
     
+    # Validate number of files
+    if len(files) > MAX_FILES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Maximum {MAX_FILES} files allowed per upload. You provided {len(files)} files."
+        )
+    
     uploaded_resources = []
     
-    for index, file in enumerate(files):
-        # Read file to check size
-        contents = await file.read()
-        file_size = len(contents)
+    # Process files in batches for better performance
+    batch_size = 50  # Process 50 files at a time
+    
+    for batch_start in range(0, len(files), batch_size):
+        batch_files = files[batch_start:batch_start + batch_size]
         
-        if file_size > MAX_FILE_SIZE:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"File {file.filename} exceeds 100MB limit. Your file is {file_size / (1024*1024):.2f}MB"
-            )
-        
-        # Reset file pointer
-        await file.seek(0)
-        
-        # Generate unique resource ID
-        resource_id = str(uuid.uuid4())
+        for index, file in enumerate(batch_files):
+            # Read file to check size
+            contents = await file.read()
+            file_size = len(contents)
+            
+            if file_size > MAX_FILE_SIZE:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"File {file.filename} exceeds 500MB limit. Your file is {file_size / (1024*1024):.2f}MB"
+                )
+            
+            # Reset file pointer for actual processing
+            await file.seek(0)
+            
+            # Generate unique resource ID
+            resource_id = str(uuid.uuid4())
         
         # Create category folder
         category_folder = RESOURCES_UPLOAD_DIR / category
@@ -10441,6 +10455,9 @@ async def health_check():
 # Include the router in the main app
 app.include_router(api_router)
 
+# Add GZip middleware for better performance
+app.add_middleware(GZipMiddleware, minimum_size=1000)
+
 # Configure CORS - Use environment-specific origins
 app.add_middleware(
     CORSMiddleware,
@@ -10465,4 +10482,22 @@ logger = logging.getLogger(__name__)
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=5000)
+    from fastapi import Request
+    from fastapi.middleware.trustedhost import TrustedHostMiddleware
+    from fastapi.middleware.cors import CORSMiddleware
+    from fastapi.middleware.gzip import GZipMiddleware
+    
+    # Configure upload limits and middleware
+    uvicorn.run(
+        app, 
+        host="0.0.0.0", 
+        port=5000,
+        # Increase request size limits
+        limit_max_request_size=1024*1024*1024,  # 1GB max request size
+        limit_concurrency=100,  # Increase concurrency for multiple uploads
+        timeout_keep_alive=300,  # 5 minutes keep alive
+        # Performance settings
+        workers=1,  # Single worker for development, increase for production
+        loop="uvloop",  # Use uvloop for better performance
+        http="httptools"  # Use httptools for better performance
+    )

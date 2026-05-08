@@ -660,11 +660,17 @@ const AdminResourceCategory = ({ category, subCategory, title, description }) =>
       return;
     }
 
+    // Check file count limit
+    if (fileList.length > 200) {
+      message.error('Maximum 200 files allowed per upload. Please select fewer files.');
+      return;
+    }
+
     try {
       const values = await form.validateFields();
 
       if (uploadType === 'file') {
-        // Handle file upload (existing logic)
+        // Handle file upload with optimized processing
         const formData = new FormData();
         
         // Append all selected files
@@ -682,10 +688,18 @@ const AdminResourceCategory = ({ category, subCategory, title, description }) =>
         formData.append('naming_option', namingOption);
 
         setUploading(true);
+        
+        // Show upload progress for large file batches
+        if (fileList.length > 10) {
+          message.info(`Uploading ${fileList.length} files. This may take a while...`);
+        }
+        
+        // Increase timeout for large uploads
         const response = await api.post('/admin/resources/upload', formData, {
           headers: {
             'Content-Type': 'multipart/form-data',
           },
+          timeout: 10 * 60 * 1000, // 10 minutes timeout for large uploads
         });
 
         const uploadedCount = response.data.length;
