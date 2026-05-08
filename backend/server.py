@@ -30,6 +30,7 @@ import re
 import smtplib
 import mimetypes
 import html
+import csv
 import urllib.request as urllib_request
 import urllib.error as urllib_error
 from types import SimpleNamespace
@@ -1093,6 +1094,55 @@ def iter_valid_uploads(files: Optional[List[UploadFile]]) -> List[UploadFile]:
         for upload in (files or [])
         if upload and getattr(upload, "filename", None)
     ]
+
+def get_upload_file_size(upload: UploadFile) -> int:
+    current_position = upload.file.tell()
+    upload.file.seek(0, os.SEEK_END)
+    file_size = upload.file.tell()
+    upload.file.seek(current_position)
+    return file_size
+
+def save_upload_file(upload: UploadFile, destination: Path) -> None:
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    upload.file.seek(0)
+    with destination.open("wb") as buffer:
+        shutil.copyfileobj(upload.file, buffer, length=1024 * 1024)
+    upload.file.seek(0)
+
+def save_school_logo(school_id: str, logo: UploadFile) -> str:
+    school_folder = UPLOAD_DIR / school_id
+    school_folder.mkdir(parents=True, exist_ok=True)
+
+    file_extension = Path(logo.filename or "").suffix or ".png"
+    logo_filename = f"logo{file_extension.lower()}"
+    logo_file_path = school_folder / logo_filename
+    save_upload_file(logo, logo_file_path)
+    return f"/uploads/school_logos/{school_id}/{logo_filename}"
+
+def build_resource_name_for_upload(
+    base_title: str,
+    file: UploadFile,
+    sequence_number: int,
+    total_files: int,
+    naming_option: str
+) -> str:
+    if total_files <= 1:
+        return base_title
+
+    if naming_option == "original":
+        original_name = (file.filename or "").strip()
+        return Path(original_name).stem or f"{base_title} {sequence_number}"
+
+    match = re.match(r"(.+?)(\d+)$", base_title.strip())
+    if match:
+        base_name = match.group(1)
+        start_num = int(match.group(2))
+        return f"{base_name}{start_num + sequence_number - 1}"
+
+    if sequence_number == 1:
+        return base_title
+
+    return f"{base_title} {sequence_number}"
 
 def delete_file_if_present(file_path: Union[str, Path, None]) -> None:
     if not file_path:
@@ -4894,6 +4944,18 @@ async def create_school(
     db: Session = Depends(get_db)
 ):
     """Create a new school with optional logo upload"""
+    school_id = (school_id or "").strip()
+    school_name = (school_name or "").strip()
+    email = (email or "").strip().lower()
+    password = password or ""
+
+    password_error = validate_school_password(password)
+    if password_error:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=password_error
+        )
+
     # Check if school already exists
     existing_school = db.query(School).filter(
         (School.school_id == school_id) | (School.email == email)
@@ -4908,19 +4970,7 @@ async def create_school(
     # Handle logo upload
     logo_path = None
     if logo:
-        # Create school-specific folder
-        school_folder = UPLOAD_DIR / school_id
-        school_folder.mkdir(parents=True, exist_ok=True)
-        
-        # Save logo
-        file_extension = logo.filename.split('.')[-1]
-        logo_filename = f"logo.{file_extension}"
-        logo_file_path = school_folder / logo_filename
-        
-        with open(logo_file_path, "wb") as buffer:
-            shutil.copyfileobj(logo.file, buffer)
-        
-        logo_path = f"/uploads/school_logos/{school_id}/{logo_filename}"
+        logo_path = save_school_logo(school_id, logo)
     
     # Create school
     password_hash = get_password_hash(password)
@@ -4965,8 +5015,9 @@ async def update_school(
     
     # Update fields
     if school_name:
-        school.school_name = school_name
+        school.school_name = school_name.strip()
     if email:
+        email = email.strip().lower()
         # Check if email already used by another school
         existing = db.query(School).filter(
             School.email == email,
@@ -4989,23 +5040,142 @@ async def update_school(
     
     # Handle logo update
     if logo:
-        school_folder = UPLOAD_DIR / school_id
-        school_folder.mkdir(parents=True, exist_ok=True)
-        
-        file_extension = logo.filename.split('.')[-1]
-        logo_filename = f"logo.{file_extension}"
-        logo_file_path = school_folder / logo_filename
-        
-        with open(logo_file_path, "wb") as buffer:
-            shutil.copyfileobj(logo.file, buffer)
-        
-        school.logo_path = f"/uploads/school_logos/{school_id}/{logo_filename}"
+        school.logo_path = save_school_logo(school_id, logo)
     
     school.updated_at = datetime.utcnow()
     db.commit()
     db.refresh(school)
     
     return school
+
+@api_router.post("/admin/schools/bulk-import")
+async def bulk_import_schools(
+    csv_file: UploadFile = File(...),
+    db: Session = Depends(get_db)
+):
+    """Bulk create schools from a CSV file."""
+    filename = (csv_file.filename or "").strip()
+    if not filename.lower().endswith(".csv"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Please upload a CSV file"
+        )
+
+    csv_file.file.seek(0)
+    csv_stream = io.TextIOWrapper(csv_file.file, encoding="utf-8-sig", newline="")
+    reader = csv.DictReader(csv_stream)
+
+    if not reader.fieldnames:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="The CSV file is empty or missing a header row"
+        )
+
+    normalized_headers = [str(header or "").strip() for header in reader.fieldnames]
+    required_columns = ["school_id", "school_name", "email", "password"]
+    missing_columns = [column for column in required_columns if column not in normalized_headers]
+    if missing_columns:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Missing required CSV columns: {', '.join(missing_columns)}"
+        )
+
+    existing_ids = {
+        (str(value or "").strip().lower())
+        for (value,) in db.query(School.school_id).all()
+        if str(value or "").strip()
+    }
+    existing_emails = {
+        (str(value or "").strip().lower())
+        for (value,) in db.query(School.email).all()
+        if str(value or "").strip()
+    }
+    seen_ids = set()
+    seen_emails = set()
+    created_count = 0
+    created_school_ids = []
+    errors = []
+    highest_numeric_school_id = None
+
+    for line_number, row in enumerate(reader, start=2):
+        normalized_row = {
+            str(key or "").strip(): (value or "").strip()
+            for key, value in (row or {}).items()
+        }
+        if not any(normalized_row.values()):
+            continue
+
+        school_id = normalized_row.get("school_id", "")
+        school_name = normalized_row.get("school_name", "")
+        email = normalized_row.get("email", "").lower()
+        password = normalized_row.get("password", "")
+        contact_number = normalized_row.get("contact_number") or None
+        region = normalize_optional_string(normalized_row.get("region"))
+        sub_region = normalize_optional_string(normalized_row.get("sub_region"))
+
+        if not school_id or not school_name or not email or not password:
+            errors.append(f"Line {line_number}: school_id, school_name, email, and password are required")
+            continue
+
+        password_error = validate_school_password(password)
+        if password_error:
+            errors.append(f"Line {line_number}: {password_error}")
+            continue
+
+        school_id_key = school_id.lower()
+        email_key = email.lower()
+
+        if school_id_key in existing_ids or school_id_key in seen_ids:
+            errors.append(f"Line {line_number}: School ID '{school_id}' already exists")
+            continue
+
+        if email_key in existing_emails or email_key in seen_emails:
+            errors.append(f"Line {line_number}: Email '{email}' already exists")
+            continue
+
+        try:
+            with db.begin_nested():
+                school = School(
+                    school_id=school_id,
+                    school_name=school_name,
+                    email=email,
+                    contact_number=contact_number,
+                    region=region,
+                    sub_region=sub_region,
+                    password_hash=get_password_hash(password),
+                    logo_path=None
+                )
+                db.add(school)
+                db.flush()
+
+            created_count += 1
+            created_school_ids.append(school_id)
+            seen_ids.add(school_id_key)
+            seen_emails.add(email_key)
+            existing_ids.add(school_id_key)
+            existing_emails.add(email_key)
+
+            try:
+                numeric_school_id = int(school_id)
+                if highest_numeric_school_id is None or numeric_school_id > highest_numeric_school_id:
+                    highest_numeric_school_id = numeric_school_id
+            except Exception:
+                pass
+        except Exception as exc:
+            errors.append(f"Line {line_number}: Failed to create school '{school_id}' ({exc})")
+
+    if created_count and highest_numeric_school_id is not None:
+        sync_school_id_sequence_if_numeric(db, str(highest_numeric_school_id))
+
+    db.commit()
+
+    return {
+        "message": f"Imported {created_count} school(s)",
+        "created_count": created_count,
+        "created_school_ids": created_school_ids,
+        "error_count": len(errors),
+        "errors": errors
+    }
 
 @api_router.delete("/admin/schools/{school_id}")
 async def delete_school(school_id: str, db: Session = Depends(get_db)):
@@ -5283,97 +5453,55 @@ async def upload_resource(
     subject: Optional[str] = Form(None),
     tags: Optional[str] = Form(None),
     naming_option: str = Form("auto"),
+    batch_offset: int = Form(0),
+    total_files: int = Form(0),
     files: List[UploadFile] = File(...),
     db: Session = Depends(get_db)
 ):
-    """Admin upload resource(s) - supports single or multiple files (100+ files supported)"""
-    # Increased file size limit (500MB per file for large resources)
+    """Admin upload resource(s) with streamed file saving."""
     MAX_FILE_SIZE = 500 * 1024 * 1024  # 500MB in bytes
-    MAX_FILES = 200  # Maximum files per upload
     normalized_display_title = normalize_optional_string(name) or "Untitled Resource"
     normalized_class_level = normalize_list_label(class_level)
     normalized_subject = normalize_list_label(subject)
-    
-    # Validate number of files
-    if len(files) > MAX_FILES:
+    valid_files = iter_valid_uploads(files)
+    effective_total_files = max(int(total_files or 0), len(valid_files))
+
+    if not valid_files:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Maximum {MAX_FILES} files allowed per upload. You provided {len(files)} files."
+            detail="Please select at least one file to upload."
         )
-    
-    uploaded_resources = []
-    
-    # Process files in batches for better performance
-    batch_size = 50  # Process 50 files at a time
-    
-    for batch_start in range(0, len(files), batch_size):
-        batch_files = files[batch_start:batch_start + batch_size]
-        
-        for index, file in enumerate(batch_files):
-            # Read file to check size
-            contents = await file.read()
-            file_size = len(contents)
-            
-            if file_size > MAX_FILE_SIZE:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=f"File {file.filename} exceeds 500MB limit. Your file is {file_size / (1024*1024):.2f}MB"
-                )
-            
-            # Reset file pointer for actual processing
-            await file.seek(0)
-            
-            # Generate unique resource ID
-            resource_id = str(uuid.uuid4())
-        
-        # Create category folder
-        category_folder = RESOURCES_UPLOAD_DIR / category
-        category_folder.mkdir(parents=True, exist_ok=True)
-        
-        # Save file
-        file_extension = file.filename.split('.')[-1]
-        safe_filename = f"{resource_id}.{file_extension}"
-        file_path_on_disk = category_folder / safe_filename
-        
-        with open(file_path_on_disk, "wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
-        
-        file_path = f"/uploads/resources/{category}/{safe_filename}"
-        
-        # Handle resource naming based on naming option
-        resource_name = normalized_display_title
-        if len(files) > 1:
-            if naming_option == "original":
-                # Use original filename without extension
-                original_name = file.filename
-                if original_name:
-                    # Remove file extension
-                    if '.' in original_name:
-                        resource_name = original_name.rsplit('.', 1)[0]
-                    else:
-                        resource_name = original_name
-                else:
-                    # Fallback to indexed naming if no filename
-                    resource_name = f"{normalized_display_title} {index + 1}"
-            else:
-                # Auto-number files (default behavior)
-                # Extract base name and number if already numbered
-                import re
-                match = re.match(r'(.+?)(\d+)$', normalized_display_title.strip())
-                if match:
-                    base_name = match.group(1)
-                    start_num = int(match.group(2))
-                    resource_name = f"{base_name}{start_num + index}"
-                else:
-                    # If no number at end, add numbering
-                    if index == 0:
-                        resource_name = normalized_display_title
-                    else:
-                        resource_name = f"{normalized_display_title} {index + 1}"
 
-        resource_display_title = normalized_display_title if (len(files) > 1 and naming_option == "original") else resource_name
-        
-        # Create resource record
+    uploaded_resources = []
+    category_folder = RESOURCES_UPLOAD_DIR / category
+    category_folder.mkdir(parents=True, exist_ok=True)
+
+    for index, file in enumerate(valid_files):
+        file_size = get_upload_file_size(file)
+        if file_size > MAX_FILE_SIZE:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"File {file.filename} exceeds 500MB limit. Your file is {file_size / (1024*1024):.2f}MB"
+            )
+
+        resource_id = str(uuid.uuid4())
+        file_extension = Path(file.filename or "").suffix
+        file_extension_without_dot = file_extension.lstrip(".")
+        safe_filename = f"{resource_id}{file_extension.lower()}" if file_extension else resource_id
+        file_path_on_disk = category_folder / safe_filename
+        save_upload_file(file, file_path_on_disk)
+        file_path = f"/uploads/resources/{category}/{safe_filename}"
+
+        sequence_number = batch_offset + index + 1
+        resource_name = build_resource_name_for_upload(
+            normalized_display_title,
+            file,
+            sequence_number,
+            effective_total_files,
+            naming_option
+        )
+        resource_display_title = normalized_display_title if (effective_total_files > 1 and naming_option == "original") else resource_name
+
         new_resource = Resource(
             resource_id=resource_id,
             name=resource_name,
@@ -5383,7 +5511,7 @@ async def upload_resource(
             category=category,
             sub_category=sub_category,
             file_path=file_path,
-            file_type=file.content_type or f"application/{file_extension}",
+            file_type=file.content_type or (f"application/{file_extension_without_dot}" if file_extension_without_dot else "application/octet-stream"),
             file_size=file_size,
             class_level=normalized_class_level,
             subject=normalized_subject,
@@ -10483,21 +10611,16 @@ logger = logging.getLogger(__name__)
 
 if __name__ == "__main__":
     import uvicorn
-    from fastapi import Request
-    from fastapi.middleware.trustedhost import TrustedHostMiddleware
-    from fastapi.middleware.cors import CORSMiddleware
-    
-    # Configure upload limits and middleware
+
     uvicorn.run(
-        app, 
-        host="0.0.0.0", 
-        port=5000,
-        # Increase request size limits
-        limit_max_request_size=1024*1024*1024,  # 1GB max request size
-        limit_concurrency=100,  # Increase concurrency for multiple uploads
-        timeout_keep_alive=300,  # 5 minutes keep alive
-        # Performance settings
-        workers=1,  # Single worker for development, increase for production
-        loop="uvloop",  # Use uvloop for better performance
-        http="httptools"  # Use httptools for better performance
+        app,
+        host="0.0.0.0",
+        port=int(os.environ.get("PORT", "5000")),
+        limit_concurrency=int(os.environ.get("UVICORN_LIMIT_CONCURRENCY", "200")),
+        timeout_keep_alive=int(os.environ.get("UVICORN_TIMEOUT_KEEP_ALIVE", "300")),
+        workers=int(os.environ.get("UVICORN_WORKERS", "1")),
+        proxy_headers=True,
+        forwarded_allow_ips="*",
+        loop="auto",
+        http="auto"
     )

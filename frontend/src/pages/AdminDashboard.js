@@ -1,6 +1,6 @@
 // frontend/src/pages/AdminDashboard.js
 import React, { useState, useEffect } from 'react';
-import { Layout, Button, theme } from 'antd';
+import { Layout, Button, theme, message } from 'antd';
 import { MenuUnfoldOutlined, MenuFoldOutlined, LogoutOutlined, UserOutlined } from '@ant-design/icons';
 import { Routes, Route, useLocation, Navigate, Outlet, useNavigate } from 'react-router-dom';
 import api from '../api/axiosConfig';
@@ -39,7 +39,6 @@ import AdminResourceWatermark from '../components/AdminResourceWatermark';
 import '../styles/AdminDashboard.css';
 
 const BACKEND_URL = config.apiBaseUrl;
-const API = `${BACKEND_URL}/api`;
 
 const { Header, Content } = Layout;
 
@@ -59,10 +58,15 @@ const AdminDashboard = ({ user, setUser }) => {
   const [filteredSchools, setFilteredSchools] = useState([]);
   const [searchTerm, setSearchTerm] = useState('');
   const [showAddModal, setShowAddModal] = useState(false);
+  const [showBulkAddModal, setShowBulkAddModal] = useState(false);
   const [editingSchool, setEditingSchool] = useState(null);
   const [showQRModal, setShowQRModal] = useState(false);
   const [qrCode, setQrCode] = useState(null);
   const [qrLoading, setQrLoading] = useState(false);
+  const [bulkFile, setBulkFile] = useState(null);
+  const [bulkImportLoading, setBulkImportLoading] = useState(false);
+  const [bulkImportError, setBulkImportError] = useState('');
+  const [bulkImportResult, setBulkImportResult] = useState(null);
   const [formData, setFormData] = useState({
     school_id: '',
     school_name: '',
@@ -138,6 +142,80 @@ const AdminDashboard = ({ user, setUser }) => {
 
   const handleFileChange = (e) => {
     setFormData(prev => ({ ...prev, logo: e.target.files[0] }));
+  };
+
+  const handleBulkFileChange = (e) => {
+    setBulkFile(e.target.files?.[0] || null);
+    setBulkImportError('');
+    setBulkImportResult(null);
+  };
+
+  const closeBulkAddModal = () => {
+    setShowBulkAddModal(false);
+    setBulkFile(null);
+    setBulkImportLoading(false);
+    setBulkImportError('');
+    setBulkImportResult(null);
+  };
+
+  const handleDownloadBulkTemplate = () => {
+    const template = [
+      'school_id,school_name,email,password,contact_number,region,sub_region',
+      '101,Wonder Learning Preschool,wonder101@example.com,Password123,+911234567890,North Zone,Delhi NCR',
+      '102,Wonder Learning Junior,wonder102@example.com,Password123,+919876543210,South Zone,Bengaluru'
+    ].join('\n');
+
+    const blob = new Blob([template], { type: 'text/csv;charset=utf-8;' });
+    const downloadUrl = window.URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = downloadUrl;
+    link.download = 'bulk-school-template.csv';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    window.URL.revokeObjectURL(downloadUrl);
+  };
+
+  const handleBulkImportSchools = async () => {
+    if (!bulkFile) {
+      setBulkImportError('Please select a CSV file first');
+      return;
+    }
+
+    try {
+      setBulkImportLoading(true);
+      setBulkImportError('');
+      setBulkImportResult(null);
+
+      const formDataToSend = new FormData();
+      formDataToSend.append('csv_file', bulkFile);
+
+      const response = await api.post('/admin/schools/bulk-import', formDataToSend, {
+        headers: {
+          'Content-Type': 'multipart/form-data'
+        },
+        timeout: 10 * 60 * 1000
+      });
+
+      setBulkImportResult(response.data);
+      await fetchSchools();
+
+      if (response.data.created_count > 0) {
+        message.success(`Imported ${response.data.created_count} school(s)`);
+      } else {
+        message.info('No schools were imported');
+      }
+
+      if (response.data.error_count > 0) {
+        message.warning(`${response.data.error_count} row(s) need attention`);
+      }
+    } catch (err) {
+      const errorMessage = err.response?.data?.detail || 'Failed to import schools';
+      setBulkImportError(errorMessage);
+      message.error(errorMessage);
+    } finally {
+      setBulkImportLoading(false);
+    }
   };
 
   const handleAddSchool = async (e) => {
@@ -291,6 +369,15 @@ const AdminDashboard = ({ user, setUser }) => {
           >
             Generate QR Code
           </Button>
+          <Button
+            onClick={() => {
+              setShowBulkAddModal(true);
+              setBulkImportError('');
+              setBulkImportResult(null);
+            }}
+          >
+            Bulk Add Schools
+          </Button>
           <Button type="primary" onClick={() => setShowAddModal(true)}>
             Add New School
           </Button>
@@ -354,6 +441,90 @@ const AdminDashboard = ({ user, setUser }) => {
       {filteredSchools.length === 0 && !searchTerm && (
         <div className="empty-state" data-testid="empty-schools-message">
           <p>No schools added yet. Click "Add School" to get started.</p>
+        </div>
+      )}
+
+      {showBulkAddModal && (
+        <div className="modal-overlay">
+          <div className="modal" style={{ maxWidth: '720px' }}>
+            <h2>Bulk Add Schools</h2>
+            <p style={{ color: '#666', marginBottom: '12px' }}>
+              Upload a CSV file to create many schools at once. Required columns:
+              <strong> school_id, school_name, email, password</strong>.
+              Optional columns: contact_number, region, sub_region.
+            </p>
+            <p style={{ color: '#666', marginBottom: '16px' }}>
+              School logos are not included in bulk import. You can add or edit logos later from each school card.
+            </p>
+
+            <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', marginBottom: '16px' }}>
+              <Button onClick={handleDownloadBulkTemplate}>Download CSV Template</Button>
+              <input type="file" accept=".csv,text/csv" onChange={handleBulkFileChange} />
+            </div>
+
+            {bulkFile && (
+              <div style={{ marginBottom: '16px', color: '#444', fontSize: '14px' }}>
+                Selected file: {bulkFile.name}
+              </div>
+            )}
+
+            {bulkImportError && (
+              <div className="error-message" style={{ marginBottom: '16px' }}>
+                {bulkImportError}
+              </div>
+            )}
+
+            {bulkImportResult && (
+              <div
+                style={{
+                  marginBottom: '16px',
+                  padding: '16px',
+                  border: '1px solid #d9d9d9',
+                  borderRadius: '8px',
+                  background: '#fafafa'
+                }}
+              >
+                <p style={{ marginBottom: '8px' }}>
+                  Imported <strong>{bulkImportResult.created_count}</strong> school(s).
+                </p>
+                <p style={{ marginBottom: bulkImportResult.error_count ? '12px' : 0 }}>
+                  Rows with issues: <strong>{bulkImportResult.error_count}</strong>
+                </p>
+                {bulkImportResult.error_count > 0 && (
+                  <div style={{ maxHeight: '180px', overflowY: 'auto', paddingRight: '8px' }}>
+                    {bulkImportResult.errors.slice(0, 15).map((item, index) => (
+                      <div key={`${item}-${index}`} style={{ fontSize: '13px', color: '#a8071a', marginBottom: '6px' }}>
+                        {item}
+                      </div>
+                    ))}
+                    {bulkImportResult.errors.length > 15 && (
+                      <div style={{ fontSize: '13px', color: '#666' }}>
+                        {bulkImportResult.errors.length - 15} more row error(s) not shown here.
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+
+            <div className="modal-actions">
+              <button
+                type="button"
+                className="submit-btn"
+                onClick={handleBulkImportSchools}
+                disabled={bulkImportLoading || !bulkFile}
+              >
+                {bulkImportLoading ? 'Importing...' : 'Import Schools'}
+              </button>
+              <button
+                type="button"
+                className="cancel-btn"
+                onClick={closeBulkAddModal}
+              >
+                Close
+              </button>
+            </div>
+          </div>
         </div>
       )}
 

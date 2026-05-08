@@ -65,6 +65,9 @@ const DEFAULT_RESOURCE_TAXONOMY = {
   programs: ['Playgroup', 'Nursery', 'LKG', 'UKG'],
   subjects: ['English', 'Maths', 'EVS', 'Hindi', 'Arts & Crafts', 'Music', 'Physical Education']
 };
+const MAX_UPLOAD_BATCH_FILES = 25;
+const MAX_UPLOAD_BATCH_BYTES = 80 * 1024 * 1024;
+const UPLOAD_BATCH_CONCURRENCY = 3;
 
 const { Option } = Select;
 const { TextArea } = Input;
@@ -102,6 +105,36 @@ const pickSingleSelectValue = (value) => {
     return value.map((item) => item?.toString().trim()).find(Boolean) || '';
   }
   return value?.toString().trim() || '';
+};
+
+const buildUploadBatchDescriptors = (files = []) => {
+  const descriptors = [];
+  let currentFiles = [];
+  let currentSize = 0;
+  let currentOffset = 0;
+
+  files.forEach((file) => {
+    const originFile = file.originFileObj || file;
+    const fileSize = originFile?.size || 0;
+    const wouldExceedFileCount = currentFiles.length >= MAX_UPLOAD_BATCH_FILES;
+    const wouldExceedPayloadSize = currentFiles.length > 0 && (currentSize + fileSize) > MAX_UPLOAD_BATCH_BYTES;
+
+    if (wouldExceedFileCount || wouldExceedPayloadSize) {
+      descriptors.push({ files: currentFiles, offset: currentOffset });
+      currentOffset += currentFiles.length;
+      currentFiles = [];
+      currentSize = 0;
+    }
+
+    currentFiles.push(file);
+    currentSize += fileSize;
+  });
+
+  if (currentFiles.length > 0) {
+    descriptors.push({ files: currentFiles, offset: currentOffset });
+  }
+
+  return descriptors;
 };
 
 const stripFileExtension = (value = '') => value.replace(/\.[^.]+$/, '');
@@ -660,49 +693,74 @@ const AdminResourceCategory = ({ category, subCategory, title, description }) =>
       return;
     }
 
-    // Check file count limit
-    if (fileList.length > 200) {
-      message.error('Maximum 200 files allowed per upload. Please select fewer files.');
-      return;
-    }
-
     try {
       const values = await form.validateFields();
 
       if (uploadType === 'file') {
-        // Handle file upload with optimized processing
-        const formData = new FormData();
-        
-        // Append all selected files
-        fileList.forEach((file) => {
-          formData.append('files', file.originFileObj);
-        });
-        
-        formData.append('name', values.name);
-        formData.append('category', categoryFilter);
-        formData.append('sub_category', values.sub_category || '');
-        formData.append('description', values.description || '');
-        formData.append('class_level', pickSingleSelectValue(values.class_level));
-        formData.append('subject', pickSingleSelectValue(values.subject));
-        formData.append('tags', values.tags ? values.tags.join(',') : '');
-        formData.append('naming_option', namingOption);
-
         setUploading(true);
-        
-        // Show upload progress for large file batches
-        if (fileList.length > 10) {
-          message.info(`Uploading ${fileList.length} files. This may take a while...`);
-        }
-        
-        // Increase timeout for large uploads
-        const response = await api.post('/admin/resources/upload', formData, {
-          headers: {
-            'Content-Type': 'multipart/form-data',
-          },
-          timeout: 10 * 60 * 1000, // 10 minutes timeout for large uploads
+        const uploadBatches = buildUploadBatchDescriptors(fileList);
+        let uploadedCount = 0;
+
+        message.open({
+          key: 'resource-upload',
+          type: 'loading',
+          content: `Uploading ${fileList.length} file(s) in ${uploadBatches.length} batch(es)...`,
+          duration: 0
         });
 
-        const uploadedCount = response.data.length;
+        for (let waveStart = 0; waveStart < uploadBatches.length; waveStart += UPLOAD_BATCH_CONCURRENCY) {
+          const currentWave = uploadBatches.slice(waveStart, waveStart + UPLOAD_BATCH_CONCURRENCY);
+
+          message.open({
+            key: 'resource-upload',
+            type: 'loading',
+            content: `Uploading batch ${waveStart + 1}-${Math.min(waveStart + currentWave.length, uploadBatches.length)} of ${uploadBatches.length}...`,
+            duration: 0
+          });
+
+          const settledResults = await Promise.allSettled(
+            currentWave.map(async (batch) => {
+              const formData = new FormData();
+
+              batch.files.forEach((file) => {
+                formData.append('files', file.originFileObj);
+              });
+
+              formData.append('name', values.name);
+              formData.append('category', categoryFilter);
+              formData.append('sub_category', values.sub_category || '');
+              formData.append('description', values.description || '');
+              formData.append('class_level', pickSingleSelectValue(values.class_level));
+              formData.append('subject', pickSingleSelectValue(values.subject));
+              formData.append('tags', values.tags ? values.tags.join(',') : '');
+              formData.append('naming_option', namingOption);
+              formData.append('batch_offset', String(batch.offset));
+              formData.append('total_files', String(fileList.length));
+
+              return api.post('/admin/resources/upload', formData, {
+                headers: {
+                  'Content-Type': 'multipart/form-data',
+                },
+                timeout: 10 * 60 * 1000,
+              });
+            })
+          );
+
+          const rejectedResult = settledResults.find((result) => result.status === 'rejected');
+          settledResults.forEach((result) => {
+            if (result.status === 'fulfilled') {
+              uploadedCount += Array.isArray(result.value?.data) ? result.value.data.length : 0;
+            }
+          });
+
+          if (rejectedResult?.status === 'rejected') {
+            const partialError = rejectedResult.reason;
+            partialError.partialUploadedCount = uploadedCount;
+            throw partialError;
+          }
+        }
+
+        message.destroy('resource-upload');
         message.success(`${uploadedCount} resource(s) uploaded successfully!`);
         fetchResourceTaxonomy();
       } else {
@@ -721,7 +779,7 @@ const AdminResourceCategory = ({ category, subCategory, title, description }) =>
         formData.append('is_video_link', 'true');
 
         setUploading(true);
-        const response = await api.post('/admin/resources/upload-link', formData, {
+        await api.post('/admin/resources/upload-link', formData, {
           headers: {
             'Content-Type': 'multipart/form-data',
           },
@@ -756,7 +814,12 @@ const AdminResourceCategory = ({ category, subCategory, title, description }) =>
       } else if (error.message) {
         errorMessage = error.message;
       }
-      
+
+      if (error.partialUploadedCount > 0) {
+        errorMessage = `${errorMessage}. ${error.partialUploadedCount} file(s) were already uploaded before the process stopped.`;
+      }
+
+      message.destroy('resource-upload');
       message.error(errorMessage);
     } finally {
       setUploading(false);
@@ -1603,7 +1666,6 @@ const AdminResourceCategory = ({ category, subCategory, title, description }) =>
   };
 
   const handleFileChange = ({ fileList }) => {
-    // Allow multiple files, no limit on count
     setFileList(fileList);
   };
 
@@ -2357,8 +2419,8 @@ const AdminResourceCategory = ({ category, subCategory, title, description }) =>
               </Upload>
               <div style={{ marginTop: 8, fontSize: '12px', color: '#666' }}>
                 {fileList.length > 0 
-                  ? `Selected ${fileList.length} file(s). ${namingOption === 'original' ? 'Files will keep their original names.' : 'Files will be auto-numbered.'}`
-                  : 'You can select multiple files at once. Choose naming option below.'
+                  ? `Selected ${fileList.length} file(s). Uploads will be split into smaller batches automatically. ${namingOption === 'original' ? 'Files will keep their original names.' : 'Files will be auto-numbered.'}`
+                  : 'You can select multiple files at once. Large selections are uploaded in smaller batches automatically.'
                 }
               </div>
             </Form.Item>
