@@ -1153,6 +1153,66 @@ def delete_file_if_present(file_path: Union[str, Path, None]) -> None:
     except Exception as exc:
         logger.warning("Could not delete file %s: %s", file_path, exc)
 
+def relax_path_permissions_if_possible(target_path: Union[str, Path, None]) -> None:
+    if not target_path:
+        return
+
+    path_obj = Path(target_path)
+    if not path_obj.exists():
+        return
+
+    try:
+        path_obj.chmod(0o700 if path_obj.is_dir() else 0o600)
+    except Exception:
+        # Best-effort only. Some VPS files may be owned by a different user.
+        pass
+
+def delete_directory_if_present(directory_path: Union[str, Path, None], context: str) -> None:
+    if not directory_path:
+        return
+
+    directory = Path(directory_path)
+    if not directory.exists():
+        return
+
+    def handle_rmtree_error(func, path, exc_info):
+        path_obj = Path(path)
+        relax_path_permissions_if_possible(path_obj)
+        relax_path_permissions_if_possible(path_obj.parent)
+        try:
+            func(path)
+        except Exception as retry_exc:
+            logger.warning(
+                "Could not remove %s item %s while deleting %s: %s",
+                context,
+                path_obj,
+                directory,
+                retry_exc,
+            )
+
+    relax_path_permissions_if_possible(directory)
+    try:
+        for child in directory.rglob("*"):
+            relax_path_permissions_if_possible(child)
+    except Exception as exc:
+        logger.warning("Could not normalize permissions for %s %s: %s", context, directory, exc)
+
+    try:
+        shutil.rmtree(directory, onerror=handle_rmtree_error)
+    except FileNotFoundError:
+        return
+    except Exception as exc:
+        logger.warning("Could not fully delete %s %s: %s", context, directory, exc)
+
+def delete_school_uploaded_files(school_id: str) -> None:
+    delete_directory_if_present(UPLOAD_DIR / school_id, f"school logo folder for {school_id}")
+
+    if not RESOURCES_UPLOAD_DIR.exists():
+        return
+
+    for upload_folder in RESOURCES_UPLOAD_DIR.glob(f"*/school_uploads/{school_id}"):
+        delete_directory_if_present(upload_folder, f"school resource folder for {school_id}")
+
 def delete_announcement_attachments(db: Session, announcement_id: int) -> None:
     attachments = db.query(AnnouncementAttachment).filter(
         AnnouncementAttachment.announcement_id == announcement_id
@@ -5199,17 +5259,7 @@ async def delete_bulk_schools(request: dict, db: Session = Depends(get_db)):
                 errors.append(f"School {school_id} not found")
                 continue
             
-            # Delete school folder and logo
-            school_folder = UPLOAD_DIR / school_id
-            if school_folder.exists():
-                shutil.rmtree(school_folder)
-
-            school_resource_folder = RESOURCES_UPLOAD_DIR
-            if school_resource_folder.exists():
-                for upload_folder in school_resource_folder.glob(f"*/school_uploads/{school_id}"):
-                    if upload_folder.exists():
-                        shutil.rmtree(upload_folder, ignore_errors=True)
-            
+            delete_school_uploaded_files(school_id)
             delete_school_related_records(db, school)
             db.delete(school)
             deleted_count += 1
@@ -5248,17 +5298,7 @@ async def delete_all_schools(db: Session = Depends(get_db)):
         
         for school in all_schools:
             try:
-                # Delete school folder and logo
-                school_folder = UPLOAD_DIR / school.school_id
-                if school_folder.exists():
-                    shutil.rmtree(school_folder)
-
-                school_resource_folder = RESOURCES_UPLOAD_DIR
-                if school_resource_folder.exists():
-                    for upload_folder in school_resource_folder.glob(f"*/school_uploads/{school.school_id}"):
-                        if upload_folder.exists():
-                            shutil.rmtree(upload_folder, ignore_errors=True)
-                
+                delete_school_uploaded_files(school.school_id)
                 delete_school_related_records(db, school)
                 db.delete(school)
                 deleted_count += 1
@@ -5293,17 +5333,7 @@ async def delete_school(school_id: str, db: Session = Depends(get_db)):
             detail="School not found"
         )
     
-    # Delete school folder and logo
-    school_folder = UPLOAD_DIR / school_id
-    if school_folder.exists():
-        shutil.rmtree(school_folder)
-
-    school_resource_folder = RESOURCES_UPLOAD_DIR
-    if school_resource_folder.exists():
-        for upload_folder in school_resource_folder.glob(f"*/school_uploads/{school_id}"):
-            if upload_folder.exists():
-                shutil.rmtree(upload_folder, ignore_errors=True)
-    
+    delete_school_uploaded_files(school_id)
     delete_school_related_records(db, school)
     db.delete(school)
     db.commit()

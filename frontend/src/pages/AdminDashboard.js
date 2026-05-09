@@ -313,7 +313,7 @@ const AdminDashboard = ({ user, setUser }) => {
       fetchSchools();
       message.success('School deleted successfully');
     } catch (err) {
-      message.error('Failed to delete school');
+      message.error(err.response?.data?.detail || 'Failed to delete school');
     }
   };
 
@@ -352,7 +352,7 @@ const AdminDashboard = ({ user, setUser }) => {
       fetchSchools();
       message.success(`${selectedSchools.length} school(s) deleted successfully`);
     } catch (err) {
-      message.error('Failed to delete selected schools');
+      message.error(err.response?.data?.detail || 'Failed to delete selected schools');
     } finally {
       setBulkDeleteLoading(false);
     }
@@ -375,7 +375,7 @@ const AdminDashboard = ({ user, setUser }) => {
       fetchSchools();
       message.success(`All ${filteredSchools.length} school(s) deleted successfully`);
     } catch (err) {
-      message.error('Failed to delete all schools');
+      message.error(err.response?.data?.detail || 'Failed to delete all schools');
     } finally {
       setBulkDeleteLoading(false);
     }
