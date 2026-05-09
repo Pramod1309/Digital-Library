@@ -5177,34 +5177,6 @@ async def bulk_import_schools(
         "errors": errors
     }
 
-@api_router.delete("/admin/schools/{school_id}")
-async def delete_school(school_id: str, db: Session = Depends(get_db)):
-    """Delete a school"""
-    school = db.query(School).filter(School.school_id == school_id).first()
-    
-    if not school:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="School not found"
-        )
-    
-    # Delete school folder and logo
-    school_folder = UPLOAD_DIR / school_id
-    if school_folder.exists():
-        shutil.rmtree(school_folder)
-
-    school_resource_folder = RESOURCES_UPLOAD_DIR
-    if school_resource_folder.exists():
-        for upload_folder in school_resource_folder.glob(f"*/school_uploads/{school_id}"):
-            if upload_folder.exists():
-                shutil.rmtree(upload_folder, ignore_errors=True)
-    
-    delete_school_related_records(db, school)
-    db.delete(school)
-    db.commit()
-    
-    return {"message": "School deleted successfully"}
-
 @api_router.delete("/admin/schools/bulk")
 async def delete_bulk_schools(request: dict, db: Session = Depends(get_db)):
     """Delete multiple schools"""
@@ -5309,6 +5281,34 @@ async def delete_all_schools(db: Session = Depends(get_db)):
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to delete all schools: {str(e)}"
         )
+
+@api_router.delete("/admin/schools/{school_id}")
+async def delete_school(school_id: str, db: Session = Depends(get_db)):
+    """Delete a school"""
+    school = db.query(School).filter(School.school_id == school_id).first()
+    
+    if not school:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="School not found"
+        )
+    
+    # Delete school folder and logo
+    school_folder = UPLOAD_DIR / school_id
+    if school_folder.exists():
+        shutil.rmtree(school_folder)
+
+    school_resource_folder = RESOURCES_UPLOAD_DIR
+    if school_resource_folder.exists():
+        for upload_folder in school_resource_folder.glob(f"*/school_uploads/{school_id}"):
+            if upload_folder.exists():
+                shutil.rmtree(upload_folder, ignore_errors=True)
+    
+    delete_school_related_records(db, school)
+    db.delete(school)
+    db.commit()
+    
+    return {"message": "School deleted successfully"}
 
 # ==================== QR CODE REGISTRATION ====================
 
