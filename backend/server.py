@@ -5205,6 +5205,111 @@ async def delete_school(school_id: str, db: Session = Depends(get_db)):
     
     return {"message": "School deleted successfully"}
 
+@api_router.delete("/admin/schools/bulk")
+async def delete_bulk_schools(request: dict, db: Session = Depends(get_db)):
+    """Delete multiple schools"""
+    school_ids = request.get("school_ids", [])
+    
+    if not school_ids:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No school IDs provided"
+        )
+    
+    deleted_count = 0
+    errors = []
+    
+    for school_id in school_ids:
+        try:
+            school = db.query(School).filter(School.school_id == school_id).first()
+            
+            if not school:
+                errors.append(f"School {school_id} not found")
+                continue
+            
+            # Delete school folder and logo
+            school_folder = UPLOAD_DIR / school_id
+            if school_folder.exists():
+                shutil.rmtree(school_folder)
+
+            school_resource_folder = RESOURCES_UPLOAD_DIR
+            if school_resource_folder.exists():
+                for upload_folder in school_resource_folder.glob(f"*/school_uploads/{school_id}"):
+                    if upload_folder.exists():
+                        shutil.rmtree(upload_folder, ignore_errors=True)
+            
+            delete_school_related_records(db, school)
+            db.delete(school)
+            deleted_count += 1
+            
+        except Exception as e:
+            errors.append(f"Error deleting school {school_id}: {str(e)}")
+    
+    try:
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to commit bulk delete operation"
+        )
+    
+    return {
+        "message": f"Successfully deleted {deleted_count} school(s)",
+        "deleted_count": deleted_count,
+        "error_count": len(errors),
+        "errors": errors
+    }
+
+@api_router.delete("/admin/schools/all")
+async def delete_all_schools(db: Session = Depends(get_db)):
+    """Delete all schools"""
+    try:
+        # Get all schools first
+        all_schools = db.query(School).all()
+        
+        if not all_schools:
+            return {"message": "No schools to delete", "deleted_count": 0}
+        
+        deleted_count = 0
+        errors = []
+        
+        for school in all_schools:
+            try:
+                # Delete school folder and logo
+                school_folder = UPLOAD_DIR / school.school_id
+                if school_folder.exists():
+                    shutil.rmtree(school_folder)
+
+                school_resource_folder = RESOURCES_UPLOAD_DIR
+                if school_resource_folder.exists():
+                    for upload_folder in school_resource_folder.glob(f"*/school_uploads/{school.school_id}"):
+                        if upload_folder.exists():
+                            shutil.rmtree(upload_folder, ignore_errors=True)
+                
+                delete_school_related_records(db, school)
+                db.delete(school)
+                deleted_count += 1
+                
+            except Exception as e:
+                errors.append(f"Error deleting school {school.school_id}: {str(e)}")
+        
+        db.commit()
+        
+        return {
+            "message": f"Successfully deleted {deleted_count} school(s)",
+            "deleted_count": deleted_count,
+            "error_count": len(errors),
+            "errors": errors
+        }
+        
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to delete all schools: {str(e)}"
+        )
+
 # ==================== QR CODE REGISTRATION ====================
 
 def get_next_available_school_id(db: Session) -> str:

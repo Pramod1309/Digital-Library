@@ -94,15 +94,39 @@
   background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%);
   border-radius: 12px;
   padding: 0;
-  box-shadow: 0 3px 12px rgba(0, 0, 0, 0.1);
-  transition: all 0.3s ease;
   overflow: hidden;
+  transition: all 0.3s ease;
+  border: 1px solid #f59e0b;
   cursor: pointer;
+  position: relative;
 }
 
 .school-folder:hover {
   transform: translateY(-5px);
   box-shadow: 0 8px 25px rgba(0, 0, 0, 0.15);
+}
+
+.bulk-actions {
+  background: #f8f9fa;
+  border: 1px solid #e9ecef;
+  border-radius: 8px;
+  padding: 16px;
+  margin-bottom: 20px;
+}
+
+.bulk-actions label {
+  font-weight: 500;
+  color: #495057;
+}
+
+.bulk-actions input[type="checkbox"] {
+  margin-right: 8px;
+}
+
+.selected-count {
+  color: #007bff;
+  font-weight: 600;
+  margin-left: 12px;
 }
 
 .folder-icon {

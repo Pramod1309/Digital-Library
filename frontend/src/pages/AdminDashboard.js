@@ -79,6 +79,8 @@ const AdminDashboard = ({ user, setUser }) => {
   });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [selectedSchools, setSelectedSchools] = useState([]);
+  const [bulkDeleteLoading, setBulkDeleteLoading] = useState(false);
 
   const {
     token: { colorBgContainer, borderRadiusLG },
@@ -309,8 +311,73 @@ const AdminDashboard = ({ user, setUser }) => {
     try {
       await api.delete(`/admin/schools/${schoolId}`);
       fetchSchools();
+      message.success('School deleted successfully');
     } catch (err) {
-      alert('Failed to delete school');
+      message.error('Failed to delete school');
+    }
+  };
+
+  const handleSelectSchool = (schoolId) => {
+    setSelectedSchools(prev => 
+      prev.includes(schoolId) 
+        ? prev.filter(id => id !== schoolId)
+        : [...prev, schoolId]
+    );
+  };
+
+  const handleSelectAllSchools = () => {
+    if (selectedSchools.length === filteredSchools.length) {
+      setSelectedSchools([]);
+    } else {
+      setSelectedSchools(filteredSchools.map(school => school.school_id));
+    }
+  };
+
+  const handleDeleteSelectedSchools = async () => {
+    if (selectedSchools.length === 0) {
+      message.warning('No schools selected for deletion');
+      return;
+    }
+
+    if (!window.confirm(`Are you sure you want to delete ${selectedSchools.length} school(s)? This action cannot be undone.`)) {
+      return;
+    }
+
+    try {
+      setBulkDeleteLoading(true);
+      await api.delete('/admin/schools/bulk', {
+        data: { school_ids: selectedSchools }
+      });
+      setSelectedSchools([]);
+      fetchSchools();
+      message.success(`${selectedSchools.length} school(s) deleted successfully`);
+    } catch (err) {
+      message.error('Failed to delete selected schools');
+    } finally {
+      setBulkDeleteLoading(false);
+    }
+  };
+
+  const handleDeleteAllSchools = async () => {
+    if (filteredSchools.length === 0) {
+      message.warning('No schools available to delete');
+      return;
+    }
+
+    if (!window.confirm(`Are you sure you want to delete ALL ${filteredSchools.length} school(s)? This action cannot be undone and will remove all school data permanently.`)) {
+      return;
+    }
+
+    try {
+      setBulkDeleteLoading(true);
+      await api.delete('/admin/schools/all');
+      setSelectedSchools([]);
+      fetchSchools();
+      message.success(`All ${filteredSchools.length} school(s) deleted successfully`);
+    } catch (err) {
+      message.error('Failed to delete all schools');
+    } finally {
+      setBulkDeleteLoading(false);
     }
   };
 
@@ -347,7 +414,7 @@ const AdminDashboard = ({ user, setUser }) => {
     <div className="admin-content">
       <div className="content-header">
         <h2>School Management</h2>
-        <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
+        <div style={{ display: 'flex', gap: '12px', alignItems: 'center', flexWrap: 'wrap' }}>
           <input
             type="text"
             placeholder="Search by ID, name, email, phone, region, or sub-region..."
@@ -383,11 +450,76 @@ const AdminDashboard = ({ user, setUser }) => {
           </Button>
         </div>
       </div>
+
+      {filteredSchools.length > 0 && (
+        <div className="bulk-actions" style={{ 
+          padding: '12px', 
+          backgroundColor: '#f5f5f5', 
+          borderRadius: '6px', 
+          marginBottom: '16px',
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center'
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
+              <input
+                type="checkbox"
+                checked={selectedSchools.length === filteredSchools.length && filteredSchools.length > 0}
+                onChange={handleSelectAllSchools}
+                style={{ cursor: 'pointer' }}
+              />
+              <span>Select All ({filteredSchools.length} schools)</span>
+            </label>
+            {selectedSchools.length > 0 && (
+              <span style={{ color: '#1890ff', fontWeight: 'bold' }}>
+                {selectedSchools.length} selected
+              </span>
+            )}
+          </div>
+          <div style={{ display: 'flex', gap: '8px' }}>
+            <Button
+              danger
+              onClick={handleDeleteSelectedSchools}
+              disabled={selectedSchools.length === 0 || bulkDeleteLoading}
+              loading={bulkDeleteLoading}
+            >
+              Delete Selected ({selectedSchools.length})
+            </Button>
+            <Button
+              danger
+              onClick={handleDeleteAllSchools}
+              disabled={bulkDeleteLoading}
+              loading={bulkDeleteLoading}
+              style={{ backgroundColor: '#ff4d4f', borderColor: '#ff4d4f', color: 'white' }}
+            >
+              Delete All Schools
+            </Button>
+          </div>
+        </div>
+      )}
       
       <div className="schools-grid" data-testid="schools-grid">
         {filteredSchools.map((school) => {
           return (
             <div key={school.id} className="school-folder" data-testid={`school-folder-${school.school_id}`}>
+              <div className="school-checkbox" style={{ 
+                position: 'absolute', 
+                top: '8px', 
+                left: '8px', 
+                zIndex: 10 
+              }}>
+                <input
+                  type="checkbox"
+                  checked={selectedSchools.includes(school.school_id)}
+                  onChange={() => handleSelectSchool(school.school_id)}
+                  style={{ 
+                    cursor: 'pointer',
+                    width: '16px',
+                    height: '16px'
+                  }}
+                />
+              </div>
               <div className="folder-icon">
                 <svg viewBox="0 0 24 24" fill="currentColor">
                   <path d="M10 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z" />
