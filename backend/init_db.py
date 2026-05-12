@@ -159,6 +159,32 @@ def migrate_database():
                         print(f"  Note: {e}")
                         print(f"  Column {col_name} might already exist or SQLite limitation encountered")
 
+        resource_indexes = [
+            (
+                "idx_resources_admin_listing",
+                "CREATE INDEX IF NOT EXISTS idx_resources_admin_listing ON resources "
+                "(uploaded_by_type, category, approval_status, created_at DESC)"
+            ),
+            (
+                "idx_resources_school_listing",
+                "CREATE INDEX IF NOT EXISTS idx_resources_school_listing ON resources "
+                "(uploaded_by_id, category, approval_status, created_at DESC)"
+            ),
+            (
+                "idx_resources_category_filters",
+                "CREATE INDEX IF NOT EXISTS idx_resources_category_filters ON resources "
+                "(category, sub_category, class_level, subject, created_at DESC)"
+            ),
+        ]
+        for index_name, index_sql in resource_indexes:
+            try:
+                db.execute(text(index_sql))
+                db.commit()
+                print(f"Ensured {index_name}")
+            except Exception as e:
+                print(f"  Note: {e}")
+                print(f"  Unable to ensure index {index_name}")
+
         if 'admins' in table_names:
             admin_columns = [col['name'] for col in inspector.get_columns('admins')]
             admin_column_defs = [

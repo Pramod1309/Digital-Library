@@ -22,6 +22,10 @@ const BACKEND_URL = config.apiBaseUrl;
 const API = `${BACKEND_URL}/api`;
 const VIDEO_LINK_DOMAINS = ['youtube.com', 'youtu.be', 'vimeo.com', 'dailymotion.com', 'bilibili.com'];
 const VIDEO_FILE_EXTENSIONS = ['mp4', 'webm', 'ogg', 'mov', 'avi', 'mkv'];
+const RESOURCE_CARD_IMAGE_WIDTH = 480;
+const RESOURCE_MODAL_IMAGE_WIDTH = 1600;
+const PDF_PREVIEW_RENDER_WIDTH = 800;
+const PDF_PREVIEW_EAGER_PAGES = 2;
 const DEFAULT_RESOURCE_TAXONOMY = {
   programs: ['Playgroup', 'Nursery', 'LKG', 'UKG'],
   subjects: ['English', 'Maths', 'EVS', 'Hindi', 'Arts & Crafts', 'Music', 'Physical Education']
@@ -55,6 +59,10 @@ const isVideoLinkResource = (resource) => {
   if (!resource) return false;
   return resource.is_video_link === true || resource.is_video_link === 'true' || isKnownVideoLink(resource.file_path);
 };
+
+const getImagePreviewUrl = (resourceId, maxWidth = RESOURCE_MODAL_IMAGE_WIDTH, quality = 82) => (
+  `${API}/resources/${resourceId}/image-preview?max_width=${maxWidth}&quality=${quality}`
+);
 
 const dedupeLabels = (values = []) => {
   const seen = new Set();
@@ -318,6 +326,101 @@ const VideoThumbnail = ({ videoUrl, resource, fileType }) => {
       }}>
         Video
       </div>
+    </div>
+  );
+};
+
+const MediaPlaceholder = ({ icon, label, sublabel, accent = '#1677ff', background = 'linear-gradient(135deg, #f4f8ff 0%, #e6f4ff 100%)' }) => (
+  <div
+    style={{
+      height: '150px',
+      background,
+      display: 'flex',
+      flexDirection: 'column',
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: '8px',
+      color: accent,
+      textAlign: 'center',
+      padding: '16px'
+    }}
+  >
+    <div style={{ fontSize: '42px', lineHeight: 1 }}>{icon}</div>
+    <div style={{ fontSize: '13px', fontWeight: 600, color: '#1f1f1f' }}>{label}</div>
+    {sublabel && <div style={{ fontSize: '11px', color: '#5f6b7a' }}>{sublabel}</div>}
+  </div>
+);
+
+const LazyPdfPageImage = ({ page, eager = false, onLoad, onError }) => {
+  const wrapperRef = useRef(null);
+  const [shouldLoad, setShouldLoad] = useState(eager);
+
+  useEffect(() => {
+    if (shouldLoad || eager) {
+      setShouldLoad(true);
+      return undefined;
+    }
+
+    const target = wrapperRef.current;
+    if (!target || typeof IntersectionObserver === 'undefined') {
+      setShouldLoad(true);
+      return undefined;
+    }
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) {
+          setShouldLoad(true);
+          observer.disconnect();
+        }
+      },
+      { rootMargin: '450px 0px' }
+    );
+
+    observer.observe(target);
+    return () => observer.disconnect();
+  }, [eager, shouldLoad]);
+
+  return (
+    <div ref={wrapperRef}>
+      {shouldLoad ? (
+        <img
+          src={page.url}
+          alt={`Page ${page.pageNumber}`}
+          style={{
+            display: 'block',
+            width: `${PDF_PREVIEW_RENDER_WIDTH}px`,
+            maxWidth: '100%',
+            height: 'auto',
+            backgroundColor: '#fff',
+            boxShadow: '0 2px 10px rgba(0,0,0,0.08)',
+            borderRadius: '4px'
+          }}
+          onLoad={onLoad}
+          onError={onError}
+        />
+      ) : (
+        <div
+          style={{
+            width: `${PDF_PREVIEW_RENDER_WIDTH}px`,
+            maxWidth: '100%',
+            minHeight: '960px',
+            background: 'linear-gradient(180deg, #fafafa 0%, #f0f0f0 100%)',
+            borderRadius: '4px',
+            boxShadow: '0 2px 10px rgba(0,0,0,0.06)',
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            justifyContent: 'center',
+            color: '#5f6b7a',
+            padding: '24px'
+          }}
+        >
+          <FilePdfOutlined style={{ fontSize: '40px', color: '#ff4d4f' }} />
+          <div style={{ marginTop: '12px', fontWeight: 600 }}>Page {page.pageNumber}</div>
+          <div style={{ marginTop: '6px', fontSize: '12px' }}>Loads automatically when you scroll here</div>
+        </div>
+      )}
     </div>
   );
 };
@@ -888,7 +991,7 @@ const SchoolResourceCategory = ({ user }) => {
   const [searchText, setSearchText] = useState('');
   const [selectedClass, setSelectedClass] = useState('all');
   const [selectedStatus, setSelectedStatus] = useState('all');
-  const [viewMode, setViewMode] = useState('grid');
+  const [viewMode, setViewMode] = useState('list');
   const [categoryFilter, setCategoryFilter] = useState(urlCategory || 'academic');
   const [subCategoryFilter, setSubCategoryFilter] = useState('all');
   const [subjectFilter, setSubjectFilter] = useState('all');
@@ -934,6 +1037,7 @@ const SchoolResourceCategory = ({ user }) => {
   const pdfPageRefs = useRef([]);
   const dragStateRef = useRef({ type: null, element: null, container: null });
   const lastSearchSignatureRef = useRef('');
+  const brandConfigCacheRef = useRef(new Map());
   
   // Set logo URL immediately from user prop
   useEffect(() => {
@@ -979,7 +1083,7 @@ const SchoolResourceCategory = ({ user }) => {
   
   useEffect(() => {
     fetchResources();
-  }, [categoryFilter, user.school_id]);
+  }, [categoryFilter, subCategoryFilter, selectedClass, subjectFilter, selectedStatus, user.school_id]);
 
   useEffect(() => {
     fetchSchoolInfo();
@@ -1013,6 +1117,18 @@ const SchoolResourceCategory = ({ user }) => {
       const params = { school_id: user.school_id };
       if (categoryFilter !== 'all') {
         params.category = categoryFilter;
+      }
+      if (subCategoryFilter !== 'all') {
+        params.sub_category = subCategoryFilter;
+      }
+      if (selectedClass !== 'all') {
+        params.class_level = selectedClass;
+      }
+      if (subjectFilter !== 'all') {
+        params.subject = subjectFilter;
+      }
+      if (selectedStatus !== 'all') {
+        params.approval_status = selectedStatus;
       }
       
       const response = await api.get('/school/resources', { params });
@@ -1176,7 +1292,7 @@ const SchoolResourceCategory = ({ user }) => {
     }
   };
 
-  const fetchLogoPosition = async (resourceId) => {
+const fetchLogoPosition = async (resourceId) => {
   const resource = resources.find((item) => item.resource_id === resourceId);
   if (!resourceId || !supportsBrandCustomization(resource)) return;
   
@@ -1185,14 +1301,16 @@ const SchoolResourceCategory = ({ user }) => {
     const response = await api.get(`/school/logo-position/${resourceId}`, {
       params: { school_id: user.school_id }
     });
-    
-    setLogoPosition({
+
+    const nextState = {
       x: response.data.x_position,
       y: response.data.y_position,
       width: response.data.width,
       opacity: response.data.opacity,
       rotation: response.data.rotation || 0
-    });
+    };
+
+    setLogoPosition(nextState);
     setIsDefaultPosition(response.data.is_default);
     
     // Also set logo URL if we have it
@@ -1203,10 +1321,19 @@ const SchoolResourceCategory = ({ user }) => {
       const fullLogoUrl = getStaticFileUrl(user.logo_path);
       setLogoUrl(fullLogoUrl);
     }
+    return {
+      logoPosition: nextState,
+      isDefaultPosition: response.data.is_default
+    };
   } catch (error) {
     console.error('Error fetching logo position:', error);
-    setLogoPosition({ x: 50, y: 10, width: 20, opacity: 1.0, rotation: 0 });
+    const fallbackState = { x: 50, y: 10, width: 20, opacity: 1.0, rotation: 0 };
+    setLogoPosition(fallbackState);
     setIsDefaultPosition(true);
+    return {
+      logoPosition: fallbackState,
+      isDefaultPosition: true
+    };
   } finally {
     setPositionLoading(false);
   }
@@ -1220,8 +1347,8 @@ const SchoolResourceCategory = ({ user }) => {
       const response = await api.get(`/school/text-watermark/${resourceId}`, {
         params: { school_id: user.school_id }
       });
-      
-      setTextPosition({
+
+      const nextTextPosition = {
         name_x: response.data.name_x,
         name_y: response.data.name_y,
         name_size: response.data.name_size,
@@ -1246,33 +1373,51 @@ const SchoolResourceCategory = ({ user }) => {
         address_font: response.data.address_font || 'Arial',
         address_style: response.data.address_style || 'normal',
         address_color: response.data.address_color || '#000000'
-      });
-      
-      setTextElements({
+      };
+
+      const nextTextElements = {
         showName: response.data.show_name !== false,
         showContact: response.data.show_contact !== false,
         showAddress: response.data.show_address || false
-      });
-      
-      setAddress(response.data.address || '');
+      };
+
+      const nextAddress = response.data.address || '';
+
+      setTextPosition(nextTextPosition);
+      setTextElements(nextTextElements);
+      setAddress(nextAddress);
       setIsDefaultText(response.data.is_default);
+      return {
+        textPosition: nextTextPosition,
+        textElements: nextTextElements,
+        address: nextAddress,
+        isDefaultText: response.data.is_default
+      };
     } catch (error) {
       console.error('Error fetching text position:', error);
-      setTextPosition({
+      const fallbackTextPosition = {
         name_x: 50, name_y: 25, name_size: 20, name_opacity: 1.0, name_rotation: 0,
         contact_x: 50, contact_y: 90, contact_size: 12, contact_opacity: 1.0, contact_rotation: 0,
         address_x: 50, address_y: 85, address_size: 10, address_opacity: 1.0, address_rotation: 0,
         name_font: 'Arial', name_style: 'normal', name_color: '#000000',
         contact_font: 'Arial', contact_style: 'normal', contact_color: '#000000',
         address_font: 'Arial', address_style: 'normal', address_color: '#000000'
-      });
-      setTextElements({
+      };
+      const fallbackTextElements = {
         showName: true,
         showContact: true,
         showAddress: false
-      });
+      };
+      setTextPosition(fallbackTextPosition);
+      setTextElements(fallbackTextElements);
       setAddress('');
       setIsDefaultText(true);
+      return {
+        textPosition: fallbackTextPosition,
+        textElements: fallbackTextElements,
+        address: '',
+        isDefaultText: true
+      };
     }
   };
 
@@ -1300,6 +1445,7 @@ const SchoolResourceCategory = ({ user }) => {
         headers: { 'Content-Type': 'multipart/form-data' }
       });
       
+      brandConfigCacheRef.current.delete(previewResource.resource_id);
       setIsEditingLogo(false);
       setIsDefaultPosition(false);
       message.success('Logo position saved successfully!');
@@ -1355,6 +1501,7 @@ const SchoolResourceCategory = ({ user }) => {
         headers: { 'Content-Type': 'multipart/form-data' }
       });
       
+      brandConfigCacheRef.current.delete(previewResource.resource_id);
       setIsEditingText(false);
       setIsDefaultText(false);
       message.success('Text watermark position saved successfully!');
@@ -1372,6 +1519,7 @@ const SchoolResourceCategory = ({ user }) => {
         params: { school_id: user.school_id }
       });
       
+      brandConfigCacheRef.current.delete(previewResource.resource_id);
       setLogoPosition({ x: 50, y: 10, width: 20, opacity: 1.0, rotation: 0 });
       setIsDefaultPosition(true);
       setIsEditingLogo(false);
@@ -1386,6 +1534,7 @@ const SchoolResourceCategory = ({ user }) => {
     if (!previewResource || !supportsBrandCustomization(previewResource)) return;
     
     try {
+      brandConfigCacheRef.current.delete(previewResource.resource_id);
       setTextPosition({
         name_x: 50, name_y: 25, name_size: 20, name_opacity: 1.0, name_rotation: 0,
         contact_x: 50, contact_y: 90, contact_size: 12, contact_opacity: 1.0, contact_rotation: 0,
@@ -1602,8 +1751,26 @@ const SchoolResourceCategory = ({ user }) => {
   }
 
   if (supportsBrandCustomization(record)) {
-    await fetchLogoPosition(record.resource_id);
-    await fetchTextPosition(record.resource_id);
+    const cachedBrandConfig = brandConfigCacheRef.current.get(record.resource_id);
+
+    if (cachedBrandConfig) {
+      setLogoPosition(cachedBrandConfig.logoPosition);
+      setIsDefaultPosition(cachedBrandConfig.isDefaultPosition);
+      setTextPosition(cachedBrandConfig.textPosition);
+      setTextElements(cachedBrandConfig.textElements);
+      setAddress(cachedBrandConfig.address);
+      setIsDefaultText(cachedBrandConfig.isDefaultText);
+    } else {
+      const [logoState, textState] = await Promise.all([
+        fetchLogoPosition(record.resource_id),
+        fetchTextPosition(record.resource_id)
+      ]);
+
+      brandConfigCacheRef.current.set(record.resource_id, {
+        ...(logoState || {}),
+        ...(textState || {})
+      });
+    }
   }
 
   const lowerType = (record.file_type || '').toLowerCase();
@@ -1658,10 +1825,9 @@ const SchoolResourceCategory = ({ user }) => {
     try {
       const response = await api.get(`/resources/${resource.resource_id}/pdf-metadata`);
       const pageCount = response.data?.page_count || 1;
-      const width = 800;
       const pages = Array.from({ length: pageCount }, (_, index) => ({
         pageNumber: index + 1,
-        url: `${API}/resources/${resource.resource_id}/pdf-page/${index + 1}?width=${width}`
+        url: `${API}/resources/${resource.resource_id}/pdf-page/${index + 1}?width=${PDF_PREVIEW_RENDER_WIDTH}`
       }));
       setPdfPages(pages);
     } catch (error) {
@@ -1819,6 +1985,9 @@ const SchoolResourceCategory = ({ user }) => {
       if (isVideoLink) {
         return previewResource.file_path;
       }
+      if (isImageResource(previewResource)) {
+        return getImagePreviewUrl(previewResource.resource_id, RESOURCE_MODAL_IMAGE_WIDTH);
+      }
       return `${API}/resources/${previewResource.resource_id}/preview`;
     };
     const previewUrl = getPreviewUrl();
@@ -1961,18 +2130,9 @@ const SchoolResourceCategory = ({ user }) => {
                   margin: '0 auto 16px'
                 }}
               >
-                <img
-                  src={page.url}
-                  alt={`Page ${page.pageNumber}`}
-                  style={{
-                    display: 'block',
-                    width: '800px',
-                    maxWidth: '100%',
-                    height: 'auto',
-                    backgroundColor: '#fff',
-                    boxShadow: '0 2px 10px rgba(0,0,0,0.08)',
-                    borderRadius: '4px'
-                  }}
+                <LazyPdfPageImage
+                  page={page}
+                  eager={index < PDF_PREVIEW_EAGER_PAGES}
                   onLoad={() => {
                     if (index === 0) {
                       setPreviewLoading(false);
@@ -2256,9 +2416,11 @@ const SchoolResourceCategory = ({ user }) => {
       return (
         <div style={{ height: '150px', overflow: 'hidden', background: '#f5f5f5', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
           <img
-            src={fileUrl}
+            src={getImagePreviewUrl(resource.resource_id, RESOURCE_CARD_IMAGE_WIDTH, 74)}
             alt={resource.name}
             style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+            loading="lazy"
+            decoding="async"
             onError={(e) => { 
               e.target.style.display = 'none';
               e.target.parentElement.innerHTML = `<div style="display: flex; align-items: center; justify-content: center; height: 100%; color: #722ed1;"><span style="font-size: 48px;">📷</span></div>`;
@@ -2355,43 +2517,12 @@ const SchoolResourceCategory = ({ user }) => {
         );
       }
 
-      return (
-        <VideoThumbnail
-          videoUrl={fileUrl}
-          resource={resource}
-          fileType={resource.file_type}
-        />
-      );
+      return <MediaPlaceholder icon={<VideoCameraOutlined />} label="Video Resource" sublabel="Streams only after you open preview" accent="#13c2c2" background="linear-gradient(135deg, #e6fffb 0%, #f4fffb 100%)" />;
     }
 
-    // PDFs - show first page as thumbnail
+    // PDFs - use a lightweight placeholder so the list does not fetch the full file.
     if (fileType.includes('pdf') || fileExtension === 'pdf') {
-      return (
-        <div
-          style={{
-            height: '150px',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            background: '#f5f5f5',
-            overflow: 'hidden',
-            position: 'relative'
-          }}
-        >
-          <div style={{ position: 'relative', width: '100%', height: '100%' }}>
-            <iframe
-              src={`${fileUrl}#page=1&toolbar=0&navpanes=0&scrollbar=0&zoom=50`}
-              style={{
-                width: '100%',
-                height: '100%',
-                border: 'none',
-                pointerEvents: 'none'
-              }}
-              title={`PDF thumbnail - ${resource.name}`}
-            />
-          </div>
-        </div>
-      );
+      return <MediaPlaceholder icon={<FilePdfOutlined />} label="PDF Document" sublabel="Preview pages load after opening" accent="#ff4d4f" background="linear-gradient(135deg, #fff1f0 0%, #fff7f7 100%)" />;
     }
 
     // Default

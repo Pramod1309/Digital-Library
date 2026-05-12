@@ -61,6 +61,8 @@ import config from '../../config';
 const BACKEND_URL = config.apiBaseUrl;
 const API = `${BACKEND_URL}/api`;
 const VIDEO_LINK_DOMAINS = ['youtube.com', 'youtu.be', 'vimeo.com', 'dailymotion.com', 'bilibili.com'];
+const RESOURCE_CARD_IMAGE_WIDTH = 480;
+const RESOURCE_MODAL_IMAGE_WIDTH = 1600;
 const DEFAULT_RESOURCE_TAXONOMY = {
   programs: ['Playgroup', 'Nursery', 'LKG', 'UKG'],
   subjects: ['English', 'Maths', 'EVS', 'Hindi', 'Arts & Crafts', 'Music', 'Physical Education']
@@ -181,6 +183,10 @@ const isVideoLinkResource = (resource) => {
   if (!resource) return false;
   return resource.is_video_link === true || resource.is_video_link === 'true' || isKnownVideoLink(resource.file_path);
 };
+
+const getImagePreviewUrl = (resourceId, maxWidth = RESOURCE_MODAL_IMAGE_WIDTH, quality = 82) => (
+  `${API}/resources/${resourceId}/image-preview?max_width=${maxWidth}&quality=${quality}`
+);
 
 // VideoThumbnail component for handling uploaded video thumbnails
 const VideoThumbnail = ({ videoUrl, resource, fileType }) => {
@@ -1256,7 +1262,7 @@ const AdminResourceCategory = ({ category, subCategory, title, description }) =>
       return (
         <div style={{ textAlign: 'center', maxHeight: '600px', overflow: 'auto' }}>
           <img
-            src={previewUrl}
+            src={getImagePreviewUrl(previewResource.resource_id, RESOURCE_MODAL_IMAGE_WIDTH)}
             alt={previewResource.name}
             style={{
               maxWidth: '100%',
@@ -1474,32 +1480,25 @@ const AdminResourceCategory = ({ category, subCategory, title, description }) =>
     const fileType = resource.file_type?.toLowerCase() || '';
     const fileExtension = fileUrl?.split('.').pop()?.toLowerCase() || '';
 
-    // For PDFs - show first page as thumbnail
+    // For PDFs - use a lightweight placeholder so the grid does not fetch the full PDF file.
     if (fileType.includes('pdf') || fileExtension === 'pdf') {
       return (
         <div
           style={{
             height: '150px',
             display: 'flex',
+            flexDirection: 'column',
             alignItems: 'center',
             justifyContent: 'center',
-            background: '#f5f5f5',
-            overflow: 'hidden',
-            position: 'relative'
+            background: 'linear-gradient(135deg, #fff1f0 0%, #fff7f7 100%)',
+            color: '#ff4d4f',
+            gap: '8px',
+            padding: '16px'
           }}
         >
-          <div style={{ position: 'relative', width: '100%', height: '100%' }}>
-            <iframe
-              src={`${fileUrl}#page=1&toolbar=0&navpanes=0&scrollbar=0&zoom=50`}
-              style={{
-                width: '100%',
-                height: '100%',
-                border: 'none',
-                pointerEvents: 'none'
-              }}
-              title={`PDF thumbnail - ${resource.name}`}
-            />
-          </div>
+          <FilePdfOutlined style={{ fontSize: '42px' }} />
+          <div style={{ fontSize: '13px', fontWeight: 600, color: '#1f1f1f' }}>PDF Document</div>
+          <div style={{ fontSize: '11px', color: '#5f6b7a', textAlign: 'center' }}>Loads when you open preview</div>
         </div>
       );
     }
@@ -1510,7 +1509,7 @@ const AdminResourceCategory = ({ category, subCategory, title, description }) =>
       return (
         <div style={{ position: 'relative', height: '150px', overflow: 'hidden' }}>
           <img
-            src={fileUrl}
+            src={getImagePreviewUrl(resource.resource_id, RESOURCE_CARD_IMAGE_WIDTH, 74)}
             alt={resource.name}
             style={{
               width: '100%',
@@ -1518,6 +1517,8 @@ const AdminResourceCategory = ({ category, subCategory, title, description }) =>
               objectFit: 'cover',
               transition: 'transform 0.3s'
             }}
+            loading="lazy"
+            decoding="async"
             onMouseEnter={(e) => e.currentTarget.style.transform = 'scale(1.05)'}
             onMouseLeave={(e) => e.currentTarget.style.transform = 'scale(1)'}
             onError={(e) => {
@@ -1641,13 +1642,25 @@ const AdminResourceCategory = ({ category, subCategory, title, description }) =>
         );
       }
       
-      // For uploaded video files - use a simpler approach
+      // For uploaded video files - avoid preloading metadata for every card in the grid.
       return (
-        <VideoThumbnail 
-          videoUrl={fileUrl} 
-          resource={resource}
-          fileType={resource.file_type}
-        />
+        <div
+          style={{
+            height: '150px',
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            justifyContent: 'center',
+            background: 'linear-gradient(135deg, #e6fffb 0%, #f4fffb 100%)',
+            color: '#13c2c2',
+            gap: '8px',
+            padding: '16px'
+          }}
+        >
+          <VideoCameraOutlined style={{ fontSize: '42px' }} />
+          <div style={{ fontSize: '13px', fontWeight: 600, color: '#1f1f1f' }}>Video Resource</div>
+          <div style={{ fontSize: '11px', color: '#5f6b7a', textAlign: 'center' }}>Streams when preview is opened</div>
+        </div>
       );
     }
 

@@ -3,6 +3,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, StreamingResponse, JSONResponse
 from fastapi.security import OAuth2PasswordBearer
 from fastapi.middleware.gzip import GZipMiddleware
+from starlette.background import BackgroundTask
 from dotenv import load_dotenv
 import os
 from starlette.middleware.cors import CORSMiddleware
@@ -18,7 +19,7 @@ from typing import Optional, List, Union, Dict, Any
 import uuid
 import shutil
 from jose import JWTError, jwt
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFont, ImageOps
 import fitz
 from io import BytesIO, StringIO
 import tempfile
@@ -39,6 +40,7 @@ import base64
 from email.message import EmailMessage
 from email.utils import formataddr
 from collections import Counter, defaultdict
+from functools import lru_cache
 
 
 # Import database
@@ -94,6 +96,13 @@ SETTINGS_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 # Create output directory for generated admin batch watermark bundles
 BATCH_WATERMARK_OUTPUT_DIR = ROOT_DIR / "generated" / "batch_watermark_jobs"
 BATCH_WATERMARK_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
+# Cache generated preview assets so repeated previews stay fast on the VPS.
+RESOURCE_PREVIEW_CACHE_DIR = ROOT_DIR / "generated" / "resource_previews"
+RESOURCE_PREVIEW_IMAGE_CACHE_DIR = RESOURCE_PREVIEW_CACHE_DIR / "images"
+RESOURCE_PREVIEW_PDF_CACHE_DIR = RESOURCE_PREVIEW_CACHE_DIR / "pdf_pages"
+RESOURCE_PREVIEW_IMAGE_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+RESOURCE_PREVIEW_PDF_CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
 # Create the main app
 app = FastAPI()
@@ -1765,6 +1774,38 @@ def get_full_file_path(file_path: str) -> str:
         return full_path
     
     raise FileNotFoundError(f"File not found: {file_path}")
+
+def get_file_signature(file_path: str) -> str:
+    stat = os.stat(file_path)
+    return f"{stat.st_mtime_ns}_{stat.st_size}"
+
+def cleanup_temp_files(paths: List[str]):
+    for path in paths:
+        if not path:
+            continue
+        try:
+            if os.path.exists(path):
+                os.remove(path)
+        except Exception as cleanup_error:
+            print(f"Error cleaning up temp file {path}: {cleanup_error}")
+
+def build_image_preview_cache_path(resource_id: str, file_signature: str, max_width: int, quality: int, extension: str) -> Path:
+    resource_dir = RESOURCE_PREVIEW_IMAGE_CACHE_DIR / resource_id / file_signature
+    resource_dir.mkdir(parents=True, exist_ok=True)
+    return resource_dir / f"w{max_width}_q{quality}.{extension}"
+
+def build_pdf_page_cache_path(resource_id: str, file_signature: str, page_number: int, width: int) -> Path:
+    resource_dir = RESOURCE_PREVIEW_PDF_CACHE_DIR / resource_id / file_signature
+    resource_dir.mkdir(parents=True, exist_ok=True)
+    return resource_dir / f"page_{page_number}_w{width}.png"
+
+@lru_cache(maxsize=256)
+def get_cached_pdf_page_count(file_path: str, file_signature: str) -> int:
+    pdf_document = fitz.open(file_path)
+    try:
+        return len(pdf_document)
+    finally:
+        pdf_document.close()
 
 def get_school_logo_path(school: School) -> str:
     """Get school logo path"""
@@ -6266,57 +6307,18 @@ async def preview_resource(
 ):
     """Preview a resource file (supports all file types)"""
     try:
-        print(f"Preview requested for resource_id: {resource_id}")
-        
-        # Get the resource from the database
         resource = db.query(Resource).filter(Resource.resource_id == resource_id).first()
         if not resource:
             raise HTTPException(status_code=404, detail="Resource not found")
-        
-        print(f"Resource found: {resource.name}, file_path: {resource.file_path}, file_type: {resource.file_type}")
-        
-        # Get the file path - FIXED: Handle different path formats
-        file_path = resource.file_path
-        
-        # Remove leading slash if present
-        if file_path.startswith('/'):
-            file_path = file_path[1:]
-        
-        full_file_path = os.path.join(ROOT_DIR, file_path)
-        print(f"Looking for file at: {full_file_path}")
-        
-        if not os.path.exists(full_file_path):
-            # Try alternative path structure
-            if file_path.startswith('uploads/'):
-                alt_path = file_path
-            else:
-                alt_path = os.path.join("uploads", file_path)
-            
-            full_file_path = os.path.join(ROOT_DIR, alt_path)
-            print(f"Trying alternative path: {full_file_path}")
-            
-            if not os.path.exists(full_file_path):
-                # Last attempt: check if file exists in resources directory
-                filename = os.path.basename(file_path)
-                resource_dir = os.path.join(ROOT_DIR, "uploads", "resources", resource.category)
-                full_file_path = os.path.join(resource_dir, filename)
-                print(f"Trying resources directory: {full_file_path}")
-                
-                if not os.path.exists(full_file_path):
-                    raise HTTPException(status_code=404, detail="File not found on server")
-        
-        print(f"File found for preview: {full_file_path}")
-        
-        # Determine the correct media type
+        try:
+            full_file_path = get_full_file_path(resource.file_path)
+        except FileNotFoundError:
+            raise HTTPException(status_code=404, detail="File not found on server")
+
         file_type = resource.file_type
         if not file_type or file_type == 'application/octet-stream':
-            # Try to infer from file extension
-            import mimetypes
             file_type = mimetypes.guess_type(full_file_path)[0] or 'application/octet-stream'
-            print(f"Inferred file type: {file_type}")
-        
-        # Return the file for inline preview with proper headers
-        # Using "inline" disposition allows browser to display the file
+
         return FileResponse(
             path=full_file_path,
             filename=resource.name,
@@ -6324,7 +6326,7 @@ async def preview_resource(
             headers={
                 "Content-Disposition": f"inline; filename=\"{resource.name}\"",
                 "Accept-Ranges": "bytes",
-                "Cache-Control": "public, max-age=3600"
+                "Cache-Control": "public, max-age=86400"
             }
         )
         
@@ -6332,6 +6334,103 @@ async def preview_resource(
         raise
     except Exception as e:
         print(f"Preview error: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+@api_router.get("/resources/{resource_id}/image-preview")
+async def preview_image_resource(
+    resource_id: str,
+    max_width: int = 1600,
+    quality: int = 82,
+    db: Session = Depends(get_db)
+):
+    """Return a resized image preview so large images open faster than the original file."""
+    try:
+        resource = db.query(Resource).filter(Resource.resource_id == resource_id).first()
+        if not resource:
+            raise HTTPException(status_code=404, detail="Resource not found")
+
+        try:
+            full_file_path = get_full_file_path(resource.file_path)
+        except FileNotFoundError:
+            raise HTTPException(status_code=404, detail="File not found on server")
+
+        if not is_image_type(resource.file_type, full_file_path):
+            raise HTTPException(status_code=400, detail="Resource is not an image")
+
+        if full_file_path.lower().endswith(".svg") or "svg" in (resource.file_type or "").lower():
+            return FileResponse(
+                path=full_file_path,
+                media_type=resource.file_type or "image/svg+xml",
+                headers={"Cache-Control": "public, max-age=86400"}
+            )
+
+        max_width = int(clamp(max_width, 200, 2200))
+        quality = int(clamp(quality, 40, 95))
+        file_signature = get_file_signature(full_file_path)
+        source_extension = Path(full_file_path).suffix.lower()
+        likely_alpha = source_extension in {".png", ".webp", ".gif"}
+        cache_extension = "png" if likely_alpha else "jpg"
+        cache_path = build_image_preview_cache_path(
+            resource.resource_id,
+            file_signature,
+            max_width,
+            quality,
+            cache_extension
+        )
+
+        if not cache_path.exists():
+            with Image.open(full_file_path) as source_image:
+                preview_image = ImageOps.exif_transpose(source_image)
+                if preview_image.width > max_width:
+                    ratio = max_width / float(preview_image.width)
+                    target_height = max(1, int(preview_image.height * ratio))
+                    preview_image = preview_image.resize((max_width, target_height), Image.Resampling.LANCZOS)
+
+                has_alpha = "A" in preview_image.getbands()
+                actual_cache_extension = "png" if has_alpha else "jpg"
+                if actual_cache_extension != cache_extension:
+                    cache_extension = actual_cache_extension
+                    cache_path = build_image_preview_cache_path(
+                        resource.resource_id,
+                        file_signature,
+                        max_width,
+                        quality,
+                        cache_extension
+                    )
+
+                if not cache_path.exists():
+                    temp_file = tempfile.NamedTemporaryFile(
+                        suffix=f".{cache_extension}",
+                        delete=False,
+                        dir=str(cache_path.parent)
+                    )
+                    temp_file.close()
+                    try:
+                        save_image = preview_image
+                        if cache_extension == "jpg" and preview_image.mode != "RGB":
+                            save_image = preview_image.convert("RGB")
+
+                        save_kwargs = {"optimize": True}
+                        if cache_extension == "jpg":
+                            save_kwargs["quality"] = quality
+
+                        save_image.save(temp_file.name, **save_kwargs)
+                        os.replace(temp_file.name, cache_path)
+                    finally:
+                        if os.path.exists(temp_file.name):
+                            os.remove(temp_file.name)
+
+        return FileResponse(
+            path=str(cache_path),
+            media_type="image/png" if cache_path.suffix.lower() == ".png" else "image/jpeg",
+            headers={"Cache-Control": "public, max-age=86400"}
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Image preview error: {str(e)}")
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
@@ -6355,14 +6454,13 @@ async def pdf_metadata(
         if ("pdf" not in file_type) and (not full_file_path.lower().endswith(".pdf")):
             raise HTTPException(status_code=400, detail="Resource is not a PDF")
 
-        pdf_document = fitz.open(full_file_path)
-        page_sizes = [
-            {"width": page.rect.width, "height": page.rect.height}
-            for page in pdf_document
-        ]
-        pdf_document.close()
+        file_signature = get_file_signature(full_file_path)
+        page_count = get_cached_pdf_page_count(full_file_path, file_signature)
 
-        return {"page_count": len(page_sizes), "page_sizes": page_sizes}
+        return {
+            "page_count": page_count,
+            "cache_key": file_signature
+        }
     except HTTPException:
         raise
     except Exception as e:
@@ -6397,22 +6495,40 @@ async def pdf_page_image(
 
         width = int(clamp(width, 300, 1800))
 
-        pdf_document = fitz.open(full_file_path)
-        if page_number > len(pdf_document):
-            pdf_document.close()
+        file_signature = get_file_signature(full_file_path)
+        page_count = get_cached_pdf_page_count(full_file_path, file_signature)
+        if page_number > page_count:
             raise HTTPException(status_code=404, detail="Page not found")
 
-        page = pdf_document[page_number - 1]
-        zoom = width / page.rect.width if page.rect.width else 1.0
-        matrix = fitz.Matrix(zoom, zoom)
-        pix = page.get_pixmap(matrix=matrix, alpha=False)
-        image_bytes = pix.tobytes("png")
-        pdf_document.close()
+        cache_path = build_pdf_page_cache_path(resource.resource_id, file_signature, page_number, width)
 
-        return Response(
-            content=image_bytes,
+        if not cache_path.exists():
+            pdf_document = fitz.open(full_file_path)
+            try:
+                page = pdf_document[page_number - 1]
+                zoom = width / page.rect.width if page.rect.width else 1.0
+                matrix = fitz.Matrix(zoom, zoom)
+                pix = page.get_pixmap(matrix=matrix, alpha=False)
+
+                temp_file = tempfile.NamedTemporaryFile(
+                    suffix=".png",
+                    delete=False,
+                    dir=str(cache_path.parent)
+                )
+                temp_file.close()
+                try:
+                    pix.save(temp_file.name)
+                    os.replace(temp_file.name, cache_path)
+                finally:
+                    if os.path.exists(temp_file.name):
+                        os.remove(temp_file.name)
+            finally:
+                pdf_document.close()
+
+        return FileResponse(
+            path=str(cache_path),
             media_type="image/png",
-            headers={"Cache-Control": "public, max-age=3600"}
+            headers={"Cache-Control": "public, max-age=86400"}
         )
 
     except HTTPException:
@@ -9001,34 +9117,32 @@ async def download_resource_with_logo(
             db.commit()
             print(f"Download logged for school: {school_name}")
 
-        # If PDF format is requested and the output is an image, convert to PDF bytes
+        response_cleanup_paths: List[str] = []
+        if watermarked_file and watermarked_file != full_file_path and os.path.exists(watermarked_file):
+            response_cleanup_paths.append(watermarked_file)
+
+        # If PDF format is requested and the output is an image, convert to a temporary PDF file
         if requested_format == "pdf":
             if is_image_type(resource.file_type, final_file_path):
-                file_content = image_bytes_to_pdf_bytes(final_file_path)
+                pdf_bytes = image_bytes_to_pdf_bytes(final_file_path)
+                temp_pdf = tempfile.NamedTemporaryFile(suffix=".pdf", delete=False)
+                temp_pdf.write(pdf_bytes)
+                temp_pdf.close()
+                response_cleanup_paths.append(temp_pdf.name)
+                response_file_path = temp_pdf.name
                 media_type = "application/pdf"
                 forced_extension = ".pdf"
             elif (resource.file_type or "").lower() == "application/pdf" or final_file_path.lower().endswith(".pdf"):
-                with open(final_file_path, 'rb') as f:
-                    file_content = f.read()
+                response_file_path = final_file_path
                 media_type = "application/pdf"
                 forced_extension = ".pdf"
             else:
                 raise HTTPException(status_code=400, detail="PDF format is only supported for image resources")
         else:
-            # Default: read file content as-is
-            with open(final_file_path, 'rb') as f:
-                file_content = f.read()
+            response_file_path = final_file_path
             media_type = "application/zip" if final_file_path.lower().endswith(".zip") else (resource.file_type or 'application/octet-stream')
             forced_extension = ".zip" if final_file_path.lower().endswith(".zip") else None
-        
-        # Clean up temp watermarked file if created
-        if watermarked_file and watermarked_file != full_file_path and os.path.exists(watermarked_file):
-            try:
-                os.remove(watermarked_file)
-                print(f"Cleaned up temp file: {watermarked_file}")
-            except Exception as cleanup_error:
-                print(f"Error cleaning up temp file: {cleanup_error}")
-        
+
         # Determine download filename
         file_extension = os.path.splitext(resource.name)[1]
         if forced_extension:
@@ -9041,16 +9155,20 @@ async def download_resource_with_logo(
         
         download_filename = f"{resource.name.replace(' ', '_')}{filename_suffix}{file_extension}"
     
-        print(f"Returning file: {download_filename}, size: {len(file_content)} bytes")
+        file_size_bytes = os.path.getsize(response_file_path)
+        print(f"Returning file: {download_filename}, size: {file_size_bytes} bytes")
         print(f"{'='*60}\n")
-        
-        return Response(
-            content=file_content,
+
+        cleanup_task = None
+        if response_cleanup_paths:
+            cleanup_task = BackgroundTask(cleanup_temp_files, response_cleanup_paths)
+
+        return FileResponse(
+            path=response_file_path,
             media_type=media_type,
-            headers={
-                "Content-Disposition": f"attachment; filename=\"{download_filename}\"",
-                "Content-Length": str(len(file_content))
-            }
+            filename=download_filename,
+            headers={"Content-Length": str(file_size_bytes)},
+            background=cleanup_task
         )
         
     except HTTPException as he:

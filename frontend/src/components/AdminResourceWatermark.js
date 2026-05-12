@@ -47,6 +47,9 @@ const BACKEND_URL = config.apiBaseUrl;
 const API = `${BACKEND_URL}/api`;
 const VIDEO_LINK_DOMAINS = ['youtube.com', 'youtu.be', 'vimeo.com', 'dailymotion.com', 'bilibili.com'];
 const VIDEO_FILE_EXTENSIONS = ['mp4', 'webm', 'ogg', 'mov', 'avi', 'mkv'];
+const RESOURCE_PREVIEW_IMAGE_WIDTH = 1600;
+const PDF_PREVIEW_RENDER_WIDTH = 800;
+const PDF_PREVIEW_EAGER_PAGES = 2;
 const FONT_OPTIONS = ['Arial', 'Times New Roman', 'Georgia', 'Verdana', 'Courier New'];
 const STYLE_OPTIONS = ['normal', 'bold', 'italic', 'bold italic'];
 const DEFAULT_EMAIL_SUBJECT = 'Your Customized Watermarked Resources Are Ready for {{school_name}} 📚✨';
@@ -77,6 +80,10 @@ const getStaticFileUrl = (path) => {
   }
   return `${BACKEND_URL}/uploads/${cleanPath}`;
 };
+
+const getImagePreviewUrl = (resourceId, maxWidth = RESOURCE_PREVIEW_IMAGE_WIDTH, quality = 82) => (
+  `${API}/resources/${resourceId}/image-preview?max_width=${maxWidth}&quality=${quality}`
+);
 
 const normalizeLabelKey = (value = '') => (
   value
@@ -305,6 +312,80 @@ const replaceEmailPlaceholders = (templateText, school, folder) => (
     .replaceAll('{{school_id}}', school?.school_id || '')
     .replaceAll('{{folder_name}}', folder?.folder_name || '')
 );
+
+const LazyPdfPageImage = ({ page, eager = false, onLoad, onError }) => {
+  const wrapperRef = useRef(null);
+  const [shouldLoad, setShouldLoad] = useState(eager);
+
+  useEffect(() => {
+    if (shouldLoad || eager) {
+      setShouldLoad(true);
+      return undefined;
+    }
+
+    const target = wrapperRef.current;
+    if (!target || typeof IntersectionObserver === 'undefined') {
+      setShouldLoad(true);
+      return undefined;
+    }
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) {
+          setShouldLoad(true);
+          observer.disconnect();
+        }
+      },
+      { rootMargin: '450px 0px' }
+    );
+
+    observer.observe(target);
+    return () => observer.disconnect();
+  }, [eager, shouldLoad]);
+
+  return (
+    <div ref={wrapperRef}>
+      {shouldLoad ? (
+        <img
+          src={page.url}
+          alt={`Page ${page.pageNumber}`}
+          style={{
+            display: 'block',
+            width: PDF_PREVIEW_RENDER_WIDTH,
+            maxWidth: '100%',
+            height: 'auto',
+            backgroundColor: '#fff',
+            borderRadius: 6,
+            boxShadow: '0 2px 12px rgba(0,0,0,0.08)'
+          }}
+          onLoad={onLoad}
+          onError={onError}
+        />
+      ) : (
+        <div
+          style={{
+            width: PDF_PREVIEW_RENDER_WIDTH,
+            maxWidth: '100%',
+            minHeight: '960px',
+            background: 'linear-gradient(180deg, #fafafa 0%, #f0f0f0 100%)',
+            borderRadius: 6,
+            boxShadow: '0 2px 10px rgba(0,0,0,0.06)',
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            justifyContent: 'center',
+            color: '#5f6b7a',
+            padding: '24px'
+          }}
+        >
+          <FilePdfOutlined style={{ fontSize: '40px', color: '#ff4d4f' }} />
+          <div style={{ marginTop: 12, fontWeight: 600 }}>Page {page.pageNumber}</div>
+          <div style={{ marginTop: 6, fontSize: 12 }}>Loads automatically when you scroll here</div>
+        </div>
+      )}
+    </div>
+  );
+};
 
 const TextOverlay = ({
   school,
@@ -1436,7 +1517,7 @@ const AdminResourceWatermark = () => {
       const pageCount = response.data?.page_count || 1;
       const pages = Array.from({ length: pageCount }, (_, index) => ({
         pageNumber: index + 1,
-        url: `${API}/resources/${resource.resource_id}/pdf-page/${index + 1}?width=800`
+        url: `${API}/resources/${resource.resource_id}/pdf-page/${index + 1}?width=${PDF_PREVIEW_RENDER_WIDTH}`
       }));
       setPdfPages(pages);
     } catch (error) {
@@ -1519,7 +1600,7 @@ const AdminResourceWatermark = () => {
           }}
         >
           <img
-            src={previewUrl}
+            src={getImagePreviewUrl(activeResource.resource_id, RESOURCE_PREVIEW_IMAGE_WIDTH)}
             alt={activeResource.name}
             style={{
               display: 'block',
@@ -1586,18 +1667,9 @@ const AdminResourceWatermark = () => {
                   margin: '0 auto 16px'
                 }}
               >
-                <img
-                  src={page.url}
-                  alt={`Page ${page.pageNumber}`}
-                  style={{
-                    display: 'block',
-                    width: 800,
-                    maxWidth: '100%',
-                    height: 'auto',
-                    backgroundColor: '#fff',
-                    borderRadius: 6,
-                    boxShadow: '0 2px 12px rgba(0,0,0,0.08)'
-                  }}
+                <LazyPdfPageImage
+                  page={page}
+                  eager={index < PDF_PREVIEW_EAGER_PAGES}
                   onLoad={() => {
                     if (index === 0) {
                       setPreviewLoading(false);
