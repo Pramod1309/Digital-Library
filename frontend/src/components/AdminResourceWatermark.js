@@ -798,6 +798,12 @@ const AdminResourceWatermark = () => {
   );
 
   const clearGeneratedState = () => {
+    if (generatedJob?.job_id) {
+      void api.delete(`/admin/batch-watermark/job/${generatedJob.job_id}`).catch((error) => {
+        console.warn('Failed to clean up batch watermark job:', error);
+      });
+    }
+
     setGeneratedJob(null);
     setSelectedGeneratedSchoolIds([]);
     setEmailDrafts([]);
@@ -1278,6 +1284,8 @@ const AdminResourceWatermark = () => {
       return;
     }
 
+    const previousJobId = generatedJob?.job_id;
+
     try {
       setGenerating(true);
 
@@ -1309,12 +1317,18 @@ const AdminResourceWatermark = () => {
         school_overrides: schoolOverridePayload
       });
 
+      if (previousJobId && previousJobId !== response.data?.job_id) {
+        void api.delete(`/admin/batch-watermark/job/${previousJobId}`).catch((error) => {
+          console.warn('Failed to clean up previous batch watermark job:', error);
+        });
+      }
+
       setGeneratedJob(response.data);
       setSelectedGeneratedSchoolIds((response.data?.folders || []).map((folder) => folder.school_id));
       setEmailDrafts([]);
       setSelectedEmailDraftIds([]);
       setEditingDraft(null);
-      message.success('Customized school folders generated successfully');
+      message.success('Customized school folders prepared successfully');
     } catch (error) {
       console.error('Error generating folders:', error);
       message.error(error.response?.data?.detail || 'Failed to generate school folders');
@@ -2423,7 +2437,7 @@ const AdminResourceWatermark = () => {
                 type="success"
                 showIcon
                 style={{ marginBottom: 16 }}
-                message="Folders created successfully."
+                message="Folders prepared successfully."
                 description="Select single, multiple, or all school folders below, then download them as a ZIP while keeping each school folder separate by name."
               />
               <Table

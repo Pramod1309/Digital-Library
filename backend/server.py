@@ -2541,7 +2541,12 @@ def create_branded_resource_package(
         preview_name = "branding_preview.png"
         details_name = "branding_details.txt"
 
-        with zipfile.ZipFile(package_output, "w", zipfile.ZIP_DEFLATED) as package_zip:
+        with zipfile.ZipFile(
+            package_output,
+            "w",
+            zipfile.ZIP_DEFLATED,
+            compresslevel=get_batch_watermark_zip_compression_level()
+        ) as package_zip:
             package_zip.write(source_path, arcname=original_name)
             package_zip.write(preview_result, arcname=preview_name)
             package_zip.write(details_path, arcname=details_name)
@@ -2563,6 +2568,46 @@ def ensure_batch_job_within_root(job_path: Path) -> Path:
 def cleanup_batch_job_directory(job_path: Path):
     if job_path.exists():
         shutil.rmtree(job_path, ignore_errors=True)
+
+def cleanup_stale_batch_jobs(max_age_hours: int = 24):
+    """Remove old batch watermark jobs so the generated folder stays lean."""
+    if not BATCH_WATERMARK_OUTPUT_DIR.exists():
+        return
+
+    cutoff = datetime.utcnow() - timedelta(hours=max_age_hours)
+
+    for job_dir in BATCH_WATERMARK_OUTPUT_DIR.iterdir():
+        if not job_dir.is_dir():
+            continue
+
+        manifest_path = job_dir / "manifest.json"
+        created_at = None
+
+        if manifest_path.exists():
+            try:
+                with open(manifest_path, "r", encoding="utf-8") as manifest_file:
+                    manifest = json.load(manifest_file)
+                created_at = manifest.get("created_at")
+            except Exception:
+                created_at = None
+
+        job_created_at = None
+        if created_at:
+            try:
+                job_created_at = datetime.fromisoformat(created_at)
+            except Exception:
+                job_created_at = None
+
+        if job_created_at is None:
+            try:
+                job_created_at = datetime.utcfromtimestamp(job_dir.stat().st_mtime)
+            except Exception:
+                job_created_at = None
+
+        if job_created_at and job_created_at < cutoff:
+            cleanup_batch_job_directory(job_dir)
+
+cleanup_stale_batch_jobs()
 
 def build_school_folder_name(existing_names: set, school: School) -> str:
     base_name = sanitize_batch_name(school.school_name, school.school_id)
@@ -2623,6 +2668,159 @@ def generate_batch_watermarked_output(
         str(output_path)
     )
 
+def build_batch_watermark_output_name(resource: Resource, source_path: str, used_output_names: set) -> str:
+    resource_kind = get_batch_watermark_resource_kind(resource)
+    resource_ext = ".zip" if resource_kind == "other" else get_batch_resource_extension(resource, source_path)
+    resource_label = sanitize_batch_name(
+        Path(resource.name).stem if Path(resource.name).suffix else resource.name,
+        resource.resource_id
+    )
+    output_name = f"{resource_label}{resource_ext}"
+    if output_name in used_output_names:
+        output_name = f"{resource_label}_{resource.resource_id[:8]}{resource_ext}"
+    used_output_names.add(output_name)
+    return output_name
+
+def build_batch_watermark_manifest(
+    job_id: str,
+    generated_by: str,
+    ordered_schools: List[School],
+    ordered_resources: List[Resource],
+    templates: Dict[str, Dict[str, Any]],
+    school_overrides: Dict[str, Dict[str, Dict[str, Any]]]
+) -> Dict[str, Any]:
+    folder_names = set()
+    folders = []
+
+    for school in ordered_schools:
+        folder_name = build_school_folder_name(folder_names, school)
+        generated_files = []
+        used_output_names = set()
+
+        for resource in ordered_resources:
+            source_path = get_full_file_path(resource.file_path)
+            output_name = build_batch_watermark_output_name(resource, source_path, used_output_names)
+            generated_files.append({
+                "resource_id": resource.resource_id,
+                "resource_name": resource.name,
+                "file_name": output_name
+            })
+
+        folders.append({
+            "school_id": school.school_id,
+            "school_name": school.school_name,
+            "folder_name": folder_name,
+            "file_count": len(generated_files),
+            "files": generated_files
+        })
+
+    return {
+        "job_id": job_id,
+        "generated_by": generated_by,
+        "created_at": datetime.utcnow().isoformat(),
+        "school_ids": [school.school_id for school in ordered_schools],
+        "resource_ids": [resource.resource_id for resource in ordered_resources],
+        "templates": templates,
+        "school_overrides": school_overrides,
+        "folders": folders
+    }
+
+def get_batch_watermark_effective_template(
+    manifest: Dict[str, Any],
+    school_id: str,
+    resource_id: str
+) -> Dict[str, Any]:
+    school_overrides = manifest.get("school_overrides", {}) or {}
+    templates = manifest.get("templates", {}) or {}
+    return (
+        school_overrides.get(school_id, {}).get(resource_id)
+        or templates.get(resource_id)
+        or get_batch_watermark_default_template()
+    )
+
+def write_batch_watermark_school_folder_to_zip(
+    zip_file: zipfile.ZipFile,
+    manifest: Dict[str, Any],
+    folder_entry: Dict[str, Any],
+    school: School,
+    resource_map: Dict[str, Resource]
+):
+    folder_name = folder_entry["folder_name"]
+    files = folder_entry.get("files") or []
+
+    if not files:
+        return
+
+    with tempfile.TemporaryDirectory(prefix=f"{folder_name}_") as school_temp_dir:
+        school_temp_path = Path(school_temp_dir)
+        used_output_names = set()
+
+        for file_entry in files:
+            resource_id = file_entry["resource_id"]
+            resource = resource_map.get(resource_id)
+            if not resource:
+                raise HTTPException(status_code=404, detail=f"Resource not found: {resource_id}")
+
+            source_path = get_full_file_path(resource.file_path)
+            output_name = file_entry.get("file_name") or build_batch_watermark_output_name(resource, source_path, used_output_names)
+            template = get_batch_watermark_effective_template(manifest, school.school_id, resource_id)
+            output_path = school_temp_path / output_name
+            result_path = generate_batch_watermarked_output(resource, school, template, output_path)
+
+            if not result_path or not os.path.exists(result_path):
+                raise RuntimeError(
+                    f"Failed to generate watermarked file for school '{school.school_name}' and resource '{resource.name}'"
+                )
+
+            result_path_obj = Path(result_path)
+            zip_file.write(result_path_obj, arcname=str(Path(folder_name) / output_name))
+
+            if result_path_obj.parent == school_temp_path:
+                try:
+                    result_path_obj.unlink()
+                except Exception:
+                    pass
+
+def build_school_batch_zip_bytes_from_manifest(
+    manifest: Dict[str, Any],
+    folder_entry: Dict[str, Any],
+    school: School,
+    resource_map: Dict[str, Resource]
+) -> tuple[bytes, str]:
+    zip_filename = f"{sanitize_batch_name(folder_entry['folder_name'], folder_entry['school_id'])}.zip"
+    zip_buffer = io.BytesIO()
+
+    with zipfile.ZipFile(
+        zip_buffer,
+        "w",
+        zipfile.ZIP_DEFLATED,
+        compresslevel=get_batch_watermark_zip_compression_level()
+    ) as zip_file:
+        write_batch_watermark_school_folder_to_zip(zip_file, manifest, folder_entry, school, resource_map)
+
+    zip_buffer.seek(0)
+    return zip_buffer.getvalue(), zip_filename
+
+def batch_job_uses_materialized_files(job_path: Path, manifest: Dict[str, Any]) -> bool:
+    if "templates" in manifest or "school_overrides" in manifest:
+        return False
+
+    try:
+        for child in job_path.iterdir():
+            if child.name != "manifest.json" and child.is_dir():
+                return True
+    except Exception:
+        return False
+
+    return False
+
+def get_batch_watermark_zip_compression_level() -> int:
+    try:
+        level = int(os.environ.get("BATCH_WATERMARK_ZIP_COMPRESSION_LEVEL", "1"))
+    except Exception:
+        level = 1
+    return max(0, min(level, 9))
+
 def write_batch_job_manifest(job_path: Path, payload: Dict[str, Any]):
     manifest_path = job_path / "manifest.json"
     with open(manifest_path, "w", encoding="utf-8") as manifest_file:
@@ -2664,12 +2862,21 @@ def get_batch_email_settings() -> Dict[str, Any]:
         "use_ssl": use_ssl
     }
 
+def normalize_brevo_sms_sender(raw_sender: str) -> str:
+    # Brevo sender IDs must be alphanumeric and at most 11 characters.
+    return re.sub(r"[^A-Za-z0-9]", "", (raw_sender or "").strip())[:11]
+
 def get_brevo_sms_settings() -> Dict[str, Any]:
     load_dotenv(ROOT_DIR / '.env', override=True)
     load_dotenv(ROOT_DIR.parent / '.env', override=True)
 
     api_key = os.environ.get("BREVO_SMS_API_KEY") or os.environ.get("SMS_API_KEY")
-    sender = (os.environ.get("BREVO_SMS_SENDER") or os.environ.get("SMS_SENDER_NAME") or "").strip()
+    configured_sender = (
+        os.environ.get("BREVO_SMS_SENDER")
+        or os.environ.get("SMS_SENDER_NAME")
+        or ""
+    ).strip()
+    sender = normalize_brevo_sms_sender(configured_sender)
     country_code = (os.environ.get("BREVO_SMS_DEFAULT_COUNTRY_CODE") or "91").strip()
 
     if not api_key or not sender:
@@ -2677,10 +2884,15 @@ def get_brevo_sms_settings() -> Dict[str, Any]:
             status_code=400,
             detail="SMS automation is not configured. Please set BREVO_SMS_API_KEY and BREVO_SMS_SENDER."
         )
+    if len(sender) < 3:
+        raise HTTPException(
+            status_code=400,
+            detail="BREVO_SMS_SENDER must contain at least 3 letters or numbers after removing spaces and symbols."
+        )
 
     return {
         "api_key": api_key,
-        "sender": sender[:11],
+        "sender": sender,
         "country_code": country_code
     }
 
@@ -3430,7 +3642,12 @@ def build_school_batch_zip_bytes(job_path: Path, folder_entry: Dict[str, Any]) -
     zip_filename = f"{sanitize_batch_name(folder_entry['folder_name'], folder_entry['school_id'])}.zip"
     zip_buffer = io.BytesIO()
 
-    with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
+    with zipfile.ZipFile(
+        zip_buffer,
+        "w",
+        zipfile.ZIP_DEFLATED,
+        compresslevel=get_batch_watermark_zip_compression_level()
+    ) as zip_file:
         for file_path in folder_path.rglob("*"):
             if file_path.is_file():
                 archive_name = str(Path(folder_entry["folder_name"]) / file_path.relative_to(folder_path))
@@ -4187,13 +4404,26 @@ async def apply_admin_batch_watermark_template_to_group(
         raise HTTPException(status_code=500, detail="Failed to apply layout to selected resources")
 
 @api_router.post("/admin/batch-watermark/generate")
-async def generate_admin_batch_watermark_bundle(
+def generate_admin_batch_watermark_bundle(
     request: AdminBatchWatermarkGenerateRequest,
     current_admin: dict = Depends(get_current_admin),
     db: Session = Depends(get_db)
 ):
-    school_ids = [school_id for school_id in request.school_ids if school_id]
-    resource_ids = [resource_id for resource_id in request.resource_ids if resource_id]
+    cleanup_stale_batch_jobs()
+
+    school_ids = []
+    seen_school_ids = set()
+    for school_id in request.school_ids:
+        if school_id and school_id not in seen_school_ids:
+            seen_school_ids.add(school_id)
+            school_ids.append(school_id)
+
+    resource_ids = []
+    seen_resource_ids = set()
+    for resource_id in request.resource_ids:
+        if resource_id and resource_id not in seen_resource_ids:
+            seen_resource_ids.add(resource_id)
+            resource_ids.append(resource_id)
 
     if not school_ids:
         raise HTTPException(status_code=400, detail="Select at least one school")
@@ -4254,76 +4484,22 @@ async def generate_admin_batch_watermark_bundle(
 
     job_id = f"batch_{datetime.utcnow().strftime('%Y%m%d%H%M%S')}_{uuid.uuid4().hex[:8]}"
     job_path = ensure_batch_job_within_root(get_batch_job_path(job_id))
-    cleanup_batch_job_directory(job_path)
     job_path.mkdir(parents=True, exist_ok=True)
 
-    manifest = {
-        "job_id": job_id,
-        "generated_by": current_admin.get("sub"),
-        "created_at": datetime.utcnow().isoformat(),
-        "school_ids": school_ids,
-        "resource_ids": resource_ids,
-        "folders": []
-    }
-
-    folder_names = set()
-
     try:
-        for school in ordered_schools:
-            folder_name = build_school_folder_name(folder_names, school)
-            school_dir = job_path / folder_name
-            school_dir.mkdir(parents=True, exist_ok=True)
-            generated_files = []
-            used_output_names = set()
-
-            for resource in ordered_resources:
-                source_path = get_full_file_path(resource.file_path)
-                resource_kind = get_batch_watermark_resource_kind(resource)
-                resource_ext = ".zip" if resource_kind == "other" else get_batch_resource_extension(resource, source_path)
-                resource_label = sanitize_batch_name(
-                    Path(resource.name).stem if Path(resource.name).suffix else resource.name,
-                    resource.resource_id
-                )
-                output_name = f"{resource_label}{resource_ext}"
-                if output_name in used_output_names:
-                    output_name = f"{resource_label}_{resource.resource_id[:8]}{resource_ext}"
-                used_output_names.add(output_name)
-
-                output_path = school_dir / output_name
-                effective_template = (
-                    request.school_overrides.get(school.school_id, {}).get(resource.resource_id)
-                    if request.school_overrides else None
-                ) or request.templates.get(resource.resource_id, get_batch_watermark_default_template())
-                result_path = generate_batch_watermarked_output(
-                    resource,
-                    school,
-                    effective_template,
-                    output_path
-                )
-
-                if not result_path or not os.path.exists(result_path):
-                    raise RuntimeError(
-                        f"Failed to generate watermarked file for school '{school.school_name}' and resource '{resource.name}'"
-                    )
-
-                generated_files.append({
-                    "resource_id": resource.resource_id,
-                    "resource_name": resource.name,
-                    "file_name": output_name
-                })
-
-            manifest["folders"].append({
-                "school_id": school.school_id,
-                "school_name": school.school_name,
-                "folder_name": folder_name,
-                "file_count": len(generated_files),
-                "files": generated_files
-            })
+        manifest = build_batch_watermark_manifest(
+            job_id=job_id,
+            generated_by=current_admin.get("sub"),
+            ordered_schools=ordered_schools,
+            ordered_resources=ordered_resources,
+            templates=request.templates or {},
+            school_overrides=request.school_overrides or {}
+        )
 
         write_batch_job_manifest(job_path, manifest)
 
         return {
-            "message": "Batch watermark folders generated successfully",
+            "message": "Batch watermark folders prepared successfully",
             "job_id": job_id,
             "created_at": manifest["created_at"],
             "folder_count": len(manifest["folders"]),
@@ -4349,10 +4525,13 @@ async def generate_admin_batch_watermark_bundle(
         raise HTTPException(status_code=500, detail=str(e))
 
 @api_router.post("/admin/batch-watermark/download")
-async def download_admin_batch_watermark_bundle(
+def download_admin_batch_watermark_bundle(
     request: AdminBatchWatermarkDownloadRequest,
-    current_admin: dict = Depends(get_current_admin)
+    current_admin: dict = Depends(get_current_admin),
+    db: Session = Depends(get_db)
 ):
+    cleanup_stale_batch_jobs()
+
     job_path = ensure_batch_job_within_root(get_batch_job_path(request.job_id))
     if not job_path.exists():
         raise HTTPException(status_code=404, detail="Generated batch watermark bundle not found")
@@ -4365,8 +4544,19 @@ async def download_admin_batch_watermark_bundle(
         folder["school_id"]: folder
         for folder in manifest.get("folders", [])
     }
+    legacy_mode = batch_job_uses_materialized_files(job_path, manifest)
 
-    selected_school_ids = request.school_ids or list(folder_map.keys())
+    selected_school_ids = []
+    seen_school_ids = set()
+    source_school_ids = request.school_ids or list(folder_map.keys())
+    for school_id in source_school_ids:
+        if school_id and school_id not in seen_school_ids:
+            seen_school_ids.add(school_id)
+            selected_school_ids.append(school_id)
+
+    if not selected_school_ids:
+        raise HTTPException(status_code=400, detail="Select at least one school folder")
+
     missing_folders = [school_id for school_id in selected_school_ids if school_id not in folder_map]
     if missing_folders:
         raise HTTPException(status_code=404, detail=f"Folder not found for school: {', '.join(missing_folders)}")
@@ -4377,44 +4567,84 @@ async def download_admin_batch_watermark_bundle(
         else f"batch_watermark_{request.job_id}"
     )
     zip_filename = f"{sanitize_batch_name(zip_base_name, 'batch_watermark')}.zip"
-    zip_path = job_path / zip_filename
+    temp_dir_path = Path(tempfile.mkdtemp(prefix=f"batch_watermark_{request.job_id}_"))
+    zip_path = temp_dir_path / zip_filename
 
     try:
-        if zip_path.exists():
-            zip_path.unlink()
+        with zipfile.ZipFile(
+            zip_path,
+            "w",
+            zipfile.ZIP_DEFLATED,
+            compresslevel=get_batch_watermark_zip_compression_level()
+        ) as zip_file:
+            if legacy_mode:
+                for school_id in selected_school_ids:
+                    folder_entry = folder_map[school_id]
+                    folder_path = ensure_batch_job_within_root((job_path / folder_entry["folder_name"]).resolve())
+                    if not folder_path.exists():
+                        raise HTTPException(status_code=404, detail=f"Generated folder missing for school: {folder_entry['school_name']}")
 
-        with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zip_file:
-            for school_id in selected_school_ids:
-                folder_entry = folder_map[school_id]
-                folder_path = ensure_batch_job_within_root((job_path / folder_entry["folder_name"]).resolve())
-                if not folder_path.exists():
-                    raise HTTPException(status_code=404, detail=f"Generated folder missing for school: {folder_entry['school_name']}")
+                    for file_path in folder_path.rglob("*"):
+                        if file_path.is_file():
+                            archive_name = str(Path(folder_entry["folder_name"]) / file_path.relative_to(folder_path))
+                            zip_file.write(file_path, arcname=archive_name)
+            else:
+                resource_ids = manifest.get("resource_ids", [])
 
-                for file_path in folder_path.rglob("*"):
-                    if file_path.is_file():
-                        archive_name = str(Path(folder_entry["folder_name"]) / file_path.relative_to(folder_path))
-                        zip_file.write(file_path, arcname=archive_name)
+                try:
+                    school_rows = db.query(School).filter(School.school_id.in_(selected_school_ids)).all()
+                    resource_rows = db.query(Resource).filter(Resource.resource_id.in_(resource_ids)).all()
+                except Exception as e:
+                    print(f"Error loading batch watermark download context: {e}")
+                    raise HTTPException(status_code=500, detail="Failed to load batch watermark data")
+
+                school_map = {school.school_id: school for school in school_rows}
+                resource_map = {resource.resource_id: resource for resource in resource_rows}
+
+                missing_schools = [school_id for school_id in selected_school_ids if school_id not in school_map]
+                if missing_schools:
+                    raise HTTPException(status_code=404, detail=f"School not found: {', '.join(missing_schools)}")
+
+                missing_resources = [resource_id for resource_id in resource_ids if resource_id not in resource_map]
+                if missing_resources:
+                    raise HTTPException(status_code=404, detail=f"Resource not found: {', '.join(missing_resources)}")
+
+                selected_schools = [school_map[school_id] for school_id in selected_school_ids]
+                for school in selected_schools:
+                    folder_entry = folder_map[school.school_id]
+                    write_batch_watermark_school_folder_to_zip(
+                        zip_file,
+                        manifest,
+                        folder_entry,
+                        school,
+                        resource_map
+                    )
 
         return FileResponse(
             path=str(zip_path),
             filename=zip_filename,
             media_type="application/zip",
-            headers={"Access-Control-Expose-Headers": "Content-Disposition"}
+            headers={"Access-Control-Expose-Headers": "Content-Disposition"},
+            background=BackgroundTask(cleanup_batch_job_directory, temp_dir_path)
         )
     except HTTPException:
+        cleanup_batch_job_directory(temp_dir_path)
         raise
     except Exception as e:
+        cleanup_batch_job_directory(temp_dir_path)
         print(f"Error creating batch watermark zip: {e}")
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail="Failed to create ZIP download")
 
 @api_router.post("/admin/batch-watermark/send-emails")
-async def send_admin_batch_watermark_emails(
+def send_admin_batch_watermark_emails(
     request: AdminBatchWatermarkEmailRequest,
     current_admin: dict = Depends(get_current_admin),
     db: Session = Depends(get_db)
 ):
+    cleanup_stale_batch_jobs()
+
     if not request.emails:
         raise HTTPException(status_code=400, detail="No email drafts provided")
 
@@ -4431,99 +4661,57 @@ async def send_admin_batch_watermark_emails(
         folder["school_id"]: folder
         for folder in manifest.get("folders", [])
     }
+    legacy_mode = batch_job_uses_materialized_files(job_path, manifest)
 
     requested_school_ids = [item.school_id for item in request.emails]
     missing_folders = [school_id for school_id in requested_school_ids if school_id not in folder_map]
     if missing_folders:
         raise HTTPException(status_code=404, detail=f"Folder not found for school: {', '.join(missing_folders)}")
 
-    try:
-        school_rows = db.query(School).filter(School.school_id.in_(requested_school_ids)).all()
-    except Exception as e:
-        print(f"Error loading schools for email sending: {e}")
-        raise HTTPException(status_code=500, detail="Failed to load school email details")
-
-    school_map = {school.school_id: school for school in school_rows}
-    missing_schools = [school_id for school_id in requested_school_ids if school_id not in school_map]
-    if missing_schools:
-        raise HTTPException(status_code=404, detail=f"School not found: {', '.join(missing_schools)}")
-
     results = []
-    for email_item in request.emails:
-        school = school_map[email_item.school_id]
-        folder_entry = folder_map[email_item.school_id]
-
-        if not school.email:
-            results.append({
-                "school_id": school.school_id,
-                "school_name": school.school_name,
-                "email": "",
-                "status": "failed",
-                "message": "School does not have an email address"
-            })
-            continue
-
-        try:
-            zip_bytes, zip_filename = build_school_batch_zip_bytes(job_path, folder_entry)
-            email_template = build_batch_watermark_email(
-                school,
-                zip_filename,
-                email_item.subject,
-                email_item.message
-            )
-            send_smtp_email(
-                email_settings=email_settings,
-                to_email=school.email,
-                to_name=school.school_name,
-                subject=email_template["subject"],
-                text_content=email_template["text_content"],
-                html_content=email_template["html_content"],
-                inline_assets=get_email_inline_assets(),
-                attachments=[{
-                    "data": zip_bytes,
-                    "filename": zip_filename,
-                    "mime_type": "application/zip",
-                }],
-            )
-            results.append({
-                "school_id": school.school_id,
-                "school_name": school.school_name,
-                "email": school.email,
-                "status": "sent",
-                "message": f"Email sent successfully with attachment {zip_filename}"
-            })
-        except Exception as send_error:
-            print(f"Error sending batch watermark email to {school.school_name}: {send_error}")
-            results.append({
-                "school_id": school.school_id,
-                "school_name": school.school_name,
-                "email": school.email,
-                "status": "failed",
-                "message": str(send_error)
-            })
-
-    sent_count = len([item for item in results if item["status"] == "sent"])
-    failed_count = len(results) - sent_count
-    return {
-        "message": f"Email automation completed. Sent: {sent_count}, Failed: {failed_count}",
-        "sent_count": sent_count,
-        "failed_count": failed_count,
-        "results": results
-    }
+    inline_assets = []
+    for asset in get_email_inline_assets():
+        asset_copy = dict(asset)
+        asset_path = asset_copy.get("path")
+        if asset_path and os.path.exists(asset_path):
+            try:
+                with open(asset_path, "rb") as asset_file:
+                    asset_copy["data"] = asset_file.read()
+            except Exception as asset_error:
+                print(f"Error loading inline email asset {asset_path}: {asset_error}")
+        inline_assets.append(asset_copy)
 
     smtp_client = None
-
     try:
-        if email_settings["use_ssl"]:
-            smtp_client = smtplib.SMTP_SSL(email_settings["host"], email_settings["port"], timeout=60)
-        else:
-            smtp_client = smtplib.SMTP(email_settings["host"], email_settings["port"], timeout=60)
-            smtp_client.ehlo()
-            if email_settings["use_tls"]:
-                smtp_client.starttls()
-                smtp_client.ehlo()
+        smtp_client = build_smtp_client(email_settings)
 
-        smtp_client.login(email_settings["username"], email_settings["password"])
+        if legacy_mode:
+            try:
+                school_rows = db.query(School).filter(School.school_id.in_(requested_school_ids)).all()
+            except Exception as e:
+                print(f"Error loading schools for email sending: {e}")
+                raise HTTPException(status_code=500, detail="Failed to load school email details")
+
+            school_map = {school.school_id: school for school in school_rows}
+            missing_schools = [school_id for school_id in requested_school_ids if school_id not in school_map]
+            if missing_schools:
+                raise HTTPException(status_code=404, detail=f"School not found: {', '.join(missing_schools)}")
+        else:
+            try:
+                school_rows = db.query(School).filter(School.school_id.in_(requested_school_ids)).all()
+                resource_rows = db.query(Resource).filter(Resource.resource_id.in_(manifest.get("resource_ids", []))).all()
+            except Exception as e:
+                print(f"Error loading schools for email sending: {e}")
+                raise HTTPException(status_code=500, detail="Failed to load school email details")
+
+            school_map = {school.school_id: school for school in school_rows}
+            resource_map = {resource.resource_id: resource for resource in resource_rows}
+            missing_schools = [school_id for school_id in requested_school_ids if school_id not in school_map]
+            if missing_schools:
+                raise HTTPException(status_code=404, detail=f"School not found: {', '.join(missing_schools)}")
+            missing_resources = [resource_id for resource_id in manifest.get("resource_ids", []) if resource_id not in resource_map]
+            if missing_resources:
+                raise HTTPException(status_code=404, detail=f"Resource not found: {', '.join(missing_resources)}")
 
         for email_item in request.emails:
             school = school_map[email_item.school_id]
@@ -4540,13 +4728,19 @@ async def send_admin_batch_watermark_emails(
                 continue
 
             try:
-                zip_bytes, zip_filename = build_school_batch_zip_bytes(job_path, folder_entry)
-
-                # Build HTML email template
+                if legacy_mode:
+                    zip_bytes, zip_filename = build_school_batch_zip_bytes(job_path, folder_entry)
+                else:
+                    zip_bytes, zip_filename = build_school_batch_zip_bytes_from_manifest(
+                        manifest,
+                        folder_entry,
+                        school,
+                        resource_map
+                    )
                 email_template = build_batch_watermark_email(
-                    school, 
-                    zip_filename, 
-                    email_item.subject, 
+                    school,
+                    zip_filename,
+                    email_item.subject,
                     email_item.message
                 )
 
@@ -4557,13 +4751,31 @@ async def send_admin_batch_watermark_emails(
                     if email_settings["from_name"]
                     else email_settings["from_email"]
                 )
-                email_message["To"] = school.email
+                email_message["To"] = formataddr((school.school_name, school.email))
                 email_message["Reply-To"] = email_settings["from_email"]
-                
-                # Add both text and HTML content
                 email_message.set_content(email_template["text_content"])
-                email_message.add_alternative(email_template["html_content"], subtype='html')
-                
+                email_message.add_alternative(email_template["html_content"], subtype="html")
+
+                for asset in inline_assets:
+                    asset_path = asset.get("path")
+                    asset_data = asset.get("data")
+                    if asset_data is None and asset_path:
+                        with open(asset_path, "rb") as asset_file:
+                            asset_data = asset_file.read()
+                    if asset_data is None:
+                        continue
+                    mime_type = asset.get("mime_type") or mimetypes.guess_type(str(asset_path or asset.get("filename") or ""))[0] or "application/octet-stream"
+                    maintype, subtype = mime_type.split("/", 1)
+                    html_part = email_message.get_payload()[-1]
+                    html_part.add_related(
+                        asset_data,
+                        maintype=maintype,
+                        subtype=subtype,
+                        cid=f"<{asset['cid']}>",
+                        filename=asset.get("filename"),
+                        disposition="inline"
+                    )
+
                 email_message.add_attachment(
                     zip_bytes,
                     maintype="application",
@@ -4609,6 +4821,29 @@ async def send_admin_batch_watermark_emails(
         "failed_count": failed_count,
         "results": results
     }
+
+@api_router.delete("/admin/batch-watermark/job/{job_id}")
+def delete_admin_batch_watermark_job(
+    job_id: str,
+    current_admin: dict = Depends(get_current_admin)
+):
+    job_path = ensure_batch_job_within_root(get_batch_job_path(job_id))
+    if not job_path.exists():
+        return {"message": "Batch watermark job already cleared"}
+
+    manifest_path = job_path / "manifest.json"
+    if manifest_path.exists():
+        try:
+            manifest = read_batch_job_manifest(job_path)
+            if manifest.get("generated_by") != current_admin.get("sub"):
+                raise HTTPException(status_code=403, detail="You do not have access to this generated bundle")
+        except HTTPException:
+            raise
+        except Exception as e:
+            print(f"Error validating batch watermark job cleanup: {e}")
+
+    cleanup_batch_job_directory(job_path)
+    return {"message": "Batch watermark job cleared"}
 
 # Authentication Routes
 @api_router.post("/admin/login", response_model=LoginResponse)
@@ -8401,6 +8636,8 @@ def add_logo_and_text_to_image(
     output_path: str = None
 ) -> str:
     """Add logo and text watermark to image"""
+    base_img = None
+    logo_img = None
     try:
         print("=== ADDING LOGO AND TEXT TO IMAGE ===")
         print(f"Image: {image_path}")
@@ -8408,11 +8645,8 @@ def add_logo_and_text_to_image(
         print(f"School Info: {school_info}")
 
         # Open base image
-        base_img = Image.open(image_path)
-
-        # Convert to RGBA if not already
-        if base_img.mode != 'RGBA':
-            base_img = base_img.convert('RGBA')
+        with Image.open(image_path) as opened_base_img:
+            base_img = opened_base_img.convert('RGBA') if opened_base_img.mode != 'RGBA' else opened_base_img.copy()
 
         print(f"Base image size: {base_img.size}, mode: {base_img.mode}")
 
@@ -8422,9 +8656,8 @@ def add_logo_and_text_to_image(
         # Add logo if exists
         if logo_path and os.path.exists(logo_path):
             try:
-                logo_img = Image.open(logo_path)
-                if logo_img.mode != 'RGBA':
-                    logo_img = logo_img.convert('RGBA')
+                with Image.open(logo_path) as opened_logo_img:
+                    logo_img = opened_logo_img.convert('RGBA') if opened_logo_img.mode != 'RGBA' else opened_logo_img.copy()
 
                 # Apply opacity
                 if positions.logo_opacity < 1.0:
@@ -8602,9 +8835,22 @@ def add_logo_and_text_to_image(
         import traceback
         traceback.print_exc()
         return None
+    finally:
+        try:
+            if logo_img:
+                logo_img.close()
+        except Exception:
+            pass
+        try:
+            if base_img:
+                base_img.close()
+        except Exception:
+            pass
 
 def add_logo_and_text_to_pdf(pdf_path, logo_path, logo_position, school_info, text_position, output_path):
     """Add logo and text to PDF with full customization support"""
+    pdf_document = None
+    logo_original = None
     try:
         print(f"\n--- INSIDE add_logo_and_text_to_pdf ---")
         print(f"PDF path: {pdf_path}")
@@ -8620,12 +8866,10 @@ def add_logo_and_text_to_pdf(pdf_path, logo_path, logo_position, school_info, te
         print(f"PDF opened successfully. Pages: {len(pdf_document)}")
 
         # Load original logo once
-        logo_original = None
         if logo_path and os.path.exists(logo_path):
             try:
-                logo_original = Image.open(logo_path)
-                if logo_original.mode != 'RGBA':
-                    logo_original = logo_original.convert('RGBA')
+                with Image.open(logo_path) as opened_logo:
+                    logo_original = opened_logo.convert('RGBA') if opened_logo.mode != 'RGBA' else opened_logo.copy()
             except Exception as e:
                 print(f"Error loading logo: {e}")
                 logo_original = None
@@ -8801,6 +9045,17 @@ def add_logo_and_text_to_pdf(pdf_path, logo_path, logo_position, school_info, te
         import traceback
         traceback.print_exc()
         return None
+    finally:
+        try:
+            if pdf_document:
+                pdf_document.close()
+        except Exception:
+            pass
+        try:
+            if logo_original:
+                logo_original.close()
+        except Exception:
+            pass
 
 @api_router.get("/resources/{resource_id}/download-with-logo")
 async def download_resource_with_logo(
